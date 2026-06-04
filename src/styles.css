@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Avenir Next", "Segoe UI", sans-serif;
+  --color-background: #f4f7fb;
+  --color-foreground: #10213d;
+  --color-sidebar: #102544;
+  --color-sidebar-foreground: #e7eef8;
+  --color-card: #ffffff;
+  --color-card-foreground: #10213d;
+  --color-primary: #2563eb;
+  --color-primary-foreground: #eff6ff;
+  --color-muted: #d9e3f3;
+  --color-muted-foreground: #5e718d;
+  --color-border: #dbe4f0;
+  --color-accent: #eff6ff;
+  --color-accent-foreground: #1742a0;
+  --color-success: #0f9f6e;
+  --color-warning: #d97706;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.85rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.6rem;
+  --shadow-panel: 0 24px 60px rgba(16, 33, 61, 0.08);
+}
+
+:root {
+  color: var(--color-foreground);
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 28%),
+    linear-gradient(180deg, #f8fbff 0%, #f3f7fc 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: transparent;
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+@layer utilities {
+  .panel-shadow {
+    box-shadow: var(--shadow-panel);
+  }
+}
+
+.cm-equation-editor .cm-editor {
+  background: transparent;
+}
+
+.cm-equation-editor .cm-diagnostic {
+  display: none;
+}
+
+.cm-equation-editor .cm-tooltip.cm-tooltip-autocomplete ul {
+  max-width: min(22rem, calc(100vw - 2rem));
+}
+
+.cm-equation-editor .cm-tooltip.cm-tooltip-autocomplete li {
+  font-size: 0.875rem;
+}
+
+.cm-equation-editor .cm-tooltip.cm-tooltip-autocomplete li[aria-selected] {
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--color-foreground);
+}
+
+.cm-equation-editor .cm-tooltip.cm-tooltip-autocomplete li .cm-completionLabel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.cm-equation-editor .cm-equation-number {
+  color: #1d4ed8;
+}
+
+.cm-equation-editor .cm-equation-operator,
+.cm-equation-editor .cm-equation-paren {
+  color: #475569;
+}
+
+.cm-equation-editor .cm-equation-function {
+  color: #a16207;
+  font-weight: 500;
+}
+
+.cm-equation-editor .cm-equation-variable-tender {
+  color: #be185d;
+}
+
+.cm-equation-editor .cm-equation-variable-item {
+  color: #0f766e;
+}
+
+.cm-equation-editor .cm-equation-variable-accessory {
+  color: #2563eb;
+}
+
+.cm-equation-editor .cm-equation-variable-system {
+  color: #7c3aed;
+}
+
+.cm-equation-editor .cm-equation-variable-unknown {
+  color: #b91c1c;
+}
