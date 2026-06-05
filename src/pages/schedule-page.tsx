@@ -100,7 +100,33 @@ const getEventTextColor = (backgroundColor?: string | null) => {
   return brightness > 170 ? "#0f172a" : "#ffffff";
 };
 
+const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+const parseDateOnlyValue = (value: string) => {
+  const [year, month, day] = value.split("-").map((segment) => Number.parseInt(segment, 10));
+  return new Date(year, month - 1, day);
+};
+
+const toDateOnlyValue = (date: Date) => {
+  const adjusted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return adjusted.toISOString().slice(0, 10);
+};
+
+const shiftDateOnlyValue = (value: string, days: number) => {
+  const date = parseDateOnlyValue(value);
+  date.setDate(date.getDate() + days);
+  return toDateOnlyValue(date);
+};
+
+const normalizeAllDayStartValue = (value: string) => (isDateOnlyValue(value) ? value : value.slice(0, 10));
+
+const normalizeAllDayEndValue = (value: string) => (isDateOnlyValue(value) ? value : value.slice(0, 10));
+
 const toLocalDateInput = (value: string) => {
+  if (isDateOnlyValue(value)) {
+    return value;
+  }
+
   const date = new Date(value);
   const adjusted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return adjusted.toISOString().slice(0, 10);
@@ -114,7 +140,7 @@ const toLocalDateTimeInput = (value: string) => {
 
 const localInputToIso = (value: string, allDay: boolean, boundary: "start" | "end") => {
   if (allDay) {
-    return boundary === "start" ? `${value}T00:00:00.000Z` : `${value}T23:59:59.999Z`;
+    return boundary === "start" ? value : shiftDateOnlyValue(value, 1);
   }
 
   return new Date(value).toISOString();
@@ -150,8 +176,8 @@ const eventToFormState = (event: ScheduleEvent): EventFormState => ({
   description: event.description ?? "",
   location: event.location ?? "",
   attendeesText: (event.attendees ?? []).join(", "),
-  start: event.allDay ? toLocalDateInput(event.start) : toLocalDateTimeInput(event.start),
-  end: event.allDay ? toLocalDateInput(event.end) : toLocalDateTimeInput(event.end),
+  start: event.allDay ? normalizeAllDayStartValue(event.start) : toLocalDateTimeInput(event.start),
+  end: event.allDay ? shiftDateOnlyValue(normalizeAllDayEndValue(event.end), -1) : toLocalDateTimeInput(event.end),
   allDay: event.allDay,
 });
 
@@ -166,8 +192,8 @@ const createFormFromSelection = (
   description: "",
   location: "",
   attendeesText: "",
-  start: allDay ? toLocalDateInput(startValue.toISOString()) : toLocalDateTimeInput(startValue.toISOString()),
-  end: allDay ? toLocalDateInput(endValue.toISOString()) : toLocalDateTimeInput(endValue.toISOString()),
+  start: allDay ? toDateOnlyValue(startValue) : toLocalDateTimeInput(startValue.toISOString()),
+  end: allDay ? shiftDateOnlyValue(toDateOnlyValue(endValue), -1) : toLocalDateTimeInput(endValue.toISOString()),
   allDay,
 });
 
@@ -380,6 +406,20 @@ type InFlightEventsPayload = {
 
 const buildEventsRequestKey = (calendarIds: string[], timeMin: string, timeMax: string) =>
   `${calendarIds.join(",")}::${timeMin}::${timeMax}`;
+
+const toFullCalendarEventRange = (event: ScheduleEvent) => {
+  if (!event.allDay) {
+    return {
+      start: event.start,
+      end: event.end,
+    };
+  }
+
+  return {
+    start: normalizeAllDayStartValue(event.start),
+    end: normalizeAllDayEndValue(event.end),
+  };
+};
 
 const mergeOverviewWithSyncMetadata = (
   current: ScheduleOverviewResponse | null,
@@ -599,10 +639,9 @@ export const SchedulePage = () => {
 
       success(
         filteredEvents.map((event) => ({
+          ...toFullCalendarEventRange(event),
           id: event.eventId,
           title: event.summary,
-          start: event.start,
-          end: event.end,
           allDay: event.allDay,
           backgroundColor: normalizeHexColor(event.calendarColor),
           borderColor: normalizeHexColor(event.calendarColor),
@@ -635,7 +674,9 @@ export const SchedulePage = () => {
 
   const handleDateClick = useCallback((info: DateClickArg) => {
     const end = new Date(info.date);
-    if (!info.allDay) {
+    if (info.allDay) {
+      end.setDate(end.getDate() + 1);
+    } else {
       end.setHours(end.getHours() + 1);
     }
 
@@ -807,14 +848,35 @@ export const SchedulePage = () => {
     await api.put(`/schedule/events/${eventId}`, payload);
   }, []);
 
+  const getMovedEventBoundary = useCallback((
+    value: Date | null,
+    fallback: string,
+    allDay: boolean,
+    boundary: "start" | "end",
+  ) => {
+    if (!allDay) {
+      return value?.toISOString() ?? fallback;
+    }
+
+    if (value) {
+      return toDateOnlyValue(value);
+    }
+
+    const normalizedFallback = boundary === "start"
+      ? normalizeAllDayStartValue(fallback)
+      : normalizeAllDayEndValue(fallback);
+
+    return normalizedFallback;
+  }, []);
+
   const handleEventDrop = useCallback(async (info: EventDropArg) => {
     const scheduleEvent = info.event.extendedProps.scheduleEvent as ScheduleEvent;
     try {
       await handleEventMove(
         scheduleEvent.eventId,
         scheduleEvent.calendarId,
-        info.event.start?.toISOString() ?? scheduleEvent.start,
-        info.event.end?.toISOString() ?? scheduleEvent.end,
+        getMovedEventBoundary(info.event.start, scheduleEvent.start, info.event.allDay, "start"),
+        getMovedEventBoundary(info.event.end, scheduleEvent.end, info.event.allDay, "end"),
         info.event.allDay,
       );
       refetchEvents();
@@ -823,7 +885,7 @@ export const SchedulePage = () => {
       info.revert();
       pushToast("error", reason instanceof Error ? reason.message : "Unable to move event.");
     }
-  }, [handleEventMove, pushToast, refetchEvents]);
+  }, [getMovedEventBoundary, handleEventMove, pushToast, refetchEvents]);
 
   const handleEventResize = useCallback(async (info: EventResizeDoneArg) => {
     const scheduleEvent = info.event.extendedProps.scheduleEvent as ScheduleEvent;
@@ -831,8 +893,8 @@ export const SchedulePage = () => {
       await handleEventMove(
         scheduleEvent.eventId,
         scheduleEvent.calendarId,
-        info.event.start?.toISOString() ?? scheduleEvent.start,
-        info.event.end?.toISOString() ?? scheduleEvent.end,
+        getMovedEventBoundary(info.event.start, scheduleEvent.start, info.event.allDay, "start"),
+        getMovedEventBoundary(info.event.end, scheduleEvent.end, info.event.allDay, "end"),
         info.event.allDay,
       );
       refetchEvents();
@@ -841,7 +903,7 @@ export const SchedulePage = () => {
       info.revert();
       pushToast("error", reason instanceof Error ? reason.message : "Unable to resize event.");
     }
-  }, [handleEventMove, pushToast, refetchEvents]);
+  }, [getMovedEventBoundary, handleEventMove, pushToast, refetchEvents]);
 
   const navigateCalendar = useCallback((direction: "prev" | "next" | "today") => {
     const apiRef = calendarRef.current?.getApi();

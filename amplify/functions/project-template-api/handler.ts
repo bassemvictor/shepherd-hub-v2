@@ -285,6 +285,15 @@ const normalizeRefreshInterval = (value: unknown) => {
   return Math.round(parsed);
 };
 
+const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+const shiftDateOnlyValue = (value: string, days: number) => {
+  const [year, month, day] = value.split("-").map((segment) => Number.parseInt(segment, 10));
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
 const normalizeInitialSyncRange = (value: Partial<InitialSyncRange> | undefined, nowIso: string): InitialSyncRange => {
   const fallback = defaultInitialSyncRange(nowIso);
   const from = String(value?.from ?? "").trim();
@@ -977,8 +986,14 @@ const upsertGoogleEventIntoCache = async (
   deps: HandlerDependencies,
 ) => {
   const now = deps.now();
-  const start = googleEvent.start?.dateTime ?? `${googleEvent.start?.date ?? now}T00:00:00.000Z`;
-  const end = googleEvent.end?.dateTime ?? `${googleEvent.end?.date ?? now}T23:59:59.999Z`;
+  const allDay = !googleEvent.start?.dateTime;
+  const defaultStartDate = now.slice(0, 10);
+  const start = allDay
+    ? googleEvent.start?.date ?? defaultStartDate
+    : googleEvent.start?.dateTime ?? `${defaultStartDate}T00:00:00.000Z`;
+  const end = allDay
+    ? googleEvent.end?.date ?? shiftDateOnlyValue(start, 1)
+    : googleEvent.end?.dateTime ?? `${defaultStartDate}T23:59:59.999Z`;
   const item: EventItem = {
     PK: userPk(context.actorSub),
     SK: eventSk(calendar.calendarId, googleEvent.id),
@@ -998,7 +1013,7 @@ const upsertGoogleEventIntoCache = async (
     attendees: normalizeAttendees((googleEvent.attendees ?? []).map((entry) => entry.email ?? "")),
     start,
     end,
-    allDay: !googleEvent.start?.dateTime,
+    allDay,
     status: googleEvent.status ?? "confirmed",
     source,
     htmlLink: googleEvent.htmlLink,
