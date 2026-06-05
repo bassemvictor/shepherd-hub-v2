@@ -1,4 +1,4 @@
-import { FolderKanban, Home } from "lucide-react";
+import { CalendarDays, FolderKanban, Home } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 import type { AppAuthUser } from "../../lib/auth";
@@ -21,6 +21,13 @@ const baseNavigation: NavigationSection[] = [
       { label: "Sample Records", href: "/records", icon: FolderKanban },
     ],
   },
+  {
+    label: "Calendar",
+    items: [
+      { label: "Connect & Configure", href: "/calendar", icon: CalendarDays },
+      { label: "Schedule", href: "/calendar/schedule", icon: CalendarDays },
+    ],
+  },
 ];
 
 type SideMenuProps = {
@@ -32,28 +39,29 @@ export const SideMenu = ({ onNavigate }: SideMenuProps) => {
   const sections = baseNavigation;
 
   return (
-    <nav className="flex-1 space-y-7">
+    <nav className="flex-1 space-y-4">
       {sections.map((section) => (
         <div key={section.label}>
-          <p className="mb-3 text-xs uppercase tracking-[0.18em] text-blue-200/60">
+          <p className="mb-2 text-[11px] uppercase tracking-[0.14em] text-blue-200/60">
             {section.label}
           </p>
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             {section.items.map((item) => {
               const Icon = item.icon;
               return (
                 <NavLink
                   key={item.href}
+                  end={item.href === "/calendar"}
                   to={item.href}
                   className={({ isActive }) =>
                     cn(
-                      "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-blue-100/80 transition-colors hover:bg-white/8 hover:text-white",
+                      "flex h-9 items-center gap-2 rounded-md px-2.5 text-sm text-blue-100/80 transition-colors hover:bg-white/8 hover:text-white",
                       isActive && "bg-primary text-white shadow-lg shadow-blue-950/20",
                     )
                   }
                   onClick={onNavigate}
                 >
-                  {Icon ? <Icon className="h-4 w-4" /> : null}
+                  {Icon ? <Icon className="h-3.5 w-3.5" /> : null}
                   <span>{item.label}</span>
                 </NavLink>
               );

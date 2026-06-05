@@ -38,20 +38,20 @@ export const RightSideDrawer = ({
       <aside
         className={cn(
           "absolute inset-y-0 right-0 flex h-full w-full flex-col border-l border-border bg-white panel-shadow",
-          width === "lg" ? "max-w-3xl" : "max-w-xl",
+          width === "lg" ? "lg:max-w-[31rem]" : "lg:max-w-[26rem]",
         )}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-5 sm:px-6">
+        <div className="sticky top-0 z-[1] flex items-start justify-between gap-3 border-b border-border bg-white px-3 py-3 sm:px-4">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-            {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
+            <h2 className="text-sm font-semibold text-slate-900 sm:text-base">{title}</h2>
+            {description ? <p className="mt-1 text-xs text-muted-foreground sm:text-sm">{description}</p> : null}
           </div>
-          <Button onClick={onClose} size="sm" type="button" variant="ghost">
+          <Button onClick={onClose} size="icon" type="button" variant="ghost">
             <X className="h-4 w-4" />
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">{children}</div>
-        {footer ? <div className="border-t border-border px-5 py-4 sm:px-6">{footer}</div> : null}
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4 sm:py-4">{children}</div>
+        {footer ? <div className="sticky bottom-0 border-t border-border bg-white px-3 py-3 sm:px-4">{footer}</div> : null}
       </aside>
     </div>
   );

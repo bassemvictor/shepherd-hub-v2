@@ -4,6 +4,8 @@ const routeTitleMap: Record<string, string> = {
   "/": "Dashboard",
   "/dashboard": "Dashboard",
   "/records": "Sample Records",
+  "/calendar": "Connect & Configure",
+  "/calendar/schedule": "Schedule",
   "/auth": "Sign In",
 };
 

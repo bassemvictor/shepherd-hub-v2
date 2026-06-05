@@ -24,19 +24,19 @@ export const Dialog = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 px-3 py-3 sm:items-start sm:px-4 sm:py-8">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 px-0 py-0 sm:items-start sm:px-4 sm:py-6">
       <button aria-label="Close dialog overlay" className="absolute inset-0" onClick={onClose} type="button" />
       <div
         className={cn(
-          "relative z-10 flex max-h-[calc(100vh-0.75rem)] w-full flex-col rounded-[1.4rem] border border-border bg-white panel-shadow sm:max-h-[calc(100vh-4rem)]",
-          size === "lg" ? "max-w-4xl" : "max-w-2xl",
+          "relative z-10 flex max-h-screen w-full flex-col rounded-none border border-border bg-white panel-shadow sm:max-h-[calc(100vh-3rem)] sm:rounded-md",
+          size === "lg" ? "sm:max-w-lg" : "sm:max-w-md",
         )}
       >
-        <div className="border-b border-border px-4 py-4 sm:px-5 sm:py-5 lg:px-6">
-          <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
-          {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
+        <div className="sticky top-0 z-[1] border-b border-border bg-white px-3 py-3 sm:px-4">
+          <h3 className="text-sm font-semibold text-slate-900 sm:text-base">{title}</h3>
+          {description ? <p className="mt-1 text-xs text-muted-foreground sm:text-sm">{description}</p> : null}
         </div>
-        <div className="overflow-y-auto px-4 py-4 sm:px-5 sm:py-5 lg:px-6 lg:py-6">{children}</div>
+        <div className="overflow-y-auto px-3 py-3 sm:px-4 sm:py-4">{children}</div>
       </div>
     </div>
   );

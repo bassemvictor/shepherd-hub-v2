@@ -177,28 +177,27 @@ export const SampleRecordsPage = () => {
     {
       key: "actions",
       header: "Actions",
-      className: "w-[180px]",
+      className: "w-[112px]",
+      mobileVariant: "actions",
       cell: (record) => (
         <div className="flex flex-wrap gap-1">
-          <Button onClick={() => openView(record)} size="sm" type="button" variant="ghost">
+          <Button aria-label={`View ${record.name}`} onClick={() => openView(record)} size="icon" type="button" variant="ghost">
             <Eye className="h-4 w-4" />
-            View
           </Button>
-          <Button onClick={() => openEdit(record)} size="sm" type="button" variant="ghost">
+          <Button aria-label={`Edit ${record.name}`} onClick={() => openEdit(record)} size="icon" type="button" variant="ghost">
             <Pencil className="h-4 w-4" />
-            Edit
           </Button>
           <Button
+            aria-label={`Delete ${record.name}`}
             onClick={() => {
               setSelectedRecord(record);
               setConfirmDeleteOpen(true);
             }}
-            size="sm"
+            size="icon"
             type="button"
             variant="ghost"
           >
             <Trash2 className="h-4 w-4" />
-            Delete
           </Button>
         </div>
       ),
@@ -206,13 +205,13 @@ export const SampleRecordsPage = () => {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <PageHeader
         action={{ label: "Create Record", onClick: openCreate }}
         description="This page demonstrates the reusable table, right-side drawer pattern, and CRUD calls through API Gateway and Lambda."
         title="Sample Records"
       >
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_200px]">
+        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px]">
           <Input
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search by name or owner"
@@ -252,7 +251,7 @@ export const SampleRecordsPage = () => {
         />
       ) : (
         <Card>
-          <CardContent className="pt-6">
+          <CardContent className="pt-3">
             <DataGrid
               columns={columns}
               emptyDescription="Create a record to see the reusable grid and drawer pattern in action."
@@ -273,7 +272,7 @@ export const SampleRecordsPage = () => {
         submitLabel={drawerMode === "edit" ? "Save Changes" : "Create Record"}
         title={drawerMode === "edit" ? "Edit Record" : "Create Record"}
       >
-        <div className="grid gap-4">
+        <div className="grid gap-3 md:grid-cols-2">
           <div className="grid gap-1.5">
             <label className="text-sm font-medium text-slate-800">Name</label>
             <Input
@@ -316,29 +315,29 @@ export const SampleRecordsPage = () => {
         title="Record Details"
       >
         {selectedRecord ? (
-          <div className="space-y-4">
-            <div className="rounded-2xl bg-slate-50 p-4">
+          <div className="space-y-3">
+            <div className="rounded-md bg-slate-50 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Name</p>
-              <p className="mt-2 text-sm font-medium text-slate-900">{selectedRecord.name}</p>
+              <p className="mt-1 text-sm font-medium text-slate-900">{selectedRecord.name}</p>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="rounded-md bg-slate-50 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Status</p>
-              <div className="mt-2">
+              <div className="mt-1">
                 <StatusBadge status={selectedRecord.status} />
               </div>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="rounded-md bg-slate-50 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Owner</p>
-              <p className="mt-2 text-sm font-medium text-slate-900">{selectedRecord.owner}</p>
+              <p className="mt-1 text-sm font-medium text-slate-900">{selectedRecord.owner}</p>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-md bg-slate-50 p-3">
                 <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Created</p>
-                <p className="mt-2 text-sm font-medium text-slate-900">{formatDate(selectedRecord.createdAt)}</p>
+                <p className="mt-1 text-sm font-medium text-slate-900">{formatDate(selectedRecord.createdAt)}</p>
               </div>
-              <div className="rounded-2xl bg-slate-50 p-4">
+              <div className="rounded-md bg-slate-50 p-3">
                 <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Updated</p>
-                <p className="mt-2 text-sm font-medium text-slate-900">{formatDate(selectedRecord.updatedAt)}</p>
+                <p className="mt-1 text-sm font-medium text-slate-900">{formatDate(selectedRecord.updatedAt)}</p>
               </div>
             </div>
           </div>

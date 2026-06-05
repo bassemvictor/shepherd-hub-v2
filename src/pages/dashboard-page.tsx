@@ -62,13 +62,13 @@ export const DashboardPage = () => {
   }, []);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <PageHeader
         description="This starter dashboard confirms protected routing, Amplify authentication, and authenticated backend calls."
         title="Dashboard"
       />
 
-      <section className="grid gap-4 xl:grid-cols-[1.3fr_0.9fr]">
+      <section className="grid gap-3 xl:grid-cols-[1.3fr_0.9fr]">
         <Card>
           <CardHeader>
             <div>
@@ -77,22 +77,22 @@ export const DashboardPage = () => {
             </div>
             <Badge variant="success">Protected Route</Badge>
           </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl bg-slate-50 p-4">
+          <CardContent className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-md bg-slate-50 p-2.5">
               <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Name</p>
-              <p className="mt-2 text-sm font-medium text-slate-900">{user?.name || "Unavailable"}</p>
+              <p className="mt-1 text-sm font-medium text-slate-900">{user?.name || "Unavailable"}</p>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="rounded-md bg-slate-50 p-2.5">
               <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Email</p>
-              <p className="mt-2 text-sm font-medium text-slate-900">{user?.email || "Unavailable"}</p>
+              <p className="mt-1 text-sm font-medium text-slate-900">{user?.email || "Unavailable"}</p>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="rounded-md bg-slate-50 p-2.5">
               <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Username</p>
-              <p className="mt-2 text-sm font-medium text-slate-900">{user?.username || "Unavailable"}</p>
+              <p className="mt-1 text-sm font-medium text-slate-900">{user?.username || "Unavailable"}</p>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="rounded-md bg-slate-50 p-2.5">
               <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Groups</p>
-              <div className="mt-2 flex flex-wrap gap-2">
+              <div className="mt-1 flex flex-wrap gap-1.5">
                 {user?.groups.length ? (
                   user.groups.map((group) => (
                     <Badge key={group} variant="default">
@@ -114,11 +114,11 @@ export const DashboardPage = () => {
               <CardDescription>Use these pieces as the baseline for future apps.</CardDescription>
             </div>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm text-slate-700">
-            <div className="rounded-2xl bg-slate-50 p-4">Amplify Cognito sign-in with protected React routes</div>
-            <div className="rounded-2xl bg-slate-50 p-4">API Gateway to Lambda with bearer token forwarding</div>
-            <div className="rounded-2xl bg-slate-50 p-4">DynamoDB-backed sample CRUD with tenant-aware partitioning</div>
-            <div className="rounded-2xl bg-slate-50 p-4">Reusable grid and right-side drawer UI patterns</div>
+          <CardContent className="space-y-2 text-sm text-slate-700">
+            <div className="rounded-md bg-slate-50 p-2.5">Amplify Cognito sign-in with protected React routes</div>
+            <div className="rounded-md bg-slate-50 p-2.5">API Gateway to Lambda with bearer token forwarding</div>
+            <div className="rounded-md bg-slate-50 p-2.5">DynamoDB-backed sample CRUD with tenant-aware partitioning</div>
+            <div className="rounded-md bg-slate-50 p-2.5">Reusable grid and right-side drawer UI patterns</div>
           </CardContent>
         </Card>
       </section>
@@ -134,7 +134,7 @@ export const DashboardPage = () => {
           title="Dashboard request failed"
         />
       ) : (
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {cards.map((card) => {
             const Icon = card.icon;
             const value = summary ? summary[card.key] : 0;
@@ -142,12 +142,14 @@ export const DashboardPage = () => {
             return (
               <Card key={card.key}>
                 <CardHeader className="items-center">
-                  <div>
+                  <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                    <div>
                     <CardDescription>{card.label}</CardDescription>
-                    <CardTitle className="mt-2 text-3xl">{value}</CardTitle>
-                  </div>
-                  <div className={`rounded-2xl p-3 ${card.tone}`}>
-                    <Icon className="h-5 w-5" />
+                    <CardTitle className="mt-1 text-xl">{value}</CardTitle>
+                    </div>
+                    <div className={`rounded-md p-2 ${card.tone}`}>
+                      <Icon className="h-4 w-4" />
+                    </div>
                   </div>
                 </CardHeader>
               </Card>

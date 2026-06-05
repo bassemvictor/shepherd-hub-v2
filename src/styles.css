@@ -17,11 +17,12 @@
   --color-accent-foreground: #1742a0;
   --color-success: #0f9f6e;
   --color-warning: #d97706;
-  --radius-sm: 0.5rem;
-  --radius-md: 0.85rem;
-  --radius-lg: 1.25rem;
-  --radius-xl: 1.6rem;
-  --shadow-panel: 0 24px 60px rgba(16, 33, 61, 0.08);
+  --radius: 0.35rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.35rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.65rem;
+  --shadow-panel: 0 16px 36px rgba(16, 33, 61, 0.07);
 }
 
 :root {
@@ -75,6 +76,329 @@ a {
 @layer utilities {
   .panel-shadow {
     box-shadow: var(--shadow-panel);
+  }
+}
+
+.schedule-calendar-shell {
+  padding: 0.25rem;
+}
+
+.schedule-calendar-shell .fc {
+  --fc-border-color: rgba(219, 228, 240, 0.95);
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: #f7faff;
+  --fc-button-bg-color: #ffffff;
+  --fc-button-border-color: rgba(219, 228, 240, 0.95);
+  --fc-button-hover-bg-color: #eff6ff;
+  --fc-button-hover-border-color: #93c5fd;
+  --fc-button-active-bg-color: #2563eb;
+  --fc-button-active-border-color: #2563eb;
+  --fc-today-bg-color: rgba(37, 99, 235, 0.06);
+  color: var(--color-foreground);
+}
+
+.schedule-calendar-shell .fc .fc-toolbar {
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.schedule-calendar-shell .fc .fc-toolbar.fc-header-toolbar {
+  flex-wrap: wrap;
+}
+
+.schedule-calendar-shell .fc .fc-toolbar-title {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.schedule-calendar-shell .fc .fc-button {
+  border-radius: 0.4rem;
+  box-shadow: none;
+  font-weight: 500;
+  text-transform: none;
+  min-height: 2rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.75rem;
+}
+
+.schedule-calendar-shell .fc .fc-scrollgrid,
+.schedule-calendar-shell .fc .fc-list {
+  border-radius: 0.5rem;
+  border-color: rgba(219, 228, 240, 0.95);
+}
+
+.schedule-calendar-shell .fc .fc-list {
+  overflow: hidden;
+}
+
+.schedule-calendar-shell .fc .fc-scrollgrid {
+  overflow: visible;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover {
+  background: #ffffff;
+  border: 1px solid rgba(219, 228, 240, 0.95);
+  border-radius: 0.5rem;
+  box-shadow: 0 12px 30px rgba(16, 33, 61, 0.14);
+  overflow: hidden;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-popover-header,
+.schedule-calendar-shell .fc .fc-more-popover .fc-popover-body {
+  background: #ffffff;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-popover-header {
+  padding: 0.9rem 1rem 0.8rem;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-popover-title,
+.schedule-calendar-shell .fc .fc-more-popover .fc-popover-close {
+  color: #0f172a;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-popover-body {
+  min-width: min(26rem, calc(100vw - 2rem));
+  padding: 0.35rem 0.7rem 0.8rem;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-daygrid-day-events {
+  margin: 0;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-daygrid-event-harness {
+  margin-top: 0.45rem;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-daygrid-event {
+  margin: 0;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-card-event {
+  gap: 0.3rem;
+  padding: 0.55rem 0.8rem;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-card-event-header {
+  gap: 0.65rem;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-card-event-title {
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+
+.schedule-calendar-shell .fc .fc-more-popover .fc-card-event-time,
+.schedule-calendar-shell .fc .fc-more-popover .fc-card-event-meta {
+  font-size: 0.74rem;
+  line-height: 1.2;
+}
+
+.schedule-calendar-shell .fc .fc-daygrid-more-link {
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 0.35rem;
+  color: #1e293b;
+  padding: 0.1rem 0.35rem;
+}
+
+.schedule-calendar-shell .fc .fc-daygrid-more-link:hover {
+  background: #eff6ff;
+}
+
+.schedule-calendar-shell .fc .fc-daygrid-day-frame,
+.schedule-calendar-shell .fc .fc-timegrid-slot,
+.schedule-calendar-shell .fc .fc-timegrid-axis {
+  min-height: 1.5rem;
+}
+
+.schedule-calendar-shell .fc .fc-timegrid-slot,
+.schedule-calendar-shell .fc .fc-timegrid-axis,
+.schedule-calendar-shell .fc .fc-timegrid-axis-frame {
+  height: 2.5rem;
+}
+
+.schedule-calendar-shell .fc .fc-col-header-cell-cushion,
+.schedule-calendar-shell .fc .fc-daygrid-day-number,
+.schedule-calendar-shell .fc .fc-list-day-text,
+.schedule-calendar-shell .fc .fc-list-day-side-text {
+  padding: 0.35rem 0.45rem;
+  font-size: 0.74rem;
+}
+
+.schedule-calendar-shell .fc .fc-timegrid-slot-label-cushion,
+.schedule-calendar-shell .fc .fc-timegrid-axis-cushion {
+  font-size: 0.72rem;
+  padding: 0 0.35rem;
+}
+
+.schedule-calendar-shell .fc .fc-event {
+  border: 0;
+  border-radius: 0.45rem;
+  padding: 0;
+  box-shadow: 0 6px 18px rgba(16, 33, 61, 0.1);
+}
+
+.schedule-calendar-shell .fc .fc-daygrid-event,
+.schedule-calendar-shell .fc .fc-daygrid-event .fc-event-main {
+  white-space: normal;
+}
+
+.schedule-calendar-shell .fc .fc-timegrid-event,
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-event-main,
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-event-title,
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-event-time {
+  white-space: normal;
+}
+
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-event-title,
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-event-time,
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-event-title-container {
+  overflow: visible;
+}
+
+.fc-card-event {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  line-height: 1.2;
+}
+
+.fc-card-event-compact {
+  gap: 0.15rem;
+  padding: 0.28rem 0.5rem;
+}
+
+.fc-card-event-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.5rem;
+}
+
+.fc-card-event-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.fc-card-event-time,
+.fc-card-event-meta {
+  font-size: 0.72rem;
+  opacity: 0.92;
+}
+
+.fc-card-event-time {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.fc-card-event-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event {
+  height: 100%;
+  align-content: start;
+  overflow: hidden;
+}
+
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event-header {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.15rem;
+}
+
+.schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event-time {
+  white-space: normal;
+}
+
+.schedule-calendar-shell .fc .fc-list-event-dot {
+  border-width: 5px;
+}
+
+@media (max-width: 1023px) {
+  .schedule-calendar-shell {
+    padding: 0.35rem;
+  }
+
+  .schedule-calendar-shell .fc .fc-toolbar-title {
+    font-size: 1rem;
+  }
+
+  .schedule-calendar-shell .fc .fc-button {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.75rem;
+  }
+
+  .schedule-calendar-shell .fc .fc-col-header-cell-cushion,
+  .schedule-calendar-shell .fc .fc-daygrid-day-number,
+  .schedule-calendar-shell .fc .fc-list-day-text,
+  .schedule-calendar-shell .fc .fc-list-day-side-text {
+    padding: 0.35rem 0.4rem;
+    font-size: 0.72rem;
+  }
+
+  .schedule-calendar-shell .fc .fc-timegrid-slot-label-cushion,
+  .schedule-calendar-shell .fc .fc-timegrid-axis-cushion {
+    font-size: 0.68rem;
+    padding: 0 0.25rem;
+  }
+
+  .schedule-calendar-shell .fc .fc-timegrid-slot,
+  .schedule-calendar-shell .fc .fc-timegrid-axis,
+  .schedule-calendar-shell .fc .fc-timegrid-axis-frame {
+    height: 2.25rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .schedule-calendar-shell .fc .fc-daygrid-event,
+  .schedule-calendar-shell .fc .fc-timegrid-event {
+    border-radius: 0.85rem;
+  }
+
+  .schedule-calendar-shell .fc .fc-daygrid-event .fc-card-event,
+  .schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event {
+    gap: 0.1rem;
+    padding: 0.2rem 0.35rem;
+    line-height: 1.1;
+  }
+
+  .schedule-calendar-shell .fc .fc-daygrid-event .fc-card-event-title,
+  .schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event-title {
+    font-size: 0.72rem;
+    line-height: 1.1;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+
+  .schedule-calendar-shell .fc .fc-daygrid-event .fc-card-event-time,
+  .schedule-calendar-shell .fc .fc-daygrid-event .fc-card-event-meta,
+  .schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event-time,
+  .schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event-meta {
+    font-size: 0.62rem;
+    line-height: 1.05;
+  }
+
+  .schedule-calendar-shell .fc .fc-daygrid-event .fc-card-event-header,
+  .schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event-header {
+    gap: 0.15rem;
+  }
+
+  .schedule-calendar-shell .fc .fc-daygrid-event .fc-card-event-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .schedule-calendar-shell .fc .fc-timegrid-event .fc-card-event {
+    min-height: 100%;
   }
 }
 

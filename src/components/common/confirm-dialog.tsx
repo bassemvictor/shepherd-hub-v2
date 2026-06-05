@@ -29,9 +29,9 @@ export const ConfirmDialog = ({
   children,
 }: ConfirmDialogProps) => (
   <Dialog description={description} onClose={onClose} open={open} title={title}>
-    <div className="space-y-5">
+    <div className="space-y-3">
       {children}
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <Button onClick={onClose} type="button" variant="outline">
           {cancelLabel}
         </Button>

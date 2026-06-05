@@ -31,7 +31,26 @@ const recordsTable = new Table(dataStack, "ProjectTemplateTable", {
   },
 });
 
+recordsTable.addGlobalSecondaryIndex({
+  indexName: "GSI1",
+  partitionKey: {
+    name: "GSI1PK",
+    type: AttributeType.STRING,
+  },
+  sortKey: {
+    name: "GSI1SK",
+    type: AttributeType.STRING,
+  },
+});
+
 backend.projectTemplateApi.addEnvironment("PROJECT_TEMPLATE_TABLE", recordsTable.tableName);
+backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID ?? "");
+backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_SECRET", process.env.GOOGLE_CLIENT_SECRET ?? "");
+backend.projectTemplateApi.addEnvironment("GOOGLE_REDIRECT_URI", process.env.GOOGLE_REDIRECT_URI ?? "");
+backend.projectTemplateApi.addEnvironment(
+  "GOOGLE_OAUTH_SUCCESS_REDIRECT_URL",
+  process.env.GOOGLE_OAUTH_SUCCESS_REDIRECT_URL ?? "",
+);
 recordsTable.grantReadWriteData(backend.projectTemplateApi.resources.lambda);
 
 const httpApi = new HttpApi(apiStack, "ProjectTemplateHttpApi", {
@@ -73,6 +92,24 @@ const addProtectedRoutes = (path: string, methods: HttpMethod[]) =>
 addProtectedRoutes("/dashboard/summary", [HttpMethod.GET]);
 addProtectedRoutes("/records", [HttpMethod.GET, HttpMethod.POST]);
 addProtectedRoutes("/records/{recordId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/schedule/overview", [HttpMethod.GET]);
+addProtectedRoutes("/schedule/google/connect", [HttpMethod.POST]);
+addProtectedRoutes("/schedule/google/connection", [HttpMethod.DELETE]);
+addProtectedRoutes("/schedule/calendars/refresh", [HttpMethod.POST]);
+addProtectedRoutes("/schedule/settings", [HttpMethod.PUT]);
+addProtectedRoutes("/schedule/calendars/{calendarId}", [HttpMethod.PUT]);
+addProtectedRoutes("/schedule/calendars/{calendarId}/sync", [HttpMethod.POST]);
+addProtectedRoutes("/schedule/calendars/{calendarId}/cache", [HttpMethod.DELETE]);
+addProtectedRoutes("/schedule/sync", [HttpMethod.POST]);
+addProtectedRoutes("/schedule/cache", [HttpMethod.DELETE]);
+addProtectedRoutes("/schedule/events", [HttpMethod.GET, HttpMethod.POST]);
+addProtectedRoutes("/schedule/events/{eventId}", [HttpMethod.PUT, HttpMethod.DELETE]);
+
+httpApi.addRoutes({
+  path: "/schedule/google/callback",
+  methods: [HttpMethod.GET],
+  integration,
+});
 
 backend.addOutput({
   custom: {
