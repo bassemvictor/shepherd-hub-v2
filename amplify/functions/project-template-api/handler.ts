@@ -2,24 +2,41 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
+  BatchGetCommand,
   DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
   QueryCommand,
+  TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
+import * as XLSX from "xlsx";
 
 import type {
   AppCognitoGroup,
   CalendarSyncConfig,
   CalendarSyncSnapshot,
+  CreateMemberInput,
   ConnectGoogleResponse,
   CreateScheduleEventInput,
   DashboardSummary,
+  EventMemberSummary,
+  EventMembersResponse,
   GoogleConnectionStatus,
   GoogleConnectionSummary,
   InitialSyncRange,
+  Member,
+  MemberActivity,
+  MemberDetailResponse,
+  MemberDirectoryResponse,
+  MemberEvent,
+  MemberEventType,
+  MemberImportInput,
+  MemberImportResult,
+  MemberIndexItem,
+  MemberIndexResponse,
+  MemberSource,
   RecordStatus,
   SaveScheduleSettingsInput,
   SampleRecord,
@@ -31,6 +48,8 @@ import type {
   ScheduleSettings,
   SyncSource,
   SyncStatus,
+  UpdateEventMembersInput,
+  UpdateMemberInput,
   UpdateScheduleEventInput,
   UpdateCalendarSettingsInput,
 } from "../../../shared/types.js";
@@ -99,6 +118,50 @@ type EventItem = BaseItem & {
   status: string;
   source: SyncSource;
   htmlLink?: string;
+  eventType?: MemberEventType;
+  memberIds?: string[];
+  memberNames?: string[];
+};
+
+type MemberItem = BaseItem & Omit<Member, keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"> & {
+  tenantId: string;
+  GSI2PK?: string;
+  GSI2SK?: string;
+};
+
+type EventMemberItem = BaseItem & {
+  tenantId: string;
+  eventId: string;
+  memberId: string;
+  memberNameSnapshot: string;
+  memberPhoneSnapshot?: string;
+  memberEmailSnapshot?: string;
+  unityIdSnapshot?: string;
+  sourceSnapshot: MemberSource;
+  eventStartDateTime: string;
+  eventType: MemberEventType;
+  status: string;
+};
+
+type MemberEventItem = BaseItem & {
+  tenantId: string;
+  eventId: string;
+  memberId: string;
+  eventTitleSnapshot: string;
+  eventStartDateTime: string;
+  eventEndDateTime: string;
+  eventType: MemberEventType;
+  status: string;
+};
+
+type MemberActivityItem = BaseItem & {
+  tenantId: string;
+  activityId: string;
+  action: string;
+  message: string;
+  actorUserId: string;
+  actorDisplayName: string;
+  metadata?: Record<string, unknown>;
 };
 
 type OAuthStateItem = BaseItem & {
@@ -260,6 +323,16 @@ const calendarSk = (calendarId: string) => `CALENDAR#${calendarId}`;
 const eventSk = (calendarId: string, eventId: string) => `EVENT#${calendarId}#${eventId}`;
 const eventGsiPk = (userId: string, calendarId: string) => `USER#${userId}#CALENDAR#${calendarId}`;
 const eventGsiSk = (start: string, eventId: string) => `EVENT#${start}#${eventId}`;
+const memberSk = (memberId: string) => `MEMBER#${memberId}`;
+const memberGsiPk = (tenantId: string) => `TENANT#${tenantId}#MEMBERS`;
+const memberGsiSk = (normalizedName: string, memberId: string) => `NAME#${normalizedName}#MEMBER#${memberId}`;
+const memberUnityGsiPk = (tenantId: string) => `TENANT#${tenantId}#UNITY`;
+const memberUnityGsiSk = (unityId: string) => `UNITY#${unityId}`;
+const tenantEventPk = (tenantId: string, eventId: string) => `TENANT#${tenantId}#EVENT#${eventId}`;
+const eventMemberSk = (memberId: string) => `MEMBER#${memberId}`;
+const tenantMemberPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
+const memberEventSk = (eventStartDateTime: string, eventId: string) => `EVENT#${eventStartDateTime}#${eventId}`;
+const memberActivitySk = (createdAt: string, activityId: string) => `ACTIVITY#${createdAt}#${activityId}`;
 const oauthStatePk = (state: string) => `OAUTH_STATE#${state}`;
 const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
@@ -314,6 +387,78 @@ const normalizeAttendees = (value: unknown) => {
   return value
     .map((entry) => String(entry).trim())
     .filter(Boolean);
+};
+
+const normalizeWhitespace = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
+
+const normalizeSearchText = (...values: Array<unknown>) =>
+  values
+    .map((value) => normalizeWhitespace(value).toLowerCase())
+    .filter(Boolean)
+    .join(" ");
+
+const normalizeName = (value: unknown) =>
+  normalizeWhitespace(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, "")
+    .trim();
+
+const toOptionalString = (value: unknown) => {
+  const normalized = normalizeWhitespace(value);
+  return normalized || undefined;
+};
+
+const toOptionalNumber = (value: unknown) => {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const toOptionalBoolean = (value: unknown) => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (["true", "yes", "1", "active", "approved", "locked"].includes(normalized)) {
+    return true;
+  }
+
+  if (["false", "no", "0", "inactive", "pending", "unlocked"].includes(normalized)) {
+    return false;
+  }
+
+  return undefined;
+};
+
+const toIsoDate = (value: unknown) => {
+  const normalized = normalizeWhitespace(value);
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString().slice(0, 10);
+};
+
+const toInitials = (fullName: string) =>
+  fullName
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+const splitName = (fullName: string) => {
+  const parts = fullName.split(" ").filter(Boolean);
+  return {
+    firstName: parts[0] ?? "",
+    lastName: parts.slice(1).join(" "),
+  };
 };
 
 const buildInitialSyncWindow = (range: InitialSyncRange) => ({
@@ -398,6 +543,62 @@ const toScheduleEvent = (item: EventItem): ScheduleEvent => ({
   summary: item.summary,
   tenantId: item.userId,
   updatedAt: item.updatedAt,
+  eventType: item.eventType,
+  memberIds: item.memberIds,
+  memberNames: item.memberNames,
+});
+
+const toMember = (item: MemberItem): Member => ({
+  ...item,
+  createdAt: item.createdAt,
+  entityType: item.entityType,
+  tenantId: item.tenantId,
+  updatedAt: item.updatedAt,
+});
+
+const toMemberIndexItem = (item: MemberItem): MemberIndexItem => ({
+  memberId: item.memberId,
+  fullName: item.fullName,
+  initials: item.initials,
+  phone: item.phone,
+  email: item.email,
+  unityId: item.unityId,
+  source: item.source,
+  normalizedSearchText: item.normalizedSearchText,
+});
+
+const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({
+  memberId: item.memberId,
+  fullName: item.memberNameSnapshot,
+  initials: toInitials(item.memberNameSnapshot),
+  phone: item.memberPhoneSnapshot,
+  email: item.memberEmailSnapshot,
+  unityId: item.unityIdSnapshot,
+  source: item.sourceSnapshot,
+});
+
+const toMemberEvent = (item: MemberEventItem): MemberEvent => ({
+  createdAt: item.createdAt,
+  entityType: item.entityType,
+  eventEndDateTime: item.eventEndDateTime,
+  eventId: item.eventId,
+  eventStartDateTime: item.eventStartDateTime,
+  eventTitleSnapshot: item.eventTitleSnapshot,
+  eventType: item.eventType,
+  memberId: item.memberId,
+  status: item.status,
+  tenantId: item.tenantId,
+  updatedAt: item.updatedAt,
+});
+
+const toMemberActivity = (item: MemberActivityItem): MemberActivity => ({
+  activityId: item.activityId,
+  action: item.action,
+  message: item.message,
+  actorUserId: item.actorUserId,
+  actorDisplayName: item.actorDisplayName,
+  metadata: item.metadata,
+  createdAt: item.createdAt,
 });
 
 const toSyncSnapshot = (calendar: CalendarItem, result: SyncResult): CalendarSyncSnapshot => ({
@@ -537,6 +738,53 @@ const validateEventUpdateInput = (input: Partial<UpdateScheduleEventInput>) => {
   }
 
   return null;
+};
+
+const validateMemberInput = (input: Partial<CreateMemberInput>) => {
+  if (!normalizeWhitespace(input.fullName)) {
+    return "Member full name is required.";
+  }
+
+  return null;
+};
+
+const parseImportWorkbook = (input: MemberImportInput) => {
+  const workbook = XLSX.read(Buffer.from(input.workbookBase64, "base64"), { type: "buffer" });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) {
+    return [];
+  }
+
+  const rows = XLSX.utils.sheet_to_json<Array<unknown>>(workbook.Sheets[sheetName], {
+    header: 1,
+    defval: "",
+    raw: false,
+  });
+
+  const headerRowIndex = rows.findIndex((row) => {
+    const values = Array.isArray(row) ? row.map((cell) => normalizeWhitespace(cell)) : [];
+    return values.includes("Member ID") && values.includes("Member Name");
+  });
+
+  if (headerRowIndex < 0) {
+    return [];
+  }
+
+  const headerRow = rows[headerRowIndex] ?? [];
+  const headers = Array.isArray(headerRow)
+    ? headerRow.map((cell, index) => normalizeWhitespace(cell) || `Column ${index + 1}`)
+    : [];
+
+  return rows
+    .slice(headerRowIndex + 1)
+    .filter((row) => Array.isArray(row) && row.some((cell) => normalizeWhitespace(cell)))
+    .map((row) => {
+      const values = Array.isArray(row) ? row : [];
+      return headers.reduce<Record<string, unknown>>((record, header, index) => {
+        record[header] = values[index] ?? "";
+        return record;
+      }, {});
+    });
 };
 
 const queryAll = async (
@@ -760,6 +1008,362 @@ const deleteEvent = async (context: RequestContext, calendarId: string, eventId:
       TableName: context.tableName,
     }),
   );
+};
+
+const getMember = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: memberSk(memberId),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  return (response.Item as MemberItem | undefined) ?? null;
+};
+
+const getMemberByUnityId = async (context: RequestContext, unityId: string, deps: HandlerDependencies) => {
+  const response = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#gsiPk": "GSI2PK",
+      "#gsiSk": "GSI2SK",
+    },
+    ExpressionAttributeValues: {
+      ":gsiPk": memberUnityGsiPk(context.tenantId),
+      ":gsiSk": memberUnityGsiSk(unityId),
+    },
+    IndexName: "GSI2",
+    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk = :gsiSk",
+    TableName: context.tableName,
+  });
+
+  return (response[0] as MemberItem | undefined) ?? null;
+};
+
+const listMembers = async (context: RequestContext, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#gsiPk": "GSI1PK",
+      "#gsiSk": "GSI1SK",
+    },
+    ExpressionAttributeValues: {
+      ":gsiPk": memberGsiPk(context.tenantId),
+      ":from": "NAME#",
+      ":to": "NAME#~",
+    },
+    IndexName: GSI1_NAME,
+    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
+    TableName: context.tableName,
+  });
+
+  return items as MemberItem[];
+};
+
+const listMemberActivities = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantMemberPk(context.tenantId, memberId),
+      ":activityPrefix": "ACTIVITY#",
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :activityPrefix)",
+    TableName: context.tableName,
+  });
+
+  return (items as MemberActivityItem[]).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+};
+
+const listMemberEvents = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantMemberPk(context.tenantId, memberId),
+      ":eventPrefix": "EVENT#",
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :eventPrefix)",
+    TableName: context.tableName,
+  });
+
+  return (items as MemberEventItem[]).sort((left, right) => left.eventStartDateTime.localeCompare(right.eventStartDateTime));
+};
+
+const listEventMembers = async (context: RequestContext, eventId: string, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantEventPk(context.tenantId, eventId),
+      ":memberPrefix": "MEMBER#",
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :memberPrefix)",
+    TableName: context.tableName,
+  });
+
+  return (items as EventMemberItem[]).sort((left, right) => left.memberNameSnapshot.localeCompare(right.memberNameSnapshot));
+};
+
+const putMember = async (context: RequestContext, member: MemberItem, deps: HandlerDependencies) => {
+  await deps.documentClient.send(
+    new PutCommand({
+      Item: member,
+      TableName: context.tableName,
+    }),
+  );
+};
+
+const logMemberActivity = async (
+  context: RequestContext,
+  memberId: string,
+  action: string,
+  message: string,
+  deps: HandlerDependencies,
+  metadata?: Record<string, unknown>,
+) => {
+  const createdAt = deps.now();
+  const activityId = deps.uuid();
+  const item: MemberActivityItem = {
+    PK: tenantMemberPk(context.tenantId, memberId),
+    SK: memberActivitySk(createdAt, activityId),
+    createdAt,
+    updatedAt: createdAt,
+    entityType: "MEMBER_ACTIVITY",
+    tenantId: context.tenantId,
+    activityId,
+    action,
+    message,
+    actorUserId: context.actorSub,
+    actorDisplayName: context.actorName,
+    metadata,
+  };
+
+  await deps.documentClient.send(
+    new PutCommand({
+      Item: item,
+      TableName: context.tableName,
+    }),
+  );
+};
+
+const buildMemberItem = (
+  context: RequestContext,
+  input: Partial<CreateMemberInput>,
+  deps: HandlerDependencies,
+  existing?: MemberItem | null,
+): MemberItem => {
+  const timestamp = deps.now();
+  const memberId = existing?.memberId ?? deps.uuid();
+  const fullName = normalizeWhitespace(input.fullName ?? existing?.fullName);
+  const { firstName, lastName } = splitName(fullName);
+  const source = (input.source ?? existing?.source ?? "MANUAL") as MemberSource;
+  const unityId = toOptionalString(input.unityId ?? existing?.unityId);
+  const normalizedName = normalizeName(fullName);
+  return {
+    PK: tenantPk(context.tenantId),
+    SK: memberSk(memberId),
+    GSI1PK: memberGsiPk(context.tenantId),
+    GSI1SK: memberGsiSk(normalizedName, memberId),
+    GSI2PK: unityId ? memberUnityGsiPk(context.tenantId) : undefined,
+    GSI2SK: unityId ? memberUnityGsiSk(unityId) : undefined,
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+    entityType: "MEMBER",
+    tenantId: context.tenantId,
+    memberId,
+    unityId,
+    source,
+    isUnityMember: source === "UNITY",
+    familyId: toOptionalString(input.familyId ?? existing?.familyId),
+    householdName: toOptionalString(input.householdName ?? existing?.householdName),
+    fullName,
+    firstName: toOptionalString(input.firstName ?? existing?.firstName ?? firstName),
+    lastName: toOptionalString(input.lastName ?? existing?.lastName ?? lastName),
+    initials: toInitials(fullName),
+    phone: toOptionalString(input.phone ?? existing?.phone),
+    email: toOptionalString(input.email ?? existing?.email),
+    whatsappPhone: toOptionalString(input.whatsappPhone ?? existing?.whatsappPhone ?? input.phone ?? existing?.phone),
+    address: toOptionalString(input.address ?? existing?.address),
+    postalCode: toOptionalString(input.postalCode ?? existing?.postalCode),
+    dateOfBirth: toIsoDate(input.dateOfBirth ?? existing?.dateOfBirth),
+    age: toOptionalNumber(input.age ?? existing?.age),
+    gender: toOptionalString(input.gender ?? existing?.gender),
+    profession: toOptionalString(input.profession ?? existing?.profession),
+    familyStatus: toOptionalString(input.familyStatus ?? existing?.familyStatus),
+    church: toOptionalString(input.church ?? existing?.church),
+    fatherOfConfession: toOptionalString(input.fatherOfConfession ?? existing?.fatherOfConfession),
+    deaconshipRank: toOptionalString(input.deaconshipRank ?? existing?.deaconshipRank),
+    ordinationDate: toIsoDate(input.ordinationDate ?? existing?.ordinationDate),
+    churchProvince: toOptionalString(input.churchProvince ?? existing?.churchProvince),
+    churchCity: toOptionalString(input.churchCity ?? existing?.churchCity),
+    churchRegion: toOptionalString(input.churchRegion ?? existing?.churchRegion),
+    diocese: toOptionalString(input.diocese ?? existing?.diocese),
+    accountStatus: toOptionalString(input.accountStatus ?? existing?.accountStatus),
+    activated: toOptionalBoolean(input.activated ?? existing?.activated),
+    approved: toOptionalBoolean(input.approved ?? existing?.approved),
+    locked: toOptionalBoolean(input.locked ?? existing?.locked),
+    visibility: toOptionalString(input.visibility ?? existing?.visibility),
+    username: toOptionalString(input.username ?? existing?.username),
+    registrationDate: toIsoDate(input.registrationDate ?? existing?.registrationDate),
+    groups: Array.isArray(input.groups)
+      ? input.groups.map((entry) => normalizeWhitespace(entry)).filter(Boolean)
+      : existing?.groups,
+    customFlag: toOptionalString(input.customFlag ?? existing?.customFlag),
+    licensePlate: toOptionalString(input.licensePlate ?? existing?.licensePlate),
+    notes: toOptionalString(existing?.notes ?? input.notes),
+    normalizedSearchText: normalizeSearchText(
+      fullName,
+      input.phone ?? existing?.phone,
+      input.email ?? existing?.email,
+      unityId,
+      input.address ?? existing?.address,
+      input.householdName ?? existing?.householdName,
+    ),
+  };
+};
+
+const syncEventMembers = async (
+  context: RequestContext,
+  event: EventItem,
+  memberIds: string[],
+  deps: HandlerDependencies,
+) => {
+  const current = await listEventMembers(context, event.eventId, deps);
+  const currentIds = new Set(current.map((item) => item.memberId));
+  const nextIds = [...new Set(memberIds.filter(Boolean))];
+
+  const keys = nextIds.map((memberId) => ({
+    PK: tenantPk(context.tenantId),
+    SK: memberSk(memberId),
+  }));
+  const batch = keys.length
+    ? await deps.documentClient.send(
+        new BatchGetCommand({
+          RequestItems: {
+            [context.tableName]: {
+              Keys: keys,
+            },
+          },
+        }),
+      )
+    : ({ Responses: {} } as { Responses?: Record<string, MemberItem[]> });
+
+  const fetchedMembers = (batch.Responses?.[context.tableName] ?? []).filter(Boolean);
+  const membersById = new Map(fetchedMembers.map((item) => [item.memberId, item]));
+  const transactItems: Array<Record<string, unknown>> = [];
+
+  for (const item of current) {
+    if (nextIds.includes(item.memberId)) {
+      continue;
+    }
+
+    transactItems.push({
+      Delete: {
+        Key: { PK: tenantEventPk(context.tenantId, event.eventId), SK: eventMemberSk(item.memberId) },
+        TableName: context.tableName,
+      },
+    });
+    transactItems.push({
+      Delete: {
+        Key: {
+          PK: tenantMemberPk(context.tenantId, item.memberId),
+          SK: memberEventSk(item.eventStartDateTime, event.eventId),
+        },
+        TableName: context.tableName,
+      },
+    });
+    await logMemberActivity(
+      context,
+      item.memberId,
+      "Member Removed From Event",
+      `${event.summary} unassigned.`,
+      deps,
+      { eventId: event.eventId },
+    );
+  }
+
+  for (const memberId of nextIds) {
+    const member = membersById.get(memberId);
+    if (!member) {
+      continue;
+    }
+
+    const eventMember: EventMemberItem = {
+      PK: tenantEventPk(context.tenantId, event.eventId),
+      SK: eventMemberSk(memberId),
+      createdAt: event.createdAt,
+      updatedAt: deps.now(),
+      entityType: "EVENT_MEMBER",
+      tenantId: context.tenantId,
+      eventId: event.eventId,
+      memberId,
+      memberNameSnapshot: member.fullName,
+      memberPhoneSnapshot: member.phone,
+      memberEmailSnapshot: member.email,
+      unityIdSnapshot: member.unityId,
+      sourceSnapshot: member.source,
+      eventStartDateTime: event.start,
+      eventType: event.eventType ?? "GENERAL",
+      status: event.status,
+    };
+    const memberEvent: MemberEventItem = {
+      PK: tenantMemberPk(context.tenantId, memberId),
+      SK: memberEventSk(event.start, event.eventId),
+      createdAt: event.createdAt,
+      updatedAt: deps.now(),
+      entityType: "MEMBER_EVENT",
+      tenantId: context.tenantId,
+      eventId: event.eventId,
+      memberId,
+      eventTitleSnapshot: event.summary,
+      eventStartDateTime: event.start,
+      eventEndDateTime: event.end,
+      eventType: event.eventType ?? "GENERAL",
+      status: event.status,
+    };
+
+    transactItems.push({
+      Put: {
+        Item: eventMember,
+        TableName: context.tableName,
+      },
+    });
+    transactItems.push({
+      Put: {
+        Item: memberEvent,
+        TableName: context.tableName,
+      },
+    });
+
+    if (!currentIds.has(memberId)) {
+      await logMemberActivity(
+        context,
+        memberId,
+        event.eventType === "VISITATION" ? "Visitation Scheduled" : "Member Assigned To Event",
+        `${event.summary} scheduled for ${member.fullName}.`,
+        deps,
+        { eventId: event.eventId, eventType: event.eventType ?? "GENERAL" },
+      );
+    }
+  }
+
+  while (transactItems.length) {
+    await deps.documentClient.send(
+      new TransactWriteCommand({
+        TransactItems: transactItems.splice(0, 25),
+      }),
+    );
+  }
+
+  return fetchedMembers;
 };
 
 const deleteOAuthState = async (state: string, tableName: string, deps: HandlerDependencies) => {
@@ -994,6 +1598,17 @@ const upsertGoogleEventIntoCache = async (
   const end = allDay
     ? googleEvent.end?.date ?? shiftDateOnlyValue(start, 1)
     : googleEvent.end?.dateTime ?? `${defaultStartDate}T23:59:59.999Z`;
+  const existing = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: userPk(context.actorSub),
+        SK: eventSk(calendar.calendarId, googleEvent.id),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  const existingItem = existing.Item as EventItem | undefined;
   const item: EventItem = {
     PK: userPk(context.actorSub),
     SK: eventSk(calendar.calendarId, googleEvent.id),
@@ -1017,19 +1632,10 @@ const upsertGoogleEventIntoCache = async (
     status: googleEvent.status ?? "confirmed",
     source,
     htmlLink: googleEvent.htmlLink,
+    eventType: existingItem?.eventType,
+    memberIds: existingItem?.memberIds,
+    memberNames: existingItem?.memberNames,
   };
-
-  const existing = await deps.documentClient.send(
-    new GetCommand({
-      Key: {
-        PK: userPk(context.actorSub),
-        SK: eventSk(calendar.calendarId, googleEvent.id),
-      },
-      TableName: context.tableName,
-    }),
-  );
-
-  const existingItem = existing.Item as EventItem | undefined;
   await putEvent(
     context,
     {
@@ -1285,6 +1891,7 @@ const syncSelectedCalendars = async (
     timeMin: string;
     timeMax: string;
     forceSync: boolean;
+    cacheOnly?: boolean;
     calendarIds?: string[];
   },
 ): Promise<ScheduleEventsResponse> => {
@@ -1309,7 +1916,7 @@ const syncSelectedCalendars = async (
   const results: SyncResult[] = [];
 
   for (const calendar of calendars) {
-    const refreshNeeded = shouldRefreshCalendar(calendar, options.forceSync);
+    const refreshNeeded = !options.cacheOnly && shouldRefreshCalendar(calendar, options.forceSync);
     if (refreshNeeded) {
       if (!connection) {
         throw new Error("Connect Google Calendar before running a sync.");
@@ -1475,6 +2082,270 @@ const deleteRecord = async (context: RequestContext, recordId: string, deps: Han
   );
 
   return json(200, { deleted: true, recordId });
+};
+
+const getMembers = async (context: RequestContext, deps: HandlerDependencies) => {
+  const items = await listMembers(context, deps);
+  const response: MemberDirectoryResponse = {
+    items: items.map(toMember),
+    total: items.length,
+  };
+  return json(200, response);
+};
+
+const getMembersIndex = async (context: RequestContext, deps: HandlerDependencies) => {
+  const items = await listMembers(context, deps);
+  const response: MemberIndexResponse = {
+    items: items.map(toMemberIndexItem),
+    generatedAt: deps.now(),
+  };
+  return json(200, response);
+};
+
+const getMemberDetails = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+  const member = await getMember(context, memberId, deps);
+  if (!member) {
+    return json(404, { message: "Member not found." });
+  }
+
+  const activity = await listMemberActivities(context, memberId, deps);
+  const response: MemberDetailResponse = {
+    member: toMember(member),
+    activity: activity.map(toMemberActivity),
+  };
+  return json(200, response);
+};
+
+const createMember = async (context: RequestContext, input: CreateMemberInput, deps: HandlerDependencies) => {
+  const validationError = validateMemberInput(input);
+  if (validationError) {
+    return json(400, { message: validationError });
+  }
+
+  if (input.unityId) {
+    const duplicate = await getMemberByUnityId(context, input.unityId, deps);
+    if (duplicate) {
+      return json(409, { message: "A member with this Unity ID already exists." });
+    }
+  }
+
+  const member = buildMemberItem(context, input, deps, null);
+  await putMember(context, member, deps);
+  await logMemberActivity(context, member.memberId, "Member Created", `${member.fullName} added.`, deps);
+  return json(201, toMember(member));
+};
+
+const updateMember = async (
+  context: RequestContext,
+  memberId: string,
+  input: UpdateMemberInput,
+  deps: HandlerDependencies,
+) => {
+  const existing = await getMember(context, memberId, deps);
+  if (!existing) {
+    return json(404, { message: "Member not found." });
+  }
+
+  const merged = { ...existing, ...input, fullName: input.fullName ?? existing.fullName };
+  const validationError = validateMemberInput(merged);
+  if (validationError) {
+    return json(400, { message: validationError });
+  }
+
+  if (input.unityId && input.unityId !== existing.unityId) {
+    const duplicate = await getMemberByUnityId(context, input.unityId, deps);
+    if (duplicate && duplicate.memberId !== memberId) {
+      return json(409, { message: "A member with this Unity ID already exists." });
+    }
+  }
+
+  const member = buildMemberItem(context, merged, deps, existing);
+  member.notes = toOptionalString(existing.notes ?? input.notes);
+  await putMember(context, member, deps);
+  await logMemberActivity(context, member.memberId, "Member Updated", `${member.fullName} updated.`, deps);
+  return json(200, toMember(member));
+};
+
+const deleteMember = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+  const member = await getMember(context, memberId, deps);
+  if (!member) {
+    return json(404, { message: "Member not found." });
+  }
+
+  const eventLinks = await listMemberEvents(context, memberId, deps);
+  for (const link of eventLinks) {
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantEventPk(context.tenantId, link.eventId),
+          SK: eventMemberSk(memberId),
+        },
+        TableName: context.tableName,
+      }),
+    );
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantMemberPk(context.tenantId, memberId),
+          SK: memberEventSk(link.eventStartDateTime, link.eventId),
+        },
+        TableName: context.tableName,
+      }),
+    );
+  }
+
+  await deps.documentClient.send(
+    new DeleteCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: memberSk(memberId),
+      },
+      TableName: context.tableName,
+    }),
+  );
+  await logMemberActivity(context, memberId, "Member Deleted", `${member.fullName} deleted.`, deps);
+  return json(200, { deleted: true, memberId });
+};
+
+const importMembers = async (context: RequestContext, input: MemberImportInput, deps: HandlerDependencies) => {
+  const rows = parseImportWorkbook(input);
+  const result: MemberImportResult = {
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  for (const [index, row] of rows.entries()) {
+    const unityId = toOptionalString(row["Member ID"]);
+    const fullName = normalizeWhitespace(row["Member Name"]);
+    if (!unityId || !fullName) {
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      const existing = await getMemberByUnityId(context, unityId, deps);
+      const member = buildMemberItem(
+        context,
+        {
+          source: "UNITY",
+          unityId,
+          familyId: toOptionalString(row["Family ID"]),
+          householdName: toOptionalString(row["Household Name"]),
+          fullName,
+          phone: toOptionalString(row["Phone Number"]),
+          email: toOptionalString(row["Email"]),
+          dateOfBirth: toIsoDate(row["Date of Birth"]),
+          age: toOptionalNumber(row["Age"]),
+          gender: toOptionalString(row["Gender"]),
+          profession: toOptionalString(row["Profession"]),
+          familyStatus: toOptionalString(row["Family Status"]),
+          church: toOptionalString(row["Church"]),
+          fatherOfConfession: toOptionalString(row["Father of Confession"]),
+          deaconshipRank: toOptionalString(row["Deaconship Rank"]),
+          ordinationDate: toIsoDate(row["Ordination Date"]),
+          churchProvince: toOptionalString(row["Church Province"]),
+          churchCity: toOptionalString(row["Church City"]),
+          churchRegion: toOptionalString(row["Church Region"]),
+          diocese: toOptionalString(row["Diocese"]),
+          accountStatus: toOptionalString(row["Account Status"]),
+          address: toOptionalString(row["Address"]),
+          postalCode: toOptionalString(row["Postal Code"]),
+          activated: toOptionalBoolean(row["Activated"]),
+          approved: toOptionalBoolean(row["Approved"]),
+          locked: toOptionalBoolean(row["Locked"]),
+          visibility: toOptionalString(row["Visibility"]),
+          username: toOptionalString(row["Username"]),
+          registrationDate: toIsoDate(row["Registration Date"]),
+          groups: String(row["Groups"] ?? "")
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+          customFlag: toOptionalString(row["Custom Flag"]),
+          licensePlate: toOptionalString(row["License Plate"]),
+        },
+        deps,
+        existing,
+      );
+      member.notes = existing?.notes;
+      await putMember(context, member, deps);
+      await logMemberActivity(
+        context,
+        member.memberId,
+        existing ? "Member Updated" : "Member Imported",
+        existing ? `${member.fullName} refreshed from Unity import.` : `${member.fullName} imported from Unity.`,
+        deps,
+        { unityId, row: index + 2, fileName: input.fileName },
+      );
+      if (existing) {
+        result.updated += 1;
+      } else {
+        result.created += 1;
+      }
+    } catch (error) {
+      result.errors.push({
+        row: index + 2,
+        message: error instanceof Error ? error.message : "Unknown import error.",
+      });
+    }
+  }
+
+  return json(200, result);
+};
+
+const getMemberEventsResponse = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+  const items = await listMemberEvents(context, memberId, deps);
+  return json(200, { items: items.map(toMemberEvent) });
+};
+
+const getEventMembersResponse = async (context: RequestContext, eventId: string, deps: HandlerDependencies) => {
+  const items = await listEventMembers(context, eventId, deps);
+  const response: EventMembersResponse = { items: items.map(toEventMemberSummary) };
+  return json(200, response);
+};
+
+const updateEventMembersResponse = async (
+  context: RequestContext,
+  eventId: string,
+  input: UpdateEventMembersInput,
+  deps: HandlerDependencies,
+) => {
+  const event = await getEvent(context, input.calendarId, eventId, deps);
+  if (!event) {
+    return json(404, { message: "Event not found." });
+  }
+
+  const updatedEvent: EventItem = {
+    ...event,
+    eventType: event.eventType ?? "GENERAL",
+    updatedAt: deps.now(),
+  };
+  const assignedMembers = await syncEventMembers(context, updatedEvent, input.memberIds, deps);
+  const persistedEvent: EventItem = {
+    ...updatedEvent,
+    memberIds: assignedMembers.map((member) => member.memberId),
+    memberNames: assignedMembers.map((member) => member.fullName),
+  };
+  await putEvent(context, persistedEvent, deps);
+  return json(200, { items: assignedMembers.map((member) => toEventMemberSummary({
+    PK: "",
+    SK: "",
+    createdAt: persistedEvent.createdAt,
+    updatedAt: persistedEvent.updatedAt,
+    entityType: "EVENT_MEMBER",
+    tenantId: context.tenantId,
+    eventId: persistedEvent.eventId,
+    memberId: member.memberId,
+    memberNameSnapshot: member.fullName,
+    memberPhoneSnapshot: member.phone,
+    memberEmailSnapshot: member.email,
+    unityIdSnapshot: member.unityId,
+    sourceSnapshot: member.source,
+    eventStartDateTime: persistedEvent.start,
+    eventType: persistedEvent.eventType ?? "GENERAL",
+    status: persistedEvent.status,
+  })) });
 };
 
 const getDashboardSummary = async (context: RequestContext, deps: HandlerDependencies) => {
@@ -1797,6 +2668,7 @@ const getScheduleEvents = async (
   const timeMax =
     event.queryStringParameters?.timeMax ?? new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
   const forceSync = event.queryStringParameters?.forceSync === "true";
+  const cacheOnly = event.queryStringParameters?.cacheOnly === "true";
   const calendarIds = event.queryStringParameters?.calendarIds
     ?.split(",")
     .map((entry) => entry.trim())
@@ -1808,6 +2680,7 @@ const getScheduleEvents = async (
       timeMin,
       timeMax,
       calendarIds,
+      cacheOnly,
       forceSync,
     }),
   );
@@ -1970,18 +2843,26 @@ const createScheduleEvent = async (
   };
 
   await upsertGoogleEventIntoCache(context, calendar, created, "GOOGLE", deps);
+  const stored = await getEvent(context, calendar.calendarId, created.id, deps);
+  if (!stored) {
+    return json(500, { message: "Event cache write failed." });
+  }
 
-  const storedResponse = await deps.documentClient.send(
-    new GetCommand({
-      Key: {
-        PK: userPk(context.actorSub),
-        SK: eventSk(calendar.calendarId, created.id),
-      },
-      TableName: context.tableName,
-    }),
-  );
-
-  return json(201, toScheduleEvent(storedResponse.Item as EventItem));
+  const eventForAssignments: EventItem = {
+    ...stored,
+    eventType: input.eventType ?? "GENERAL",
+    updatedAt: deps.now(),
+  };
+  const assignedMembers = input.memberIds?.length
+    ? await syncEventMembers(context, eventForAssignments, input.memberIds, deps)
+    : [];
+  const updatedStored: EventItem = {
+    ...eventForAssignments,
+    memberIds: assignedMembers.map((member) => member.memberId),
+    memberNames: assignedMembers.map((member) => member.fullName),
+  };
+  await putEvent(context, updatedStored, deps);
+  return json(201, toScheduleEvent(updatedStored));
 };
 
 const updateScheduleEvent = async (
@@ -2019,6 +2900,8 @@ const updateScheduleEvent = async (
     start: input.start ?? existing.start,
     end: input.end ?? existing.end,
     allDay: input.allDay ?? existing.allDay,
+    eventType: input.eventType ?? existing.eventType,
+    memberIds: input.memberIds ?? existing.memberIds,
   };
 
   if (new Date(nextEvent.end).getTime() <= new Date(nextEvent.start).getTime()) {
@@ -2050,7 +2933,23 @@ const updateScheduleEvent = async (
 
   await upsertGoogleEventIntoCache(context, calendar, updated, "GOOGLE", deps);
   const stored = await getEvent(context, input.calendarId, eventId, deps);
-  return json(200, toScheduleEvent(stored as EventItem));
+  if (!stored) {
+    return json(404, { message: "Event not found after update." });
+  }
+
+  const eventForAssignments: EventItem = {
+    ...stored,
+    eventType: nextEvent.eventType ?? "GENERAL",
+    updatedAt: deps.now(),
+  };
+  const assignedMembers = await syncEventMembers(context, eventForAssignments, nextEvent.memberIds ?? [], deps);
+  const updatedStored: EventItem = {
+    ...eventForAssignments,
+    memberIds: assignedMembers.map((member) => member.memberId),
+    memberNames: assignedMembers.map((member) => member.fullName),
+  };
+  await putEvent(context, updatedStored, deps);
+  return json(200, toScheduleEvent(updatedStored));
 };
 
 const deleteScheduleEvent = async (
@@ -2073,6 +2972,8 @@ const deleteScheduleEvent = async (
     return json(404, { message: "Event not found." });
   }
 
+  const existingMembers = await listEventMembers(context, eventId, deps);
+
   await googleFetch(
     context,
     connection,
@@ -2084,6 +2985,26 @@ const deleteScheduleEvent = async (
   );
 
   await deleteEvent(context, calendarId, eventId, deps);
+  for (const member of existingMembers) {
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantEventPk(context.tenantId, eventId),
+          SK: eventMemberSk(member.memberId),
+        },
+        TableName: context.tableName,
+      }),
+    );
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantMemberPk(context.tenantId, member.memberId),
+          SK: memberEventSk(member.eventStartDateTime, eventId),
+        },
+        TableName: context.tableName,
+      }),
+    );
+  }
   return json(200, { deleted: true, eventId, calendarId });
 };
 
@@ -2120,6 +3041,22 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         return await createRecord(context, parseBody<SampleRecordInput>(typedEvent.body), deps);
       }
 
+      if (method === "GET" && path === "/members") {
+        return await getMembers(context, deps);
+      }
+
+      if (method === "GET" && path === "/members/index") {
+        return await getMembersIndex(context, deps);
+      }
+
+      if (method === "POST" && path === "/members") {
+        return await createMember(context, parseBody<CreateMemberInput>(typedEvent.body), deps);
+      }
+
+      if (method === "POST" && path === "/members/import") {
+        return await importMembers(context, parseBody<MemberImportInput>(typedEvent.body), deps);
+      }
+
       if (path === `/records/${recordId}` && recordId) {
         if (method === "GET") {
           return await getRecord(context, recordId, deps);
@@ -2132,6 +3069,26 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         if (method === "DELETE") {
           return await deleteRecord(context, recordId, deps);
         }
+      }
+
+      const memberId = typedEvent.pathParameters?.memberId;
+
+      if (path === `/members/${memberId}` && memberId) {
+        if (method === "GET") {
+          return await getMemberDetails(context, memberId, deps);
+        }
+
+        if (method === "PUT") {
+          return await updateMember(context, memberId, parseBody<UpdateMemberInput>(typedEvent.body), deps);
+        }
+
+        if (method === "DELETE") {
+          return await deleteMember(context, memberId, deps);
+        }
+      }
+
+      if (path === `/members/${memberId}/events` && memberId && method === "GET") {
+        return await getMemberEventsResponse(context, memberId, deps);
       }
 
       if (method === "GET" && path === "/schedule/overview") {
@@ -2181,6 +3138,21 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
             context,
             eventId,
             typedEvent.queryStringParameters?.calendarId ?? "",
+            deps,
+          );
+        }
+      }
+
+      if (path === `/events/${eventId}/members` && eventId) {
+        if (method === "GET") {
+          return await getEventMembersResponse(context, eventId, deps);
+        }
+
+        if (method === "PUT") {
+          return await updateEventMembersResponse(
+            context,
+            eventId,
+            parseBody<UpdateEventMembersInput>(typedEvent.body),
             deps,
           );
         }

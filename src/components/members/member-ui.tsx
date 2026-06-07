@@ -1,0 +1,304 @@
+import { Loader2, Search, Upload, UserPlus, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import type {
+  CreateMemberInput,
+  EventMemberSummary,
+  Member,
+  MemberEvent,
+  MemberEventType,
+  MemberImportResult,
+  MemberIndexItem,
+} from "../../../shared/types";
+import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Dialog } from "../ui/dialog";
+import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
+
+export const UnityBadge = ({ source, unityId }: { source: Member["source"]; unityId?: string }) => (
+  <span
+    className={cn(
+      "inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-[0.12em]",
+      source === "UNITY" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600",
+    )}
+  >
+    {source === "UNITY" ? `unity#${unityId ?? "member"}` : "MANUAL"}
+  </span>
+);
+
+export const MemberAvatar = ({
+  fullName,
+  initials,
+  size = "md",
+}: {
+  fullName: string;
+  initials: string;
+  size?: "sm" | "md" | "lg";
+}) => (
+  <div
+    aria-label={fullName}
+    className={cn(
+      "flex shrink-0 items-center justify-center rounded-full bg-[linear-gradient(160deg,#7aa7e8_0%,#376dbd_100%)] font-semibold text-white shadow-sm",
+      size === "sm" && "h-11 w-11 text-base",
+      size === "md" && "h-14 w-14 text-xl",
+      size === "lg" && "h-32 w-32 text-5xl",
+    )}
+  >
+    {initials}
+  </div>
+);
+
+export const MemberChip = ({
+  member,
+  onRemove,
+}: {
+  member: Pick<EventMemberSummary, "memberId" | "fullName" | "initials">;
+  onRemove?: (memberId: string) => void;
+}) => (
+  <div className="inline-flex items-center gap-2 rounded-full bg-sky-100 px-2 py-1 text-xs font-medium text-sky-800">
+    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[11px] font-semibold text-sky-800">
+      {member.initials}
+    </span>
+    <span>{member.fullName}</span>
+    {onRemove ? (
+      <button className="rounded-full p-0.5 hover:bg-sky-200" onClick={() => onRemove(member.memberId)} type="button">
+        <X className="h-3.5 w-3.5" />
+      </button>
+    ) : null}
+  </div>
+);
+
+export const MemberDetailsTabs = ({
+  activeTab,
+  onChange,
+}: {
+  activeTab: "details" | "visitations" | "activity";
+  onChange: (value: "details" | "visitations" | "activity") => void;
+}) => {
+  const items = [
+    { id: "details", label: "Details" },
+    { id: "visitations", label: "Visitations" },
+    { id: "activity", label: "Activity" },
+  ] as const;
+
+  return (
+    <div className="flex justify-between border-b border-border px-2 text-lg">
+      {items.map((item) => (
+        <button
+          key={item.id}
+          className={cn(
+            "relative pb-3 pt-2 font-medium transition-colors",
+            activeTab === item.id ? "text-primary" : "text-amber-700/80",
+          )}
+          onClick={() => onChange(item.id)}
+          type="button"
+        >
+          {item.label}
+          {activeTab === item.id ? <span className="absolute inset-x-0 bottom-0 h-1 rounded-full bg-primary" /> : null}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+export const MemberSearchAutocomplete = ({
+  items,
+  query,
+  onQueryChange,
+  selectedIds,
+  onSelect,
+  placeholder = "Search members",
+}: {
+  items: MemberIndexItem[];
+  query: string;
+  onQueryChange: (value: string) => void;
+  selectedIds: string[];
+  onSelect: (item: MemberIndexItem) => void;
+  placeholder?: string;
+}) => {
+  const results = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
+      return items.filter((item) => !selectedIds.includes(item.memberId)).slice(0, 8);
+    }
+
+    return items
+      .filter(
+        (item) =>
+          !selectedIds.includes(item.memberId) &&
+          item.normalizedSearchText.includes(normalized),
+      )
+      .slice(0, 8);
+  }, [items, query, selectedIds]);
+
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 rounded-full border border-[#efe7d3] bg-white px-4 py-3">
+        <Search className="h-4 w-4 text-[#b39b62]" />
+        <input
+          className="w-full bg-transparent text-sm outline-none"
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder={placeholder}
+          value={query}
+        />
+      </label>
+      {results.length ? (
+        <div className="rounded-3xl border border-border bg-white p-2 panel-shadow">
+          {results.map((item) => (
+            <button
+              className="flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left hover:bg-slate-50"
+              key={item.memberId}
+              onClick={() => onSelect(item)}
+              type="button"
+            >
+              <MemberAvatar fullName={item.fullName} initials={item.initials} size="sm" />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-slate-900">{item.fullName}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {item.email || item.phone || (item.unityId ? `unity#${item.unityId}` : "Manual member")}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const memberFormDefaults: CreateMemberInput = {
+  fullName: "",
+  phone: "",
+  email: "",
+  address: "",
+  notes: "",
+  source: "MANUAL",
+};
+
+export const MemberFormDialog = ({
+  open,
+  initialValue,
+  busy,
+  title,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  initialValue?: Partial<CreateMemberInput>;
+  busy: boolean;
+  title: string;
+  onClose: () => void;
+  onSubmit: (value: CreateMemberInput) => Promise<void> | void;
+}) => {
+  const [form, setForm] = useState<CreateMemberInput>(memberFormDefaults);
+
+  useEffect(() => {
+    if (open) {
+      setForm({ ...memberFormDefaults, ...initialValue });
+    }
+  }, [initialValue, open]);
+
+  return (
+    <Dialog onClose={onClose} open={open} title={title}>
+      <div className="space-y-3">
+        <label className="space-y-1">
+          <span className="text-sm font-medium">Full Name</span>
+          <Input onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))} value={form.fullName} />
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Phone</span>
+            <Input onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} value={form.phone ?? ""} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Email</span>
+            <Input onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} value={form.email ?? ""} />
+          </label>
+        </div>
+        <label className="space-y-1">
+          <span className="text-sm font-medium">Address</span>
+          <Input onChange={(event) => setForm((current) => ({ ...current, address: event.target.value }))} value={form.address ?? ""} />
+        </label>
+        <label className="space-y-1">
+          <span className="text-sm font-medium">Notes</span>
+          <Textarea onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} value={form.notes ?? ""} />
+        </label>
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose} type="button" variant="outline">
+            Cancel
+          </Button>
+          <Button disabled={busy} onClick={() => void onSubmit(form)} type="button">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+            Save Member
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+};
+
+export const MemberImportDialog = ({
+  open,
+  busy,
+  result,
+  onClose,
+  onImport,
+}: {
+  open: boolean;
+  busy: boolean;
+  result: MemberImportResult | null;
+  onClose: () => void;
+  onImport: (file: File) => Promise<void> | void;
+}) => {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  return (
+    <Dialog
+      description="Upload a Unity Excel export. Existing Unity members are updated in place."
+      onClose={onClose}
+      open={open}
+      title="Import Excel"
+    >
+      <div className="space-y-3">
+        <input accept=".xls,.xlsx" className="hidden" ref={inputRef} type="file" />
+        <button
+          className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-border bg-slate-50 px-4 py-8 text-sm font-medium text-slate-700"
+          onClick={() => inputRef.current?.click()}
+          type="button"
+        >
+          <Upload className="h-4 w-4" />
+          Choose Excel file
+        </button>
+        <input
+          accept=".xls,.xlsx"
+          className="w-full rounded-xl border border-border px-3 py-2 text-sm"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) {
+              void onImport(file);
+            }
+          }}
+          type="file"
+        />
+        {result ? (
+          <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-700">
+            <p>{result.created} created, {result.updated} updated, {result.skipped} skipped.</p>
+            {result.errors.length ? <p className="mt-1 text-rose-600">{result.errors.length} rows had errors.</p> : null}
+          </div>
+        ) : null}
+        <div className="flex justify-end">
+          <Button onClick={onClose} type="button" variant="outline">
+            {busy ? "Importing..." : "Close"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+};
+
+export const formatMemberEventLabel = (event: MemberEvent) =>
+  event.eventType === "VISITATION" ? "Visitation" : "Event";
+
+export const emptyMemberSelection = (items: MemberIndexItem[], memberIds: string[] = []) =>
+  items.filter((item) => memberIds.includes(item.memberId));

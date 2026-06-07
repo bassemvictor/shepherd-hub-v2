@@ -43,6 +43,18 @@ recordsTable.addGlobalSecondaryIndex({
   },
 });
 
+recordsTable.addGlobalSecondaryIndex({
+  indexName: "GSI2",
+  partitionKey: {
+    name: "GSI2PK",
+    type: AttributeType.STRING,
+  },
+  sortKey: {
+    name: "GSI2SK",
+    type: AttributeType.STRING,
+  },
+});
+
 backend.projectTemplateApi.addEnvironment("PROJECT_TEMPLATE_TABLE", recordsTable.tableName);
 backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID ?? "");
 backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_SECRET", process.env.GOOGLE_CLIENT_SECRET ?? "");
@@ -92,6 +104,12 @@ const addProtectedRoutes = (path: string, methods: HttpMethod[]) =>
 addProtectedRoutes("/dashboard/summary", [HttpMethod.GET]);
 addProtectedRoutes("/records", [HttpMethod.GET, HttpMethod.POST]);
 addProtectedRoutes("/records/{recordId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/members", [HttpMethod.GET, HttpMethod.POST]);
+addProtectedRoutes("/members/index", [HttpMethod.GET]);
+addProtectedRoutes("/members/import", [HttpMethod.POST]);
+addProtectedRoutes("/members/{memberId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/members/{memberId}/events", [HttpMethod.GET]);
+addProtectedRoutes("/events/{eventId}/members", [HttpMethod.GET, HttpMethod.PUT]);
 addProtectedRoutes("/schedule/overview", [HttpMethod.GET]);
 addProtectedRoutes("/schedule/google/connect", [HttpMethod.POST]);
 addProtectedRoutes("/schedule/google/connection", [HttpMethod.DELETE]);

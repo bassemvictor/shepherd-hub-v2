@@ -109,6 +109,9 @@ export type ScheduleEvent = EntityEnvelope & {
   status: string;
   source: SyncSource;
   htmlLink?: string;
+  eventType?: MemberEventType;
+  memberIds?: string[];
+  memberNames?: string[];
 };
 
 export type CalendarSyncSnapshot = {
@@ -160,6 +163,8 @@ export type CreateScheduleEventInput = {
   start: string;
   end: string;
   allDay?: boolean;
+  eventType?: MemberEventType;
+  memberIds?: string[];
 };
 
 export type UpdateScheduleEventInput = {
@@ -171,8 +176,138 @@ export type UpdateScheduleEventInput = {
   start?: string;
   end?: string;
   allDay?: boolean;
+  eventType?: MemberEventType;
+  memberIds?: string[];
 };
 
 export type ConnectGoogleResponse = {
   authUrl: string;
+};
+
+export type MemberSource = "UNITY" | "MANUAL";
+export type MemberEventType = "VISITATION" | "GENERAL";
+
+export type MemberIndexItem = {
+  memberId: string;
+  fullName: string;
+  initials: string;
+  phone?: string;
+  email?: string;
+  unityId?: string;
+  source: MemberSource;
+  normalizedSearchText: string;
+};
+
+export type Member = EntityEnvelope & {
+  memberId: string;
+  unityId?: string;
+  source: MemberSource;
+  isUnityMember: boolean;
+  familyId?: string;
+  householdName?: string;
+  fullName: string;
+  firstName?: string;
+  lastName?: string;
+  initials: string;
+  phone?: string;
+  email?: string;
+  whatsappPhone?: string;
+  address?: string;
+  postalCode?: string;
+  dateOfBirth?: string;
+  age?: number;
+  gender?: string;
+  profession?: string;
+  familyStatus?: string;
+  church?: string;
+  fatherOfConfession?: string;
+  deaconshipRank?: string;
+  ordinationDate?: string;
+  churchProvince?: string;
+  churchCity?: string;
+  churchRegion?: string;
+  diocese?: string;
+  accountStatus?: string;
+  activated?: boolean;
+  approved?: boolean;
+  locked?: boolean;
+  visibility?: string;
+  username?: string;
+  registrationDate?: string;
+  groups?: string[];
+  customFlag?: string;
+  licensePlate?: string;
+  notes?: string;
+  normalizedSearchText: string;
+};
+
+export type MemberDirectoryResponse = {
+  items: Member[];
+  nextCursor?: string;
+  total: number;
+};
+
+export type MemberIndexResponse = {
+  items: MemberIndexItem[];
+  generatedAt: string;
+};
+
+export type MemberEvent = EntityEnvelope & {
+  eventId: string;
+  memberId: string;
+  eventTitleSnapshot: string;
+  eventStartDateTime: string;
+  eventEndDateTime: string;
+  eventType: MemberEventType;
+  status: string;
+};
+
+export type MemberActivity = {
+  activityId: string;
+  action: string;
+  message: string;
+  actorUserId: string;
+  actorDisplayName: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type MemberDetailResponse = {
+  member: Member;
+  activity: MemberActivity[];
+};
+
+export type MemberImportResult = {
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{ row: number; message: string }>;
+};
+
+export type CreateMemberInput = Partial<
+  Omit<Member, keyof EntityEnvelope | "memberId" | "source" | "isUnityMember" | "normalizedSearchText">
+> & {
+  fullName: string;
+  source?: MemberSource;
+};
+
+export type UpdateMemberInput = Partial<CreateMemberInput>;
+
+export type EventMemberSummary = Pick<
+  Member,
+  "memberId" | "fullName" | "initials" | "phone" | "email" | "unityId" | "source"
+>;
+
+export type EventMembersResponse = {
+  items: EventMemberSummary[];
+};
+
+export type UpdateEventMembersInput = {
+  calendarId: string;
+  memberIds: string[];
+};
+
+export type MemberImportInput = {
+  fileName: string;
+  workbookBase64: string;
 };

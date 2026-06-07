@@ -1,4 +1,4 @@
-import { CalendarDays, FolderKanban, Home } from "lucide-react";
+import { CalendarDays, FolderKanban, Home, Users } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 import type { AppAuthUser } from "../../lib/auth";
@@ -27,6 +27,10 @@ const baseNavigation: NavigationSection[] = [
       { label: "Connect & Configure", href: "/calendar", icon: CalendarDays },
       { label: "Schedule", href: "/calendar/schedule", icon: CalendarDays },
     ],
+  },
+  {
+    label: "Congregation",
+    items: [{ label: "Members", href: "/members", icon: Users }],
   },
 ];
 
