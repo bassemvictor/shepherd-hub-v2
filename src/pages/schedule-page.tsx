@@ -23,7 +23,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import type {
   CreateScheduleEventInput,
@@ -127,6 +127,18 @@ const shiftDateOnlyValue = (value: string, days: number) => {
   const date = parseDateOnlyValue(value);
   date.setDate(date.getDate() + days);
   return toDateOnlyValue(date);
+};
+
+const isSameLocalDay = (left: Date, right: Date) =>
+  left.getFullYear() === right.getFullYear()
+  && left.getMonth() === right.getMonth()
+  && left.getDate() === right.getDate();
+
+const getCurrentScrollTime = () => {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}:00`;
 };
 
 const normalizeAllDayStartValue = (value: string) => (isDateOnlyValue(value) ? value : value.slice(0, 10));
@@ -246,6 +258,8 @@ const EventEditor = ({
   onSave,
   onDelete,
 }: EventEditorProps) => {
+  const navigate = useNavigate();
+
   if (!open) {
     return null;
   }
@@ -343,11 +357,15 @@ const EventEditor = ({
           selectedIds={form.memberIds}
         />
         {form.memberIds.length ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5">
             {emptyMemberSelection(memberIndex, form.memberIds).map((member) => (
               <MemberChip
                 key={member.memberId}
                 member={member}
+                onClick={(memberId) => {
+                  onClose();
+                  navigate(`/members/${memberId}`);
+                }}
                 onRemove={(memberId) =>
                   onChange({
                     ...form,
@@ -505,6 +523,7 @@ const mergeOverviewWithSyncMetadata = (
 export const SchedulePage = () => {
   const calendarRef = useRef<FullCalendar | null>(null);
   const requestSequenceRef = useRef(0);
+  const mobileScrollFrameRef = useRef<number | null>(null);
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
   const [overview, setOverview] = useState<ScheduleOverviewResponse | null>(null);
@@ -1004,6 +1023,27 @@ export const SchedulePage = () => {
     setViewTitle(apiRef.view.title);
   }, []);
 
+  const scrollMobileDayViewToCurrentTime = useCallback((viewType: string, viewStart: Date) => {
+    if (!isMobile || viewType !== "timeGridDay" || !isSameLocalDay(viewStart, new Date())) {
+      return;
+    }
+
+    if (mobileScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(mobileScrollFrameRef.current);
+    }
+
+    mobileScrollFrameRef.current = window.requestAnimationFrame(() => {
+      calendarRef.current?.getApi().scrollToTime(getCurrentScrollTime());
+      mobileScrollFrameRef.current = null;
+    });
+  }, [isMobile]);
+
+  useEffect(() => () => {
+    if (mobileScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(mobileScrollFrameRef.current);
+    }
+  }, []);
+
   if (!isApiConfigured) {
     return <ErrorState description="Set `VITE_API_BASE_URL` or regenerate `amplify_outputs.json` before using the schedule APIs." title="API not configured" />;
   }
@@ -1153,6 +1193,7 @@ export const SchedulePage = () => {
                 viewDidMount={(info) => {
                   setCurrentView(info.view.type);
                   setViewTitle(info.view.title);
+                  scrollMobileDayViewToCurrentTime(info.view.type, info.view.currentStart);
                 }}
                 datesSet={(info) => {
                   setCurrentView(info.view.type);
@@ -1161,6 +1202,7 @@ export const SchedulePage = () => {
                     timeMin: info.view.activeStart.toISOString(),
                     timeMax: info.view.activeEnd.toISOString(),
                   });
+                  scrollMobileDayViewToCurrentTime(info.view.type, info.view.currentStart);
                 }}
               />
             </div>

@@ -217,7 +217,6 @@ export type Member = EntityEnvelope & {
   dateOfBirth?: string;
   age?: number;
   gender?: string;
-  profession?: string;
   familyStatus?: string;
   church?: string;
   fatherOfConfession?: string;
@@ -227,7 +226,6 @@ export type Member = EntityEnvelope & {
   churchCity?: string;
   churchRegion?: string;
   diocese?: string;
-  accountStatus?: string;
   activated?: boolean;
   approved?: boolean;
   locked?: boolean;

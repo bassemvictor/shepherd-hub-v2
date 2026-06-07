@@ -99,25 +99,25 @@ export const MemberDetailPage = () => {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {error ? <ErrorState description={error} title="Member action failed" /> : null}
 
-      <section className="rounded-[2.25rem] bg-[linear-gradient(180deg,#ffffff_0%,#fbfbf8_100%)] p-4 shadow-[0_18px_48px_rgba(16,33,61,0.08)]">
+      <section className="rounded-lg border border-border bg-white p-3 panel-shadow">
         <div className="flex items-start justify-between">
-          <button className="flex items-center gap-2 text-2xl font-semibold text-slate-900" onClick={() => navigate("/members")} type="button">
-            <ArrowLeft className="h-5 w-5" />
+          <button className="flex items-center gap-2 text-sm font-semibold text-slate-900" onClick={() => navigate("/members")} type="button">
+            <ArrowLeft className="h-4 w-4" />
             Back
           </button>
           <div className="relative">
             <Button onClick={() => setMenuOpen((current) => !current)} size="icon" type="button" variant="ghost">
-              <Ellipsis className="h-5 w-5" />
+              <Ellipsis className="h-4 w-4" />
             </Button>
             {menuOpen ? (
-              <div className="absolute right-0 top-10 w-44 rounded-[1.5rem] bg-white p-3 shadow-[0_16px_40px_rgba(16,33,61,0.14)]">
-                <button className="block w-full rounded-xl px-3 py-2 text-left text-xl font-semibold" onClick={() => setEditing(true)} type="button">
+              <div className="absolute right-0 top-9 z-10 w-36 rounded-md border border-border bg-white p-1.5 shadow-lg">
+                <button className="block w-full rounded-sm px-2 py-1.5 text-left text-sm font-medium hover:bg-accent" onClick={() => setEditing(true)} type="button">
                   Edit
                 </button>
-                <button className="block w-full rounded-xl px-3 py-2 text-left text-xl font-semibold text-rose-600" onClick={() => void handleDelete()} type="button">
+                <button className="block w-full rounded-sm px-2 py-1.5 text-left text-sm font-medium text-rose-600 hover:bg-rose-50" onClick={() => void handleDelete()} type="button">
                   Delete
                 </button>
               </div>
@@ -125,76 +125,75 @@ export const MemberDetailPage = () => {
           </div>
         </div>
 
-        <div className="mt-8 flex flex-col items-center text-center">
+        <div className="mt-3 flex flex-col items-center text-center">
           <MemberAvatar fullName={member.fullName} initials={member.initials} size="lg" />
-          <h1 className="mt-4 text-5xl font-semibold tracking-tight text-slate-900">{member.fullName}</h1>
-          <div className="mt-2 text-xl text-[#aa925d]">{member.unityId ? `#unity#${member.unityId}` : `MEMBER#${member.memberId}`}</div>
-          <div className="mt-3">
+          <div className="mt-2.5 flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{member.fullName}</h1>
             <UnityBadge source={member.source} unityId={member.unityId} />
           </div>
         </div>
 
-        <div className="mt-6 flex justify-center gap-4">
+        <div className="mt-3 flex justify-center gap-2">
           {quickActions.map((item) => {
             const Icon = item.icon;
             return (
               <a
-                className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-50 shadow-sm"
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-background transition-colors hover:bg-accent"
                 href={item.href}
                 key={item.label}
                 rel="noreferrer"
                 target={item.href?.startsWith("http") ? "_blank" : undefined}
               >
-                <Icon className="h-8 w-8 text-primary" />
+                <Icon className="h-4 w-4 text-primary" />
               </a>
             );
           })}
         </div>
 
-        <div className="mt-6">
+        <div className="mt-3">
           <MemberDetailsTabs activeTab={activeTab} onChange={setActiveTab} />
         </div>
 
-        <div className="mt-6 rounded-[2rem] border border-border bg-white p-4">
+        <div className="mt-2.5 rounded-lg border border-border bg-background/50 p-3">
           {activeTab === "details" ? (
-            <div className="grid gap-3">
+            <div className="grid gap-2">
               {[
-                ["Role", member.profession || "Not set"],
-                ["Status", member.accountStatus || "Not set"],
+                [member.unityId ? "UNITY ID" : "MEMBER ID", member.unityId ?? member.memberId],
                 ["Phone", member.phone || "Not set"],
                 ["Email", member.email || "Not set"],
                 ["Address", member.address || "Not set"],
                 ["Notes", member.notes || "Not set"],
               ].map(([label, value]) => (
-                <div className="rounded-[1.5rem] border border-border p-4" key={label}>
-                  <div className="text-sm font-semibold uppercase tracking-[0.18em] text-[#b39b62]">{label}</div>
-                  <div className="mt-2 text-lg text-slate-900">{value}</div>
+                <div className="rounded-md border border-border bg-white px-3 py-2.5" key={label}>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
+                  <div className="mt-1 text-sm text-slate-900">{value}</div>
                 </div>
               ))}
             </div>
           ) : null}
 
           {activeTab === "visitations" ? (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <Button
-                className="h-12 w-full rounded-full bg-[#cfe0ff] text-lg font-semibold text-primary hover:bg-[#bdd4ff]"
+                className="w-full"
+                size="sm"
                 onClick={() => navigate(`/calendar/schedule?memberId=${member.memberId}&eventType=VISITATION`)}
                 type="button"
               >
                 Schedule
               </Button>
               {visitationEvents.length ? (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {visitationEvents.map((event) => (
-                    <div className="rounded-[1.5rem] border border-border p-4" key={`${event.eventId}-${event.eventStartDateTime}`}>
-                      <div className="text-sm font-semibold text-primary">{formatMemberEventLabel(event)}</div>
-                      <div className="mt-2 text-lg font-semibold text-slate-900">{event.eventTitleSnapshot}</div>
-                      <div className="mt-1 text-sm text-muted-foreground">{new Date(event.eventStartDateTime).toLocaleString()}</div>
+                    <div className="rounded-md border border-border bg-white px-3 py-2.5" key={`${event.eventId}-${event.eventStartDateTime}`}>
+                      <div className="text-xs font-semibold text-primary">{formatMemberEventLabel(event)}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{event.eventTitleSnapshot}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">{new Date(event.eventStartDateTime).toLocaleString()}</div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="flex min-h-72 items-center justify-center text-center text-2xl font-semibold text-slate-900">
+                <div className="flex min-h-32 items-center justify-center rounded-md border border-dashed border-border bg-white px-4 text-center text-sm font-medium text-muted-foreground">
                   No visitations scheduled yet.
                 </div>
               )}
@@ -202,19 +201,19 @@ export const MemberDetailPage = () => {
           ) : null}
 
           {activeTab === "activity" ? (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {activity.map((item) => (
-                <div className="flex gap-4" key={item.activityId}>
+                <div className="flex gap-3" key={item.activityId}>
                   <div className="flex flex-col items-center">
-                    <span className="h-4 w-4 rounded-full border-4 border-[#dcebd6] bg-[#477f44]" />
-                    <span className="mt-2 h-28 w-1 rounded-full bg-[#d7e5f7]" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-primary" />
+                    <span className="mt-1.5 h-full min-h-10 w-px rounded-full bg-border" />
                   </div>
-                  <div className="flex-1 rounded-[1.5rem] border border-border p-4">
-                    <div className="flex flex-wrap gap-2 text-sm">
-                      <span className="rounded bg-[#e3f0de] px-2 py-1 text-[#477f44]">{item.action}</span>
-                      <span>{new Date(item.createdAt).toLocaleString()}</span>
+                  <div className="flex-1 rounded-md border border-border bg-white px-3 py-2.5">
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className="rounded-sm bg-accent px-1.5 py-0.5 font-medium text-accent-foreground">{item.action}</span>
+                      <span className="text-muted-foreground">{new Date(item.createdAt).toLocaleString()}</span>
                     </div>
-                    <div className="mt-3 text-lg text-slate-900">{item.message}</div>
+                    <div className="mt-1.5 text-sm text-slate-900">{item.message}</div>
                   </div>
                 </div>
               ))}

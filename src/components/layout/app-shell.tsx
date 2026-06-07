@@ -30,7 +30,7 @@ export const AppShell = () => {
       <div className="flex min-h-screen">
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-40 w-full overflow-y-auto overscroll-contain bg-sidebar px-3 py-4 text-sidebar-foreground transition-transform sm:w-[85vw] sm:max-w-72 lg:translate-x-0",
+            "fixed inset-y-0 left-0 z-40 w-[82vw] max-w-80 overflow-y-auto overscroll-contain bg-sidebar px-3 py-4 text-sidebar-foreground transition-transform sm:w-[78vw] sm:max-w-72 lg:translate-x-0",
             sidebarOpen ? "translate-x-0" : "-translate-x-full",
           )}
         >

@@ -110,33 +110,33 @@ export const MembersPage = () => {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <PageHeader
-        className="overflow-hidden rounded-[2rem] border-0 bg-[linear-gradient(180deg,#fefefe_0%,#fbfbf8_100%)] p-4 shadow-[0_16px_45px_rgba(16,33,61,0.08)]"
-        description="Search, import, and manage congregation members with a mobile-first directory."
+        className="overflow-hidden rounded-lg border border-border bg-white p-3"
         title="Congregation"
       >
-        <div className="space-y-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.24em] text-[#b39b62]">Congregation</div>
-          <label className="flex items-center gap-3 rounded-full border border-[#efe7d3] bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex min-w-[280px] flex-1 items-center gap-3 rounded-md border border-border bg-background px-3 py-1.5">
             <input
               className="w-full bg-transparent text-sm outline-none"
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search members"
               value={query}
             />
-            <span className="text-sm text-[#b39b62]">{filteredMembers.length} members</span>
+            <span className="whitespace-nowrap text-xs text-muted-foreground">
+              {filteredMembers.length} members
+            </span>
           </label>
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setSortMode((current) => (current === "az" ? "recent" : "az"))} type="button" variant="outline">
+          <div className="flex items-center gap-2">
+            <Button onClick={() => setSortMode((current) => (current === "az" ? "recent" : "az"))} size="sm" type="button" variant="outline">
               <ArrowUpDown className="h-4 w-4" />
               {sortMode === "az" ? "A-Z" : "Recent"}
             </Button>
-            <Button onClick={() => setImportOpen(true)} type="button" variant="outline">
+            <Button onClick={() => setImportOpen(true)} size="sm" type="button" variant="outline">
               <Download className="h-4 w-4" />
               Import Excel
             </Button>
-            <Button onClick={() => setCreateOpen(true)} type="button">
+            <Button onClick={() => setCreateOpen(true)} size="sm" type="button">
               <Plus className="h-4 w-4" />
               Add Member
             </Button>
@@ -146,22 +146,24 @@ export const MembersPage = () => {
 
       {error ? <ErrorState description={error} title="Member action failed" /> : null}
 
-      <div className="grid gap-3">
+      <div className="grid gap-2">
         {filteredMembers.map((member) => (
           <button
-            className="flex items-center gap-4 rounded-[2rem] bg-[#f2ede2] px-4 py-4 text-left shadow-[0_10px_24px_rgba(16,33,61,0.05)] transition-transform hover:-translate-y-0.5"
+            className="flex items-center gap-3 rounded-lg border border-border bg-white px-3 py-2 text-left transition-colors hover:border-primary/25 hover:bg-accent"
             key={member.memberId}
             onClick={() => navigate(`/members/${member.memberId}`)}
             type="button"
           >
             <MemberAvatar fullName={member.fullName} initials={member.initials} />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xl font-semibold text-slate-900">{member.fullName}</div>
-              <div className="truncate text-sm text-[#9f8a58]">
-                {member.unityId ? `unity#${member.unityId}` : member.email || member.phone || "Manual member"}
+              <div className="flex items-center gap-1.5">
+                <div className="truncate text-sm font-semibold text-slate-900">{member.fullName}</div>
+                <UnityBadge className="shrink-0" source={member.source} unityId={member.unityId} />
+              </div>
+              <div className="truncate text-xs text-muted-foreground">
+                {member.email || member.phone || "Manual member"}
               </div>
             </div>
-            <UnityBadge source={member.source} unityId={member.unityId} />
           </button>
         ))}
       </div>

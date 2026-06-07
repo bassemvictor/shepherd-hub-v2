@@ -62,6 +62,8 @@ type BaseItem = {
   updatedAt: string;
   GSI1PK?: string;
   GSI1SK?: string;
+  GSI2PK?: string;
+  GSI2SK?: string;
 };
 
 type StoredEntity = BaseItem & {
@@ -125,8 +127,6 @@ type EventItem = BaseItem & {
 
 type MemberItem = BaseItem & Omit<Member, keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"> & {
   tenantId: string;
-  GSI2PK?: string;
-  GSI2SK?: string;
 };
 
 type EventMemberItem = BaseItem & {
@@ -138,15 +138,6 @@ type EventMemberItem = BaseItem & {
   memberEmailSnapshot?: string;
   unityIdSnapshot?: string;
   sourceSnapshot: MemberSource;
-  eventStartDateTime: string;
-  eventType: MemberEventType;
-  status: string;
-};
-
-type MemberEventItem = BaseItem & {
-  tenantId: string;
-  eventId: string;
-  memberId: string;
   eventTitleSnapshot: string;
   eventStartDateTime: string;
   eventEndDateTime: string;
@@ -199,6 +190,22 @@ type SyncResult = {
   events: EventItem[];
   refreshed: boolean;
   source: SyncSource;
+};
+
+type GoogleEventPayload = {
+  id: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  attendees?: Array<{ email?: string }>;
+  status?: string;
+  htmlLink?: string;
+  start?: { date?: string; dateTime?: string };
+  end?: { date?: string; dateTime?: string };
+  extendedProperties?: {
+    private?: Record<string, string | null | undefined>;
+    shared?: Record<string, string | null | undefined>;
+  };
 };
 
 type GoogleTokenResponse = {
@@ -331,7 +338,8 @@ const memberUnityGsiSk = (unityId: string) => `UNITY#${unityId}`;
 const tenantEventPk = (tenantId: string, eventId: string) => `TENANT#${tenantId}#EVENT#${eventId}`;
 const eventMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const tenantMemberPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
-const memberEventSk = (eventStartDateTime: string, eventId: string) => `EVENT#${eventStartDateTime}#${eventId}`;
+const memberEventGsiPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
+const memberEventGsiSk = (eventStartDateTime: string, eventId: string) => `EVENT#${eventStartDateTime}#${eventId}`;
 const memberActivitySk = (createdAt: string, activityId: string) => `ACTIVITY#${createdAt}#${activityId}`;
 const oauthStatePk = (state: string) => `OAUTH_STATE#${state}`;
 const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
@@ -387,6 +395,31 @@ const normalizeAttendees = (value: unknown) => {
   return value
     .map((entry) => String(entry).trim())
     .filter(Boolean);
+};
+
+const normalizeMemberIds = (value: unknown) =>
+  Array.isArray(value)
+    ? [...new Set(value.map((entry) => String(entry).trim()).filter(Boolean))]
+    : [];
+
+const serializeGoogleMemberIds = (memberIds: string[]) => normalizeMemberIds(memberIds).join(",");
+
+const parseGoogleMemberIds = (value: unknown) => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(normalized);
+    if (Array.isArray(parsed)) {
+      return normalizeMemberIds(parsed);
+    }
+  } catch {
+    // Support plain CSV values as the stable on-wire format.
+  }
+
+  return normalizeMemberIds(normalized.split(","));
 };
 
 const normalizeWhitespace = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -549,11 +582,48 @@ const toScheduleEvent = (item: EventItem): ScheduleEvent => ({
 });
 
 const toMember = (item: MemberItem): Member => ({
-  ...item,
   createdAt: item.createdAt,
   entityType: item.entityType,
   tenantId: item.tenantId,
   updatedAt: item.updatedAt,
+  memberId: item.memberId,
+  unityId: item.unityId,
+  source: item.source,
+  isUnityMember: item.isUnityMember,
+  familyId: item.familyId,
+  householdName: item.householdName,
+  fullName: item.fullName,
+  firstName: item.firstName,
+  lastName: item.lastName,
+  initials: item.initials,
+  phone: item.phone,
+  email: item.email,
+  whatsappPhone: item.whatsappPhone,
+  address: item.address,
+  postalCode: item.postalCode,
+  dateOfBirth: item.dateOfBirth,
+  age: item.age,
+  gender: item.gender,
+  familyStatus: item.familyStatus,
+  church: item.church,
+  fatherOfConfession: item.fatherOfConfession,
+  deaconshipRank: item.deaconshipRank,
+  ordinationDate: item.ordinationDate,
+  churchProvince: item.churchProvince,
+  churchCity: item.churchCity,
+  churchRegion: item.churchRegion,
+  diocese: item.diocese,
+  activated: item.activated,
+  approved: item.approved,
+  locked: item.locked,
+  visibility: item.visibility,
+  username: item.username,
+  registrationDate: item.registrationDate,
+  groups: item.groups,
+  customFlag: item.customFlag,
+  licensePlate: item.licensePlate,
+  notes: item.notes,
+  normalizedSearchText: item.normalizedSearchText,
 });
 
 const toMemberIndexItem = (item: MemberItem): MemberIndexItem => ({
@@ -577,7 +647,7 @@ const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({
   source: item.sourceSnapshot,
 });
 
-const toMemberEvent = (item: MemberEventItem): MemberEvent => ({
+const toMemberEvent = (item: EventMemberItem): MemberEvent => ({
   createdAt: item.createdAt,
   entityType: item.entityType,
   eventEndDateTime: item.eventEndDateTime,
@@ -998,6 +1068,26 @@ const putEvent = async (context: RequestContext, event: EventItem, deps: Handler
   );
 };
 
+const persistEventWithMemberAssignments = async (
+  context: RequestContext,
+  event: EventItem,
+  deps: HandlerDependencies,
+) => {
+  const normalizedEvent: EventItem = {
+    ...event,
+    eventType: event.eventType ?? "GENERAL",
+    updatedAt: deps.now(),
+  };
+  const assignedMembers = await syncEventMembers(context, normalizedEvent, normalizedEvent.memberIds ?? [], deps);
+  const persistedEvent: EventItem = {
+    ...normalizedEvent,
+    memberIds: assignedMembers.map((member) => member.memberId),
+    memberNames: assignedMembers.map((member) => member.fullName),
+  };
+  await putEvent(context, persistedEvent, deps);
+  return persistedEvent;
+};
+
 const deleteEvent = async (context: RequestContext, calendarId: string, eventId: string, deps: HandlerDependencies) => {
   await deps.documentClient.send(
     new DeleteCommand({
@@ -1081,18 +1171,20 @@ const listMemberActivities = async (context: RequestContext, memberId: string, d
 const listMemberEvents = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
-      "#pk": "PK",
-      "#sk": "SK",
+      "#gsiPk": "GSI2PK",
+      "#gsiSk": "GSI2SK",
     },
     ExpressionAttributeValues: {
-      ":pk": tenantMemberPk(context.tenantId, memberId),
-      ":eventPrefix": "EVENT#",
+      ":gsiPk": memberEventGsiPk(context.tenantId, memberId),
+      ":from": "EVENT#",
+      ":to": "EVENT#~",
     },
-    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :eventPrefix)",
+    IndexName: "GSI2",
+    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
     TableName: context.tableName,
   });
 
-  return (items as MemberEventItem[]).sort((left, right) => left.eventStartDateTime.localeCompare(right.eventStartDateTime));
+  return (items as EventMemberItem[]).sort((left, right) => left.eventStartDateTime.localeCompare(right.eventStartDateTime));
 };
 
 const listEventMembers = async (context: RequestContext, eventId: string, deps: HandlerDependencies) => {
@@ -1196,7 +1288,6 @@ const buildMemberItem = (
     dateOfBirth: toIsoDate(input.dateOfBirth ?? existing?.dateOfBirth),
     age: toOptionalNumber(input.age ?? existing?.age),
     gender: toOptionalString(input.gender ?? existing?.gender),
-    profession: toOptionalString(input.profession ?? existing?.profession),
     familyStatus: toOptionalString(input.familyStatus ?? existing?.familyStatus),
     church: toOptionalString(input.church ?? existing?.church),
     fatherOfConfession: toOptionalString(input.fatherOfConfession ?? existing?.fatherOfConfession),
@@ -1206,7 +1297,6 @@ const buildMemberItem = (
     churchCity: toOptionalString(input.churchCity ?? existing?.churchCity),
     churchRegion: toOptionalString(input.churchRegion ?? existing?.churchRegion),
     diocese: toOptionalString(input.diocese ?? existing?.diocese),
-    accountStatus: toOptionalString(input.accountStatus ?? existing?.accountStatus),
     activated: toOptionalBoolean(input.activated ?? existing?.activated),
     approved: toOptionalBoolean(input.approved ?? existing?.approved),
     locked: toOptionalBoolean(input.locked ?? existing?.locked),
@@ -1271,15 +1361,6 @@ const syncEventMembers = async (
         TableName: context.tableName,
       },
     });
-    transactItems.push({
-      Delete: {
-        Key: {
-          PK: tenantMemberPk(context.tenantId, item.memberId),
-          SK: memberEventSk(item.eventStartDateTime, event.eventId),
-        },
-        TableName: context.tableName,
-      },
-    });
     await logMemberActivity(
       context,
       item.memberId,
@@ -1299,6 +1380,8 @@ const syncEventMembers = async (
     const eventMember: EventMemberItem = {
       PK: tenantEventPk(context.tenantId, event.eventId),
       SK: eventMemberSk(memberId),
+      GSI2PK: memberEventGsiPk(context.tenantId, memberId),
+      GSI2SK: memberEventGsiSk(event.start, event.eventId),
       createdAt: event.createdAt,
       updatedAt: deps.now(),
       entityType: "EVENT_MEMBER",
@@ -1310,19 +1393,6 @@ const syncEventMembers = async (
       memberEmailSnapshot: member.email,
       unityIdSnapshot: member.unityId,
       sourceSnapshot: member.source,
-      eventStartDateTime: event.start,
-      eventType: event.eventType ?? "GENERAL",
-      status: event.status,
-    };
-    const memberEvent: MemberEventItem = {
-      PK: tenantMemberPk(context.tenantId, memberId),
-      SK: memberEventSk(event.start, event.eventId),
-      createdAt: event.createdAt,
-      updatedAt: deps.now(),
-      entityType: "MEMBER_EVENT",
-      tenantId: context.tenantId,
-      eventId: event.eventId,
-      memberId,
       eventTitleSnapshot: event.summary,
       eventStartDateTime: event.start,
       eventEndDateTime: event.end,
@@ -1333,12 +1403,6 @@ const syncEventMembers = async (
     transactItems.push({
       Put: {
         Item: eventMember,
-        TableName: context.tableName,
-      },
-    });
-    transactItems.push({
-      Put: {
-        Item: memberEvent,
         TableName: context.tableName,
       },
     });
@@ -1364,6 +1428,53 @@ const syncEventMembers = async (
   }
 
   return fetchedMembers;
+};
+
+const loadMembersByIds = async (context: RequestContext, memberIds: string[], deps: HandlerDependencies) => {
+  const normalizedIds = normalizeMemberIds(memberIds);
+  const keys = normalizedIds.map((memberId) => ({
+    PK: tenantPk(context.tenantId),
+    SK: memberSk(memberId),
+  }));
+
+  if (!keys.length) {
+    return [];
+  }
+
+  const batch = await deps.documentClient.send(
+    new BatchGetCommand({
+      RequestItems: {
+        [context.tableName]: {
+          Keys: keys,
+        },
+      },
+    }),
+  );
+
+  const membersById = new Map(
+    ((batch.Responses?.[context.tableName] ?? []) as MemberItem[]).filter(Boolean).map((item) => [item.memberId, item]),
+  );
+  return normalizedIds.map((memberId) => membersById.get(memberId)).filter(Boolean) as MemberItem[];
+};
+
+const deleteEventMemberLinks = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
+  const existingMembers = await listEventMembers(context, event.eventId, deps);
+  for (const member of existingMembers) {
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantEventPk(context.tenantId, event.eventId),
+          SK: eventMemberSk(member.memberId),
+        },
+        TableName: context.tableName,
+      }),
+    );
+  }
+};
+
+const deleteStoredEvent = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
+  await deleteEvent(context, event.calendarId, event.eventId, deps);
+  await deleteEventMemberLinks(context, event, deps);
 };
 
 const deleteOAuthState = async (state: string, tableName: string, deps: HandlerDependencies) => {
@@ -1575,18 +1686,9 @@ const shouldRefreshCalendar = (calendar: CalendarItem, forceSync: boolean) => {
 const upsertGoogleEventIntoCache = async (
   context: RequestContext,
   calendar: CalendarItem,
-  googleEvent: {
-    id: string;
-    summary?: string;
-    description?: string;
-    location?: string;
-    attendees?: Array<{ email?: string }>;
-    status?: string;
-    htmlLink?: string;
-    start?: { date?: string; dateTime?: string };
-    end?: { date?: string; dateTime?: string };
-  },
+  googleEvent: GoogleEventPayload,
   source: SyncSource,
+  existingOverride: EventItem | undefined,
   deps: HandlerDependencies,
 ) => {
   const now = deps.now();
@@ -1608,7 +1710,9 @@ const upsertGoogleEventIntoCache = async (
     }),
   );
 
-  const existingItem = existing.Item as EventItem | undefined;
+  const existingItem = existingOverride ?? (existing.Item as EventItem | undefined);
+  const metadataMemberIds = parseGoogleMemberIds(googleEvent.extendedProperties?.private?.memberIds);
+  const memberIds = metadataMemberIds.length ? metadataMemberIds : normalizeMemberIds(existingItem?.memberIds);
   const item: EventItem = {
     PK: userPk(context.actorSub),
     SK: eventSk(calendar.calendarId, googleEvent.id),
@@ -1633,10 +1737,9 @@ const upsertGoogleEventIntoCache = async (
     source,
     htmlLink: googleEvent.htmlLink,
     eventType: existingItem?.eventType,
-    memberIds: existingItem?.memberIds,
-    memberNames: existingItem?.memberNames,
+    memberIds,
   };
-  await putEvent(
+  return await persistEventWithMemberAssignments(
     context,
     {
       ...item,
@@ -1663,8 +1766,9 @@ const applyFullSync = async (
   });
 
   const allExisting = await listAllEventsForCalendar(context, calendar.calendarId, deps);
+  const existingByEventId = new Map(allExisting.map((event) => [event.eventId, event]));
   for (const event of allExisting) {
-    await deleteEvent(context, calendar.calendarId, event.eventId, deps);
+    await deleteStoredEvent(context, event, deps);
   }
 
   let pageToken = "";
@@ -1685,17 +1789,7 @@ const applyFullSync = async (
     );
 
     const payload = (await response.json()) as {
-      items?: Array<{
-        id: string;
-        summary?: string;
-        description?: string;
-        location?: string;
-        attendees?: Array<{ email?: string }>;
-        status?: string;
-        htmlLink?: string;
-        start?: { date?: string; dateTime?: string };
-        end?: { date?: string; dateTime?: string };
-      }>;
+      items?: GoogleEventPayload[];
       nextPageToken?: string;
       nextSyncToken?: string;
     };
@@ -1705,7 +1799,7 @@ const applyFullSync = async (
         continue;
       }
 
-      await upsertGoogleEventIntoCache(context, calendar, event, "GOOGLE", deps);
+      await upsertGoogleEventIntoCache(context, calendar, event, "GOOGLE", existingByEventId.get(event.id), deps);
     }
 
     pageToken = payload.nextPageToken ?? "";
@@ -1748,26 +1842,19 @@ const applyIncrementalSync = async (
     );
 
     const payload = (await response.json()) as {
-      items?: Array<{
-        id: string;
-        summary?: string;
-        description?: string;
-        location?: string;
-        attendees?: Array<{ email?: string }>;
-        status?: string;
-        htmlLink?: string;
-        start?: { date?: string; dateTime?: string };
-        end?: { date?: string; dateTime?: string };
-      }>;
+      items?: GoogleEventPayload[];
       nextPageToken?: string;
       nextSyncToken?: string;
     };
 
     for (const event of payload.items ?? []) {
       if (event.status === "cancelled") {
-        await deleteEvent(context, calendar.calendarId, event.id, deps);
+        const existingEvent = await getEvent(context, calendar.calendarId, event.id, deps);
+        if (existingEvent) {
+          await deleteStoredEvent(context, existingEvent, deps);
+        }
       } else {
-        await upsertGoogleEventIntoCache(context, calendar, event, "GOOGLE", deps);
+        await upsertGoogleEventIntoCache(context, calendar, event, "GOOGLE", undefined, deps);
       }
     }
 
@@ -2183,15 +2270,6 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
         TableName: context.tableName,
       }),
     );
-    await deps.documentClient.send(
-      new DeleteCommand({
-        Key: {
-          PK: tenantMemberPk(context.tenantId, memberId),
-          SK: memberEventSk(link.eventStartDateTime, link.eventId),
-        },
-        TableName: context.tableName,
-      }),
-    );
   }
 
   await deps.documentClient.send(
@@ -2239,7 +2317,6 @@ const importMembers = async (context: RequestContext, input: MemberImportInput, 
           dateOfBirth: toIsoDate(row["Date of Birth"]),
           age: toOptionalNumber(row["Age"]),
           gender: toOptionalString(row["Gender"]),
-          profession: toOptionalString(row["Profession"]),
           familyStatus: toOptionalString(row["Family Status"]),
           church: toOptionalString(row["Church"]),
           fatherOfConfession: toOptionalString(row["Father of Confession"]),
@@ -2249,7 +2326,6 @@ const importMembers = async (context: RequestContext, input: MemberImportInput, 
           churchCity: toOptionalString(row["Church City"]),
           churchRegion: toOptionalString(row["Church Region"]),
           diocese: toOptionalString(row["Diocese"]),
-          accountStatus: toOptionalString(row["Account Status"]),
           address: toOptionalString(row["Address"]),
           postalCode: toOptionalString(row["Postal Code"]),
           activated: toOptionalBoolean(row["Activated"]),
@@ -2342,7 +2418,9 @@ const updateEventMembersResponse = async (
     memberEmailSnapshot: member.email,
     unityIdSnapshot: member.unityId,
     sourceSnapshot: member.source,
+    eventTitleSnapshot: persistedEvent.summary,
     eventStartDateTime: persistedEvent.start,
+    eventEndDateTime: persistedEvent.end,
     eventType: persistedEvent.eventType ?? "GENERAL",
     status: persistedEvent.status,
   })) });
@@ -2711,7 +2789,7 @@ const clearScheduleCache = async (context: RequestContext, deps: HandlerDependen
   for (const calendar of calendars) {
     const events = await listAllEventsForCalendar(context, calendar.calendarId, deps);
     for (const event of events) {
-      await deleteEvent(context, calendar.calendarId, event.eventId, deps);
+      await deleteStoredEvent(context, event, deps);
     }
 
     const resetCalendar: CalendarItem = {
@@ -2749,7 +2827,7 @@ const clearCalendarCache = async (
 
   const events = await listAllEventsForCalendar(context, calendar.calendarId, deps);
   for (const event of events) {
-    await deleteEvent(context, calendar.calendarId, event.eventId, deps);
+    await deleteStoredEvent(context, event, deps);
   }
 
   const resetCalendar: CalendarItem = {
@@ -2775,13 +2853,19 @@ const clearCalendarCache = async (
 };
 
 const buildGoogleEventBody = (
-  input: Pick<CreateScheduleEventInput, "summary" | "description" | "location" | "attendees" | "start" | "end" | "allDay">,
+  input: Pick<CreateScheduleEventInput, "summary" | "description" | "location" | "attendees" | "start" | "end" | "allDay" | "memberIds">,
 ) => {
+  const memberIds = normalizeMemberIds(input.memberIds);
   const base = {
     summary: input.summary.trim(),
     description: input.description?.trim(),
     location: input.location?.trim(),
     attendees: normalizeAttendees(input.attendees).map((email) => ({ email })),
+    extendedProperties: {
+      private: {
+        memberIds: memberIds.length ? serializeGoogleMemberIds(memberIds) : null,
+      },
+    },
   };
 
   if (input.allDay) {
@@ -2830,38 +2914,14 @@ const createScheduleEvent = async (
     },
   );
 
-  const created = (await response.json()) as {
-    id: string;
-    summary?: string;
-    description?: string;
-    location?: string;
-    attendees?: Array<{ email?: string }>;
-    status?: string;
-    htmlLink?: string;
-    start?: { date?: string; dateTime?: string };
-    end?: { date?: string; dateTime?: string };
-  };
+  const created = (await response.json()) as GoogleEventPayload;
 
-  await upsertGoogleEventIntoCache(context, calendar, created, "GOOGLE", deps);
-  const stored = await getEvent(context, calendar.calendarId, created.id, deps);
-  if (!stored) {
-    return json(500, { message: "Event cache write failed." });
-  }
-
-  const eventForAssignments: EventItem = {
+  const stored = await upsertGoogleEventIntoCache(context, calendar, created, "GOOGLE", undefined, deps);
+  const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
     eventType: input.eventType ?? "GENERAL",
-    updatedAt: deps.now(),
-  };
-  const assignedMembers = input.memberIds?.length
-    ? await syncEventMembers(context, eventForAssignments, input.memberIds, deps)
-    : [];
-  const updatedStored: EventItem = {
-    ...eventForAssignments,
-    memberIds: assignedMembers.map((member) => member.memberId),
-    memberNames: assignedMembers.map((member) => member.fullName),
-  };
-  await putEvent(context, updatedStored, deps);
+    memberIds: input.memberIds ?? [],
+  }, deps);
   return json(201, toScheduleEvent(updatedStored));
 };
 
@@ -2919,36 +2979,14 @@ const updateScheduleEvent = async (
     },
   );
 
-  const updated = (await response.json()) as {
-    id: string;
-    summary?: string;
-    description?: string;
-    location?: string;
-    attendees?: Array<{ email?: string }>;
-    status?: string;
-    htmlLink?: string;
-    start?: { date?: string; dateTime?: string };
-    end?: { date?: string; dateTime?: string };
-  };
+  const updated = (await response.json()) as GoogleEventPayload;
 
-  await upsertGoogleEventIntoCache(context, calendar, updated, "GOOGLE", deps);
-  const stored = await getEvent(context, input.calendarId, eventId, deps);
-  if (!stored) {
-    return json(404, { message: "Event not found after update." });
-  }
-
-  const eventForAssignments: EventItem = {
+  const stored = await upsertGoogleEventIntoCache(context, calendar, updated, "GOOGLE", undefined, deps);
+  const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
     eventType: nextEvent.eventType ?? "GENERAL",
-    updatedAt: deps.now(),
-  };
-  const assignedMembers = await syncEventMembers(context, eventForAssignments, nextEvent.memberIds ?? [], deps);
-  const updatedStored: EventItem = {
-    ...eventForAssignments,
-    memberIds: assignedMembers.map((member) => member.memberId),
-    memberNames: assignedMembers.map((member) => member.fullName),
-  };
-  await putEvent(context, updatedStored, deps);
+    memberIds: nextEvent.memberIds ?? [],
+  }, deps);
   return json(200, toScheduleEvent(updatedStored));
 };
 
@@ -2972,8 +3010,6 @@ const deleteScheduleEvent = async (
     return json(404, { message: "Event not found." });
   }
 
-  const existingMembers = await listEventMembers(context, eventId, deps);
-
   await googleFetch(
     context,
     connection,
@@ -2984,27 +3020,7 @@ const deleteScheduleEvent = async (
     },
   );
 
-  await deleteEvent(context, calendarId, eventId, deps);
-  for (const member of existingMembers) {
-    await deps.documentClient.send(
-      new DeleteCommand({
-        Key: {
-          PK: tenantEventPk(context.tenantId, eventId),
-          SK: eventMemberSk(member.memberId),
-        },
-        TableName: context.tableName,
-      }),
-    );
-    await deps.documentClient.send(
-      new DeleteCommand({
-        Key: {
-          PK: tenantMemberPk(context.tenantId, member.memberId),
-          SK: memberEventSk(member.eventStartDateTime, eventId),
-        },
-        TableName: context.tableName,
-      }),
-    );
-  }
+  await deleteStoredEvent(context, existing, deps);
   return json(200, { deleted: true, eventId, calendarId });
 };
 

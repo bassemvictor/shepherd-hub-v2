@@ -1,4 +1,4 @@
-import { Loader2, Search, Upload, UserPlus, X } from "lucide-react";
+import { Check, Loader2, Search, Upload, UserPlus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -16,16 +16,20 @@ import { Dialog } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 
-export const UnityBadge = ({ source, unityId }: { source: Member["source"]; unityId?: string }) => (
-  <span
-    className={cn(
-      "inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-[0.12em]",
-      source === "UNITY" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600",
-    )}
-  >
-    {source === "UNITY" ? `unity#${unityId ?? "member"}` : "MANUAL"}
-  </span>
-);
+export const UnityBadge = ({ source, unityId, className }: { source: Member["source"]; unityId?: string; className?: string }) =>
+  source === "UNITY" && unityId ? (
+    <span
+      aria-label="Imported from Unity"
+      className={cn(
+        "inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#1877F2] text-white shadow-sm ring-1 ring-[#1877F2]/15",
+        className,
+      )}
+      role="img"
+      title="Imported from Unity"
+    >
+      <Check className="h-3 w-3 stroke-[3]" />
+    </span>
+  ) : null;
 
 export const MemberAvatar = ({
   fullName,
@@ -40,9 +44,9 @@ export const MemberAvatar = ({
     aria-label={fullName}
     className={cn(
       "flex shrink-0 items-center justify-center rounded-full bg-[linear-gradient(160deg,#7aa7e8_0%,#376dbd_100%)] font-semibold text-white shadow-sm",
-      size === "sm" && "h-11 w-11 text-base",
-      size === "md" && "h-14 w-14 text-xl",
-      size === "lg" && "h-32 w-32 text-5xl",
+      size === "sm" && "h-8 w-8 text-xs",
+      size === "md" && "h-10 w-10 text-sm",
+      size === "lg" && "h-20 w-20 text-2xl",
     )}
   >
     {initials}
@@ -52,17 +56,32 @@ export const MemberAvatar = ({
 export const MemberChip = ({
   member,
   onRemove,
+  onClick,
 }: {
   member: Pick<EventMemberSummary, "memberId" | "fullName" | "initials">;
   onRemove?: (memberId: string) => void;
+  onClick?: (memberId: string) => void;
 }) => (
-  <div className="inline-flex items-center gap-2 rounded-full bg-sky-100 px-2 py-1 text-xs font-medium text-sky-800">
-    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[11px] font-semibold text-sky-800">
-      {member.initials}
-    </span>
-    <span>{member.fullName}</span>
+  <div className="inline-flex items-center gap-1 rounded-md border border-border bg-white px-1.5 py-1 text-xs text-foreground">
+    <button
+      className={cn(
+        "inline-flex min-w-0 items-center gap-2 rounded-sm px-1 py-0.5 text-left transition-colors",
+        onClick ? "hover:bg-accent focus-visible:bg-accent" : "",
+      )}
+      onClick={onClick ? () => onClick(member.memberId) : undefined}
+      type="button"
+    >
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent text-[10px] font-semibold text-accent-foreground">
+        {member.initials}
+      </span>
+      <span className="truncate font-medium">{member.fullName}</span>
+    </button>
     {onRemove ? (
-      <button className="rounded-full p-0.5 hover:bg-sky-200" onClick={() => onRemove(member.memberId)} type="button">
+      <button
+        className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+        onClick={() => onRemove(member.memberId)}
+        type="button"
+      >
         <X className="h-3.5 w-3.5" />
       </button>
     ) : null}
@@ -83,19 +102,19 @@ export const MemberDetailsTabs = ({
   ] as const;
 
   return (
-    <div className="flex justify-between border-b border-border px-2 text-lg">
+    <div className="flex justify-between border-b border-border text-sm">
       {items.map((item) => (
         <button
           key={item.id}
           className={cn(
-            "relative pb-3 pt-2 font-medium transition-colors",
-            activeTab === item.id ? "text-primary" : "text-amber-700/80",
+            "relative px-1 pb-2 pt-1.5 font-medium transition-colors",
+            activeTab === item.id ? "text-primary" : "text-muted-foreground hover:text-foreground",
           )}
           onClick={() => onChange(item.id)}
           type="button"
         >
           {item.label}
-          {activeTab === item.id ? <span className="absolute inset-x-0 bottom-0 h-1 rounded-full bg-primary" /> : null}
+          {activeTab === item.id ? <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" /> : null}
         </button>
       ))}
     </div>
@@ -117,10 +136,11 @@ export const MemberSearchAutocomplete = ({
   onSelect: (item: MemberIndexItem) => void;
   placeholder?: string;
 }) => {
+  const [activeIndex, setActiveIndex] = useState(0);
   const results = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) {
-      return items.filter((item) => !selectedIds.includes(item.memberId)).slice(0, 8);
+      return [];
     }
 
     return items
@@ -129,35 +149,60 @@ export const MemberSearchAutocomplete = ({
           !selectedIds.includes(item.memberId) &&
           item.normalizedSearchText.includes(normalized),
       )
-      .slice(0, 8);
+      .slice(0, 5);
   }, [items, query, selectedIds]);
 
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query]);
+
+  const showSuggestions = query.trim().length > 0 && results.length > 0;
+
   return (
-    <div className="space-y-2">
-      <label className="flex items-center gap-2 rounded-full border border-[#efe7d3] bg-white px-4 py-3">
-        <Search className="h-4 w-4 text-[#b39b62]" />
+    <div className="space-y-1.5">
+      <label className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-2">
+        <Search className="h-3.5 w-3.5 text-muted-foreground" />
         <input
           className="w-full bg-transparent text-sm outline-none"
           onChange={(event) => onQueryChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (!showSuggestions) {
+              return;
+            }
+
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              setActiveIndex((current) => (current + 1) % results.length);
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              setActiveIndex((current) => (current - 1 + results.length) % results.length);
+            } else if (event.key === "Enter") {
+              event.preventDefault();
+              onSelect(results[activeIndex] ?? results[0]);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onQueryChange("");
+            }
+          }}
           placeholder={placeholder}
           value={query}
         />
       </label>
-      {results.length ? (
-        <div className="rounded-3xl border border-border bg-white p-2 panel-shadow">
-          {results.map((item) => (
+      {showSuggestions ? (
+        <div className="rounded-md border border-border bg-white p-1 panel-shadow">
+          {results.map((item, index) => (
             <button
-              className="flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left hover:bg-slate-50"
+              className={cn(
+                "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors",
+                index === activeIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/70",
+              )}
               key={item.memberId}
               onClick={() => onSelect(item)}
               type="button"
             >
               <MemberAvatar fullName={item.fullName} initials={item.initials} size="sm" />
               <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-slate-900">{item.fullName}</div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {item.email || item.phone || (item.unityId ? `unity#${item.unityId}` : "Manual member")}
-                </div>
+                <div className="truncate text-sm font-medium">{item.fullName}</div>
               </div>
             </button>
           ))}
