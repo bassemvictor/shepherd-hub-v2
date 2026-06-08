@@ -1,9 +1,7 @@
 import { formatTitle } from "./utils";
 
 const routeTitleMap: Record<string, string> = {
-  "/": "Dashboard",
-  "/dashboard": "Dashboard",
-  "/records": "Sample Records",
+  "/": "Congregation",
   "/calendar": "Connect & Configure",
   "/calendar/schedule": "Schedule",
   "/members": "Congregation",
@@ -17,13 +15,13 @@ export const getPageTitle = (pathname: string) =>
     ? "Member Details"
     :
   routeTitleMap[pathname] ??
-  formatTitle(pathname.split("/").filter(Boolean).slice(-1)[0] ?? "Dashboard");
+  formatTitle(pathname.split("/").filter(Boolean).slice(-1)[0] ?? "Members");
 
 export const getBreadcrumbs = (pathname: string): Array<{ label: string; href?: string }> => {
   const segments = pathname.split("/").filter(Boolean);
 
   if (!segments.length) {
-    return [{ label: "Dashboard" }];
+    return [{ label: "Congregation" }];
   }
 
   return segments.map((segment, index) => ({

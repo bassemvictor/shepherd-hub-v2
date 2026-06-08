@@ -8,7 +8,7 @@ import { createHandler } from "../amplify/functions/project-template-api/handler
 const createEvent = (overrides: Record<string, unknown> = {}) => ({
   body: null,
   pathParameters: undefined,
-  rawPath: "/records",
+  rawPath: "/members",
   requestContext: {
     authorizer: {
       jwt: {
@@ -28,9 +28,10 @@ const createEvent = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-test("creates a record and scopes it to the tenant", async () => {
+test("creates a member and scopes it to the tenant", async () => {
   process.env.PROJECT_TEMPLATE_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const uuids = ["member-1", "activity-1"];
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
@@ -39,12 +40,12 @@ test("creates a record and scopes it to the tenant", async () => {
       },
     },
     now: () => "2026-06-03T12:00:00.000Z",
-    uuid: () => "record-1",
+    uuid: () => uuids.shift() ?? "fallback-id",
   });
 
   const response = await handler(
     createEvent({
-      body: JSON.stringify({ name: "Starter Record", owner: "Project Owner", status: "active" }),
+      body: JSON.stringify({ fullName: "Adel Abraham", phone: "(613) 606-4114", source: "MANUAL" }),
       requestContext: {
         authorizer: {
           jwt: {
@@ -70,19 +71,57 @@ test("creates a record and scopes it to the tenant", async () => {
   assert.equal(commands[0]?.input.TableName, "records-table");
   assert.deepEqual(commands[0]?.input.Item, {
     PK: "TENANT#tenant-abc",
-    SK: "RECORD#record-1",
+    SK: "MEMBER#member-1",
+    GSI1PK: "TENANT#tenant-abc#MEMBERS",
+    GSI1SK: "NAME#adel abraham#MEMBER#member-1",
+    GSI2PK: undefined,
+    GSI2SK: undefined,
     createdAt: "2026-06-03T12:00:00.000Z",
-    entityType: "record",
-    name: "Starter Record",
-    owner: "Project Owner",
-    recordId: "record-1",
-    status: "active",
-    tenantId: "tenant-abc",
     updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "MEMBER",
+    tenantId: "tenant-abc",
+    memberId: "member-1",
+    unityId: undefined,
+    source: "MANUAL",
+    isUnityMember: false,
+    familyId: undefined,
+    householdName: undefined,
+    fullName: "Adel Abraham",
+    firstName: "Adel",
+    lastName: "Abraham",
+    initials: "AA",
+    phone: "(613) 606-4114",
+    email: undefined,
+    whatsappPhone: "(613) 606-4114",
+    address: undefined,
+    postalCode: undefined,
+    dateOfBirth: undefined,
+    age: undefined,
+    gender: undefined,
+    familyStatus: undefined,
+    church: undefined,
+    fatherOfConfession: undefined,
+    deaconshipRank: undefined,
+    ordinationDate: undefined,
+    churchProvince: undefined,
+    churchCity: undefined,
+    churchRegion: undefined,
+    diocese: undefined,
+    activated: undefined,
+    approved: undefined,
+    locked: undefined,
+    visibility: undefined,
+    username: undefined,
+    registrationDate: undefined,
+    groups: undefined,
+    customFlag: undefined,
+    licensePlate: undefined,
+    notes: undefined,
+    normalizedSearchText: "adel abraham (613) 606-4114",
   });
 });
 
-test("returns a validation error when required fields are missing", async () => {
+test("returns a validation error when required member fields are missing", async () => {
   process.env.PROJECT_TEMPLATE_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
@@ -91,12 +130,12 @@ test("returns a validation error when required fields are missing", async () => 
       },
     },
     now: () => "2026-06-03T12:00:00.000Z",
-    uuid: () => "record-1",
+    uuid: () => "member-1",
   });
 
   const response = await handler(
     createEvent({
-      body: JSON.stringify({ name: "", owner: "", status: "active" }),
+      body: JSON.stringify({ fullName: "", source: "MANUAL" }),
       requestContext: {
         authorizer: {
           jwt: {
@@ -116,7 +155,7 @@ test("returns a validation error when required fields are missing", async () => 
   ) as APIGatewayProxyStructuredResultV2;
 
   assert.equal(response.statusCode, 400);
-  assert.match(String(response.body), /Name is required/);
+  assert.match(String(response.body), /Member full name is required/);
 });
 
 test("creates a member with tenant and member indexes", async () => {
@@ -862,4 +901,147 @@ test("full sync restores member links from Google event private metadata", async
   assert.ok(memberLinkWrite);
   assert.match(JSON.stringify(memberLinkWrite?.input), /"GSI2PK":"TENANT#tenant-abc#MEMBER#member-1"/);
   assert.match(JSON.stringify(memberLinkWrite?.input), /"eventType":"VISITATION"/);
+});
+
+test("refreshed calendars return events only for the requested schedule range", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-07T12:00:00.000Z",
+                updatedAt: "2026-06-07T12:00:00.000Z",
+                entityType: "google_connection",
+                userId: "user-123",
+                googleAccountId: "google-account",
+                email: "owner@example.com",
+                accessToken: "token-123",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-07T12:00:00.000Z",
+                lastConnectedAt: "2026-06-07T12:00:00.000Z",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":calendarPrefix"] === "CALENDAR#") {
+            return {
+              Items: [
+                {
+                  PK: "USER#user-123",
+                  SK: "CALENDAR#calendar-1",
+                  createdAt: "2026-06-07T12:00:00.000Z",
+                  updatedAt: "2026-06-07T12:00:00.000Z",
+                  entityType: "schedule_calendar",
+                  userId: "user-123",
+                  calendarId: "calendar-1",
+                  summary: "Main Calendar",
+                  primary: true,
+                  enabled: true,
+                  selected: true,
+                  backgroundColor: "#2563eb",
+                  sync: {
+                    syncMode: "ALWAYS_GOOGLE",
+                    refreshIntervalMinutes: 15,
+                    initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                    lastSyncedAt: "2026-06-06T10:00:00.000Z",
+                    lastSyncStatus: "success",
+                    requiresFullSync: false,
+                    syncToken: "sync-token-0",
+                  },
+                },
+              ],
+            };
+          }
+
+          if (command.input.IndexName === "GSI1") {
+            if (values?.[":from"] === "EVENT#2025-11-17T00:00:00.000Z") {
+              return {
+                Items: [
+                  {
+                    PK: "USER#user-123",
+                    SK: "EVENT#calendar-1#event-1",
+                    GSI1PK: "USER#user-123#CALENDAR#calendar-1",
+                    GSI1SK: "EVENT#2026-06-04T15:00:00.000Z#event-1",
+                    createdAt: "2026-06-04T15:00:00.000Z",
+                    updatedAt: "2026-06-07T12:00:00.000Z",
+                    entityType: "schedule_event",
+                    userId: "user-123",
+                    calendarId: "calendar-1",
+                    eventId: "event-1",
+                    calendarName: "Main Calendar",
+                    calendarColor: "#2563eb",
+                    summary: "Earlier This Week",
+                    start: "2026-06-04T15:00:00.000Z",
+                    end: "2026-06-04T16:00:00.000Z",
+                    allDay: false,
+                    status: "confirmed",
+                    source: "GOOGLE",
+                  },
+                ],
+              };
+            }
+
+            return { Items: [] };
+          }
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () =>
+      ({
+        ok: true,
+        json: async () => ({
+          items: [],
+          nextSyncToken: "sync-token-1",
+        }),
+      }) as Response,
+    now: () => "2026-06-07T12:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+      queryStringParameters: {
+        timeMin: "2026-06-07T00:00:00.000Z",
+        timeMax: "2026-06-08T00:00:00.000Z",
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const body = JSON.parse(response.body ?? "{}") as { events?: Array<{ eventId: string }> };
+  assert.deepEqual(body.events ?? [], []);
 });

@@ -1,4 +1,4 @@
-import { CalendarDays, FolderKanban, Home, Users } from "lucide-react";
+import { CalendarDays, Users } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 import type { AppAuthUser } from "../../lib/auth";
@@ -9,18 +9,11 @@ export type NavigationSection = {
   items: Array<{
     label: string;
     href: string;
-    icon?: typeof Home;
+    icon?: typeof Users;
   }>;
 };
 
 const baseNavigation: NavigationSection[] = [
-  {
-    label: "Workspace",
-    items: [
-      { label: "Dashboard", href: "/dashboard", icon: Home },
-      { label: "Sample Records", href: "/records", icon: FolderKanban },
-    ],
-  },
   {
     label: "Calendar",
     items: [

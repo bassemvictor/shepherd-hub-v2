@@ -23,7 +23,7 @@ export const AuthPage = () => {
     const nextPath = state?.from?.pathname;
 
     if (!nextPath || nextPath === "/") {
-      return "/dashboard";
+      return "/members";
     }
 
     return nextPath;
@@ -79,10 +79,10 @@ export const AuthPage = () => {
         <div className="rounded-lg border border-blue-100/80 bg-gradient-to-br from-slate-950 via-blue-950 to-blue-700 p-5 text-white panel-shadow sm:p-6">
           <p className="text-[11px] uppercase tracking-[0.18em] text-blue-200/80">Project Template</p>
           <h1 className="mt-3 max-w-xl text-2xl font-semibold leading-tight sm:text-3xl">
-            Secure starter app with Amplify auth, protected routes, and serverless CRUD.
+            Secure congregation app with Amplify auth, protected routes, and serverless APIs.
           </h1>
           <p className="mt-3 max-w-2xl text-sm text-blue-100/80">
-            Sign in with your Cognito account to verify authentication, navigation, and API-backed sample pages.
+            Sign in with your Cognito account to access members, calendar settings, and schedule tools.
           </p>
         </div>
 
@@ -93,7 +93,7 @@ export const AuthPage = () => {
               <CardDescription>
                 {requiresNewPassword
                   ? "Complete your first sign-in by choosing a permanent password."
-                  : "Use your Cognito email and password to access the starter workspace."}
+                  : "Use your Cognito email and password to access the app."}
               </CardDescription>
             </div>
           </CardHeader>

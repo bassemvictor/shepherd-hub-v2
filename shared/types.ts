@@ -12,33 +12,6 @@ export type AppCognitoGroup =
   | "admin"
   | "super_user";
 
-export type RecordStatus = "draft" | "active" | "archived";
-
-export type SampleRecord = EntityEnvelope & {
-  recordId: string;
-  name: string;
-  status: RecordStatus;
-  owner: string;
-};
-
-export type SampleRecordInput = {
-  name: string;
-  status: RecordStatus;
-  owner: string;
-};
-
-export type SampleRecordListResponse = {
-  items: SampleRecord[];
-};
-
-export type DashboardSummary = {
-  tenantId: string;
-  totalRecords: number;
-  activeRecords: number;
-  draftRecords: number;
-  archivedRecords: number;
-};
-
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";
 export type SyncStatus = "idle" | "success" | "error" | "pending";
@@ -193,6 +166,7 @@ export type MemberIndexItem = {
   initials: string;
   phone?: string;
   email?: string;
+  address?: string;
   unityId?: string;
   source: MemberSource;
   normalizedSearchText: string;
@@ -256,6 +230,7 @@ export type MemberEvent = EntityEnvelope & {
   eventTitleSnapshot: string;
   eventStartDateTime: string;
   eventEndDateTime: string;
+  allDay?: boolean;
   eventType: MemberEventType;
   status: string;
 };

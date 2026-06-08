@@ -17,7 +17,7 @@ export const RequireGroups = ({ children, groups }: RequireGroupsProps) => {
   }
 
   if (!user || !hasAnyGroup(user.groups, groups)) {
-    return <Navigate replace to="/dashboard" state={{ from: location }} />;
+    return <Navigate replace to="/members" state={{ from: location }} />;
   }
 
   return children;

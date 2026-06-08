@@ -9,12 +9,12 @@ export const NotFoundPage = () => (
       <CardHeader>
         <div>
           <CardTitle>Route Not Found</CardTitle>
-          <CardDescription>This starter template only includes a dashboard and sample records page by default.</CardDescription>
+          <CardDescription>The page you requested does not exist.</CardDescription>
         </div>
       </CardHeader>
       <CardContent>
-        <NavLink to="/dashboard">
-          <Button>Return to Dashboard</Button>
+        <NavLink to="/members">
+          <Button>Return to Members</Button>
         </NavLink>
       </CardContent>
     </Card>

@@ -80,6 +80,7 @@ type EventFormState = {
 const fullCalendarPlugins = [dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin];
 
 const FALLBACK_EVENT_COLOR = "#2563eb";
+const VISITATION_TITLE_PREFIX = "Visitation: ";
 
 const normalizeHexColor = (value?: string | null) => {
   const color = value?.trim();
@@ -175,6 +176,47 @@ const parseAttendees = (value: string) =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
+const isVisitationSummary = (value: string) => {
+  const normalized = value.trim();
+  return normalized === "Visitation" || normalized.startsWith(VISITATION_TITLE_PREFIX.trim());
+};
+
+const buildVisitationSummary = (memberIds: string[], memberIndex: MemberIndexItem[]) => {
+  const memberNames = emptyMemberSelection(memberIndex, memberIds)
+    .map((member) => member.fullName)
+    .filter(Boolean);
+
+  return `${VISITATION_TITLE_PREFIX}${memberNames.join(", ")}`;
+};
+
+const applyMemberSelectionToForm = (
+  currentForm: EventFormState,
+  nextMemberIds: string[],
+  memberIndex: MemberIndexItem[],
+): EventFormState => {
+  const previousFirstMember = emptyMemberSelection(memberIndex, currentForm.memberIds)[0];
+  const nextSelectedMembers = emptyMemberSelection(memberIndex, nextMemberIds);
+  const nextFirstMember = nextSelectedMembers[0];
+
+  return {
+    ...currentForm,
+    summary:
+      currentForm.eventType === "VISITATION" || isVisitationSummary(currentForm.summary)
+        ? buildVisitationSummary(nextMemberIds, memberIndex)
+        : currentForm.summary,
+    location:
+      previousFirstMember?.memberId !== nextFirstMember?.memberId
+        ? nextFirstMember?.address ?? ""
+        : currentForm.location,
+    attendeesText:
+      previousFirstMember?.memberId !== nextFirstMember?.memberId
+        ? nextFirstMember?.email ?? ""
+        : currentForm.attendeesText,
+    memberIds: nextMemberIds,
+    memberQuery: "",
+  };
+};
+
 const emptyEventForm = (calendarId = ""): EventFormState => {
   const start = new Date();
   start.setMinutes(0, 0, 0);
@@ -183,14 +225,14 @@ const emptyEventForm = (calendarId = ""): EventFormState => {
 
   return {
     calendarId,
-    summary: "",
+    summary: VISITATION_TITLE_PREFIX,
     description: "",
     location: "",
     attendeesText: "",
     start: toLocalDateTimeInput(start.toISOString()),
     end: toLocalDateTimeInput(end.toISOString()),
     allDay: false,
-    eventType: "GENERAL",
+    eventType: "VISITATION",
     memberIds: [],
     memberQuery: "",
   };
@@ -217,14 +259,14 @@ const createFormFromSelection = (
   calendarId: string,
 ): EventFormState => ({
   calendarId,
-  summary: "",
+  summary: VISITATION_TITLE_PREFIX,
   description: "",
   location: "",
   attendeesText: "",
   start: allDay ? toDateOnlyValue(startValue) : toLocalDateTimeInput(startValue.toISOString()),
   end: allDay ? shiftDateOnlyValue(toDateOnlyValue(endValue), -1) : toLocalDateTimeInput(endValue.toISOString()),
   allDay,
-  eventType: "GENERAL",
+  eventType: "VISITATION",
   memberIds: [],
   memberQuery: "",
 });
@@ -346,11 +388,13 @@ const EventEditor = ({
           items={memberIndex}
           onQueryChange={(value) => onChange({ ...form, memberQuery: value })}
           onSelect={(member) =>
-            onChange({
-              ...form,
-              memberIds: [...new Set([...form.memberIds, member.memberId])],
-              memberQuery: "",
-            })
+            onChange(
+              applyMemberSelectionToForm(
+                form,
+                [...new Set([...form.memberIds, member.memberId])],
+                memberIndex,
+              ),
+            )
           }
           placeholder="Search members for this event"
           query={form.memberQuery}
@@ -367,10 +411,13 @@ const EventEditor = ({
                   navigate(`/members/${memberId}`);
                 }}
                 onRemove={(memberId) =>
-                  onChange({
-                    ...form,
-                    memberIds: form.memberIds.filter((currentId) => currentId !== memberId),
-                  })
+                  onChange(
+                    applyMemberSelectionToForm(
+                      form,
+                      form.memberIds.filter((currentId) => currentId !== memberId),
+                      memberIndex,
+                    ),
+                  )
                 }
               />
             ))}
@@ -524,6 +571,8 @@ export const SchedulePage = () => {
   const calendarRef = useRef<FullCalendar | null>(null);
   const requestSequenceRef = useRef(0);
   const mobileScrollFrameRef = useRef<number | null>(null);
+  const deepLinkedDateRef = useRef<string | null>(null);
+  const deepLinkedEventRef = useRef<string | null>(null);
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
   const [overview, setOverview] = useState<ScheduleOverviewResponse | null>(null);
@@ -746,6 +795,22 @@ export const SchedulePage = () => {
     setEditorOpen(true);
   }, []);
 
+  const clearIntentSearchParams = useCallback((keys: string[]) => {
+    const nextParams = new URLSearchParams(searchParams);
+    let changed = false;
+
+    keys.forEach((key) => {
+      if (nextParams.has(key)) {
+        nextParams.delete(key);
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   const handleDateClick = useCallback((info: DateClickArg) => {
     const end = new Date(info.date);
     if (info.allDay) {
@@ -886,18 +951,51 @@ export const SchedulePage = () => {
 
   useEffect(() => {
     const memberId = searchParams.get("memberId");
-    const eventType = searchParams.get("eventType");
-    if (!memberId || !defaultCalendarId || editorOpen) {
+    if (!memberId || searchParams.get("eventId") || !defaultCalendarId || editorOpen || !memberIndex.length) {
       return;
     }
 
-    openCreateEditor({
-      ...emptyEventForm(defaultCalendarId),
-      eventType: eventType === "VISITATION" ? "VISITATION" : "GENERAL",
-      memberIds: [memberId],
-      summary: eventType === "VISITATION" ? "Visitation" : "",
-    });
-  }, [defaultCalendarId, editorOpen, openCreateEditor, searchParams]);
+    openCreateEditor(
+      applyMemberSelectionToForm(
+        emptyEventForm(defaultCalendarId),
+        [memberId],
+        memberIndex,
+      ),
+    );
+    clearIntentSearchParams(["memberId", "eventType"]);
+  }, [clearIntentSearchParams, defaultCalendarId, editorOpen, memberIndex, openCreateEditor, searchParams]);
+
+  useEffect(() => {
+    const eventDate = searchParams.get("date");
+    const eventId = searchParams.get("eventId");
+    const calendarApi = calendarRef.current?.getApi();
+
+    if (!eventDate || !eventId || !calendarApi || deepLinkedDateRef.current === `${eventId}:${eventDate}`) {
+      return;
+    }
+
+    calendarApi.gotoDate(eventDate);
+    if (isMobile) {
+      calendarApi.changeView("timeGridDay", eventDate);
+    }
+    deepLinkedDateRef.current = `${eventId}:${eventDate}`;
+  }, [isMobile, searchParams]);
+
+  useEffect(() => {
+    const eventId = searchParams.get("eventId");
+    if (!eventId || editorOpen || deepLinkedEventRef.current === eventId) {
+      return;
+    }
+
+    const matchingEvent = rawEvents.find((event) => event.eventId === eventId);
+    if (!matchingEvent) {
+      return;
+    }
+
+    openEditEditor(matchingEvent);
+    deepLinkedEventRef.current = eventId;
+    clearIntentSearchParams(["eventId", "date"]);
+  }, [clearIntentSearchParams, editorOpen, openEditEditor, rawEvents, searchParams]);
 
   const handleDeleteEvent = useCallback(async () => {
     if (!editingEvent) {

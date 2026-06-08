@@ -101,9 +101,6 @@ const addProtectedRoutes = (path: string, methods: HttpMethod[]) =>
     authorizer,
   });
 
-addProtectedRoutes("/dashboard/summary", [HttpMethod.GET]);
-addProtectedRoutes("/records", [HttpMethod.GET, HttpMethod.POST]);
-addProtectedRoutes("/records/{recordId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
 addProtectedRoutes("/members", [HttpMethod.GET, HttpMethod.POST]);
 addProtectedRoutes("/members/index", [HttpMethod.GET]);
 addProtectedRoutes("/members/import", [HttpMethod.POST]);

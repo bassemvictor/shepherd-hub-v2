@@ -115,30 +115,51 @@ export const MembersPage = () => {
         className="overflow-hidden rounded-lg border border-border bg-white p-3"
         title="Congregation"
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex min-w-[280px] flex-1 items-center gap-3 rounded-md border border-border bg-background px-3 py-1.5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <label className="flex min-w-0 flex-1 items-center gap-3 rounded-md border border-border bg-background px-3 py-1.5 sm:min-w-[280px]">
             <input
-              className="w-full bg-transparent text-sm outline-none"
+              aria-label="Search members"
+              className="w-full min-w-0 bg-transparent text-sm outline-none"
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search members"
               value={query}
             />
-            <span className="whitespace-nowrap text-xs text-muted-foreground">
+            <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
               {filteredMembers.length} members
             </span>
           </label>
-          <div className="flex items-center gap-2">
-            <Button onClick={() => setSortMode((current) => (current === "az" ? "recent" : "az"))} size="sm" type="button" variant="outline">
+          <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center">
+            <Button
+              aria-label={sortMode === "az" ? "Sort A to Z" : "Sort by recent"}
+              className="w-full sm:w-auto"
+              onClick={() => setSortMode((current) => (current === "az" ? "recent" : "az"))}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
               <ArrowUpDown className="h-4 w-4" />
-              {sortMode === "az" ? "A-Z" : "Recent"}
+              <span className="sr-only sm:not-sr-only">{sortMode === "az" ? "A-Z" : "Recent"}</span>
             </Button>
-            <Button onClick={() => setImportOpen(true)} size="sm" type="button" variant="outline">
+            <Button
+              aria-label="Import Excel"
+              className="w-full sm:w-auto"
+              onClick={() => setImportOpen(true)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
               <Download className="h-4 w-4" />
-              Import Excel
+              <span className="sr-only sm:not-sr-only">Import Excel</span>
             </Button>
-            <Button onClick={() => setCreateOpen(true)} size="sm" type="button">
+            <Button
+              aria-label="Add Member"
+              className="w-full sm:w-auto"
+              onClick={() => setCreateOpen(true)}
+              size="sm"
+              type="button"
+            >
               <Plus className="h-4 w-4" />
-              Add Member
+              <span className="sr-only sm:not-sr-only">Add Member</span>
             </Button>
           </div>
         </div>

@@ -20,7 +20,6 @@ import type {
   CreateMemberInput,
   ConnectGoogleResponse,
   CreateScheduleEventInput,
-  DashboardSummary,
   EventMemberSummary,
   EventMembersResponse,
   GoogleConnectionStatus,
@@ -37,10 +36,7 @@ import type {
   MemberIndexItem,
   MemberIndexResponse,
   MemberSource,
-  RecordStatus,
   SaveScheduleSettingsInput,
-  SampleRecord,
-  SampleRecordInput,
   ScheduleCalendar,
   ScheduleEvent,
   ScheduleEventsResponse,
@@ -64,14 +60,6 @@ type BaseItem = {
   GSI1SK?: string;
   GSI2PK?: string;
   GSI2SK?: string;
-};
-
-type StoredEntity = BaseItem & {
-  tenantId: string;
-  recordId: string;
-  name: string;
-  status: RecordStatus;
-  owner: string;
 };
 
 type GoogleConnectionItem = BaseItem & {
@@ -141,6 +129,7 @@ type EventMemberItem = BaseItem & {
   eventTitleSnapshot: string;
   eventStartDateTime: string;
   eventEndDateTime: string;
+  allDay?: boolean;
   eventType: MemberEventType;
   status: string;
 };
@@ -323,7 +312,6 @@ const getContext = (event: APIGatewayProxyEventV2WithJWTAuthorizer): RequestCont
 };
 
 const tenantPk = (tenantId: string) => `TENANT#${tenantId}`;
-const recordSk = (recordId: string) => `RECORD#${recordId}`;
 const userPk = (userId: string) => `USER#${userId}`;
 const googleConnectionSk = () => "GOOGLE_CONNECTION";
 const calendarSk = (calendarId: string) => `CALENDAR#${calendarId}`;
@@ -512,17 +500,6 @@ const isGoogleConfigured = () =>
       process.env.GOOGLE_REDIRECT_URI?.trim(),
   );
 
-const toRecord = (item: StoredEntity): SampleRecord => ({
-  createdAt: item.createdAt,
-  entityType: item.entityType,
-  name: item.name,
-  owner: item.owner,
-  recordId: item.recordId,
-  status: item.status,
-  tenantId: item.tenantId,
-  updatedAt: item.updatedAt,
-});
-
 const toConnectionSummary = (item: GoogleConnectionItem): GoogleConnectionSummary => ({
   googleAccountId: item.googleAccountId,
   email: item.email,
@@ -632,6 +609,7 @@ const toMemberIndexItem = (item: MemberItem): MemberIndexItem => ({
   initials: item.initials,
   phone: item.phone,
   email: item.email,
+  address: item.address,
   unityId: item.unityId,
   source: item.source,
   normalizedSearchText: item.normalizedSearchText,
@@ -648,6 +626,7 @@ const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({
 });
 
 const toMemberEvent = (item: EventMemberItem): MemberEvent => ({
+  allDay: item.allDay,
   createdAt: item.createdAt,
   entityType: item.entityType,
   eventEndDateTime: item.eventEndDateTime,
@@ -685,27 +664,6 @@ const toSyncSnapshot = (calendar: CalendarItem, result: SyncResult): CalendarSyn
   lastSyncSource: calendar.sync.lastSyncSource,
   lastSyncStatus: calendar.sync.lastSyncStatus,
 });
-
-const validateRecordInput = (input: Partial<SampleRecordInput>) => {
-  const name = String(input.name ?? "").trim();
-  const owner = String(input.owner ?? "").trim();
-  const status = String(input.status ?? "").trim() as RecordStatus;
-  const allowedStatuses: RecordStatus[] = ["draft", "active", "archived"];
-
-  if (!name) {
-    return "Name is required.";
-  }
-
-  if (!owner) {
-    return "Owner is required.";
-  }
-
-  if (!allowedStatuses.includes(status)) {
-    return "Status must be draft, active, or archived.";
-  }
-
-  return null;
-};
 
 const validateCalendarSettings = (input: Partial<UpdateCalendarSettingsInput>) => {
   if (typeof input.showInCalendar !== "boolean") {
@@ -1396,6 +1354,7 @@ const syncEventMembers = async (
       eventTitleSnapshot: event.summary,
       eventStartDateTime: event.start,
       eventEndDateTime: event.end,
+      allDay: event.allDay,
       eventType: event.eventType ?? "GENERAL",
       status: event.status,
     };
@@ -1876,6 +1835,8 @@ const refreshCalendarEvents = async (
   context: RequestContext,
   calendar: CalendarItem,
   connection: GoogleConnectionItem,
+  requestedTimeMin: string,
+  requestedTimeMax: string,
   deps: HandlerDependencies,
 ) => {
   try {
@@ -1904,9 +1865,16 @@ const refreshCalendarEvents = async (
     };
 
     await putCalendar(context, updatedCalendar, deps);
+    const requestedEvents = await listEventsForCalendar(
+      context,
+      calendar.calendarId,
+      requestedTimeMin,
+      requestedTimeMax,
+      deps,
+    );
     return {
       calendar: updatedCalendar,
-      events: result.cachedEvents,
+      events: requestedEvents,
       refreshed: true,
       source: "GOOGLE" as SyncSource,
     };
@@ -1924,7 +1892,14 @@ const refreshCalendarEvents = async (
         },
       };
       await putCalendar(context, resetCalendar, deps);
-      return refreshCalendarEvents(context, resetCalendar, connection, deps);
+      return refreshCalendarEvents(
+        context,
+        resetCalendar,
+        connection,
+        requestedTimeMin,
+        requestedTimeMax,
+        deps,
+      );
     }
 
     const failedCalendar: CalendarItem = {
@@ -2009,14 +1984,16 @@ const syncSelectedCalendars = async (
         throw new Error("Connect Google Calendar before running a sync.");
       }
 
-      const refreshed = await refreshCalendarEvents(context, calendar, connection, deps);
-      const filtered = refreshed.events.filter(
-        (event) => event.start <= options.timeMax && event.end >= options.timeMin,
+      results.push(
+        await refreshCalendarEvents(
+          context,
+          calendar,
+          connection,
+          options.timeMin,
+          options.timeMax,
+          deps,
+        ),
       );
-      results.push({
-        ...refreshed,
-        events: filtered,
-      });
     } else {
       results.push(await getCachedCalendarEvents(context, calendar, options.timeMin, options.timeMax, deps));
     }
@@ -2032,143 +2009,6 @@ const syncSelectedCalendars = async (
     calendars: results.map((result) => toSyncSnapshot(result.calendar, result)),
     generatedAt: deps.now(),
   };
-};
-
-const listRecords = async (context: RequestContext, deps: HandlerDependencies) => {
-  const response = await deps.documentClient.send(
-    new QueryCommand({
-      ExpressionAttributeNames: {
-        "#pk": "PK",
-        "#sk": "SK",
-      },
-      ExpressionAttributeValues: {
-        ":pk": tenantPk(context.tenantId),
-        ":recordPrefix": "RECORD#",
-      },
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :recordPrefix)",
-      TableName: context.tableName,
-    }),
-  );
-
-  const items = (response.Items ?? []) as StoredEntity[];
-  const sortedItems = items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  return json(200, { items: sortedItems.map(toRecord) });
-};
-
-const getRecord = async (context: RequestContext, recordId: string, deps: HandlerDependencies) => {
-  const response = await deps.documentClient.send(
-    new GetCommand({
-      Key: {
-        PK: tenantPk(context.tenantId),
-        SK: recordSk(recordId),
-      },
-      TableName: context.tableName,
-    }),
-  );
-
-  const item = response.Item as StoredEntity | undefined;
-
-  if (!item) {
-    return json(404, { message: "Record not found." });
-  }
-
-  return json(200, toRecord(item));
-};
-
-const createRecord = async (
-  context: RequestContext,
-  input: SampleRecordInput,
-  deps: HandlerDependencies,
-) => {
-  const validationError = validateRecordInput(input);
-
-  if (validationError) {
-    return json(400, { message: validationError });
-  }
-
-  const timestamp = deps.now();
-  const recordId = deps.uuid();
-  const item: StoredEntity = {
-    PK: tenantPk(context.tenantId),
-    SK: recordSk(recordId),
-    createdAt: timestamp,
-    entityType: "record",
-    name: input.name.trim(),
-    owner: input.owner.trim(),
-    recordId,
-    status: input.status,
-    tenantId: context.tenantId,
-    updatedAt: timestamp,
-  };
-
-  await deps.documentClient.send(
-    new PutCommand({
-      Item: item,
-      TableName: context.tableName,
-    }),
-  );
-
-  return json(201, toRecord(item));
-};
-
-const updateRecord = async (
-  context: RequestContext,
-  recordId: string,
-  input: SampleRecordInput,
-  deps: HandlerDependencies,
-) => {
-  const existingResponse = await deps.documentClient.send(
-    new GetCommand({
-      Key: {
-        PK: tenantPk(context.tenantId),
-        SK: recordSk(recordId),
-      },
-      TableName: context.tableName,
-    }),
-  );
-
-  const existing = existingResponse.Item as StoredEntity | undefined;
-
-  if (!existing) {
-    return json(404, { message: "Record not found." });
-  }
-
-  const validationError = validateRecordInput(input);
-
-  if (validationError) {
-    return json(400, { message: validationError });
-  }
-
-  const updated: StoredEntity = {
-    ...existing,
-    name: input.name.trim(),
-    owner: input.owner.trim(),
-    status: input.status,
-    updatedAt: deps.now(),
-  };
-
-  await deps.documentClient.send(
-    new PutCommand({
-      Item: updated,
-      TableName: context.tableName,
-    }),
-  );
-
-  return json(200, toRecord(updated));
-};
-
-const deleteRecord = async (context: RequestContext, recordId: string, deps: HandlerDependencies) => {
-  await deps.documentClient.send(
-    new DeleteCommand({
-      Key: {
-        PK: tenantPk(context.tenantId),
-        SK: recordSk(recordId),
-      },
-      TableName: context.tableName,
-    }),
-  );
-
-  return json(200, { deleted: true, recordId });
 };
 
 const getMembers = async (context: RequestContext, deps: HandlerDependencies) => {
@@ -2421,37 +2261,10 @@ const updateEventMembersResponse = async (
     eventTitleSnapshot: persistedEvent.summary,
     eventStartDateTime: persistedEvent.start,
     eventEndDateTime: persistedEvent.end,
+    allDay: persistedEvent.allDay,
     eventType: persistedEvent.eventType ?? "GENERAL",
     status: persistedEvent.status,
   })) });
-};
-
-const getDashboardSummary = async (context: RequestContext, deps: HandlerDependencies) => {
-  const response = await deps.documentClient.send(
-    new QueryCommand({
-      ExpressionAttributeNames: {
-        "#pk": "PK",
-        "#sk": "SK",
-      },
-      ExpressionAttributeValues: {
-        ":pk": tenantPk(context.tenantId),
-        ":recordPrefix": "RECORD#",
-      },
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :recordPrefix)",
-      TableName: context.tableName,
-    }),
-  );
-
-  const items = (response.Items ?? []) as StoredEntity[];
-  const summary: DashboardSummary = {
-    activeRecords: items.filter((item) => item.status === "active").length,
-    archivedRecords: items.filter((item) => item.status === "archived").length,
-    draftRecords: items.filter((item) => item.status === "draft").length,
-    tenantId: context.tenantId,
-    totalRecords: items.length,
-  };
-
-  return json(200, summary);
 };
 
 const getScheduleOverview = async (context: RequestContext, deps: HandlerDependencies) => {
@@ -3041,21 +2854,8 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       const context = getContext(typedEvent);
-      const recordId = typedEvent.pathParameters?.recordId;
       const calendarId = typedEvent.pathParameters?.calendarId;
       const eventId = typedEvent.pathParameters?.eventId;
-
-      if (method === "GET" && path === "/dashboard/summary") {
-        return await getDashboardSummary(context, deps);
-      }
-
-      if (method === "GET" && path === "/records") {
-        return await listRecords(context, deps);
-      }
-
-      if (method === "POST" && path === "/records") {
-        return await createRecord(context, parseBody<SampleRecordInput>(typedEvent.body), deps);
-      }
 
       if (method === "GET" && path === "/members") {
         return await getMembers(context, deps);
@@ -3071,20 +2871,6 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       if (method === "POST" && path === "/members/import") {
         return await importMembers(context, parseBody<MemberImportInput>(typedEvent.body), deps);
-      }
-
-      if (path === `/records/${recordId}` && recordId) {
-        if (method === "GET") {
-          return await getRecord(context, recordId, deps);
-        }
-
-        if (method === "PUT") {
-          return await updateRecord(context, recordId, parseBody<SampleRecordInput>(typedEvent.body), deps);
-        }
-
-        if (method === "DELETE") {
-          return await deleteRecord(context, recordId, deps);
-        }
       }
 
       const memberId = typedEvent.pathParameters?.memberId;

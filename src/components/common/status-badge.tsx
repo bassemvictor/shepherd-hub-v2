@@ -1,13 +1,14 @@
-import type { RecordStatus } from "../../../shared/types";
 import { Badge } from "../ui/badge";
 
-const variantByStatus: Record<RecordStatus, "default" | "success" | "warning" | "neutral"> = {
+type StatusBadgeState = "active" | "archived" | "draft";
+
+const variantByStatus: Record<StatusBadgeState, "default" | "success" | "warning" | "neutral"> = {
   active: "success",
   archived: "neutral",
   draft: "warning",
 };
 
-export const StatusBadge = ({ status }: { status: RecordStatus }) => (
+export const StatusBadge = ({ status }: { status: StatusBadgeState }) => (
   <Badge className="capitalize" variant={variantByStatus[status]}>
     {status}
   </Badge>

@@ -16,7 +16,7 @@ export const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
       <div className="flex min-h-screen items-center justify-center px-6">
         <div className="w-full max-w-md">
           <LoadingState
-            description="Preparing your starter workspace."
+            description="Preparing your app."
             title="Checking your session"
           />
         </div>

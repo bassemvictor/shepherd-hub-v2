@@ -1,6 +1,6 @@
 # Project Starter Template
 
-This repo is a lightweight starter built from the original Tender App foundations. It keeps the same core stack and UX patterns, but trims the product down to two sample pages so future apps can be built on top of it without carrying tender-specific business logic.
+This repo is a lightweight starter built from the original Tender App foundations. It keeps the same core stack and UX patterns, with the current app focused on members and calendar workflows.
 
 ## What stays in the template
 
@@ -15,21 +15,19 @@ This repo is a lightweight starter built from the original Tender App foundation
 - Existing styling approach and UI component set
 - Responsive card, table, and right-side drawer patterns
 
-## Included sample pages
+## Included app areas
 
-### 1. Dashboard
+### 1. Congregation
 
-- Confirms protected routing works
-- Shows the authenticated user from Amplify session state
-- Displays Cognito groups from token claims when available
-- Loads a simple backend summary from `/dashboard/summary`
+- Loads members from the protected API
+- Supports member creation and Unity import
+- Uses the shared page header, dialogs, and state patterns
 
-### 2. Sample Records
+### 2. Calendar
 
-- Demonstrates a reusable grid/table pattern
-- Loads records from DynamoDB through API Gateway + Lambda
-- Supports list, get, create, update, and delete
-- Uses the right-side drawer pattern for create/edit/view flows
+- Connects to Google Calendar
+- Syncs calendars and schedule events through the API
+- Supports event creation, editing, and member assignment
 
 ## Authentication flow
 
@@ -62,30 +60,37 @@ Backend infrastructure is defined in [amplify/backend.ts](/Users/sallysamuel/wor
 
 ### API routes
 
-- `GET /dashboard/summary`
-- `GET /records`
-- `GET /records/{recordId}`
-- `POST /records`
-- `PUT /records/{recordId}`
-- `DELETE /records/{recordId}`
+- `GET /members`
+- `GET /members/index`
+- `POST /members`
+- `POST /members/import`
+- `GET /members/{memberId}`
+- `PUT /members/{memberId}`
+- `DELETE /members/{memberId}`
+- `GET /members/{memberId}/events`
+- `GET /events/{eventId}/members`
+- `PUT /events/{eventId}/members`
+- `GET /schedule/overview`
+- `POST /schedule/google/connect`
+- `DELETE /schedule/google/connection`
+- `POST /schedule/calendars/refresh`
+- `PUT /schedule/settings`
+- `PUT /schedule/calendars/{calendarId}`
+- `POST /schedule/calendars/{calendarId}/sync`
+- `DELETE /schedule/calendars/{calendarId}/cache`
+- `POST /schedule/sync`
+- `DELETE /schedule/cache`
+- `GET /schedule/events`
+- `POST /schedule/events`
+- `PUT /schedule/events/{eventId}`
+- `DELETE /schedule/events/{eventId}`
 
 ### DynamoDB shape
 
-The sample entity uses tenant-aware keys:
+The app uses a tenant-aware single-table layout:
 
 - `PK = TENANT#{tenantId}`
-- `SK = RECORD#{recordId}`
-
-Each record stores:
-
-- `recordId`
-- `name`
-- `status`
-- `owner`
-- `tenantId`
-- `createdAt`
-- `updatedAt`
-- `entityType`
+- Entity-specific `SK` values such as `MEMBER#{memberId}` and event relationship records
 
 Tenant resolution is claim-based in the Lambda:
 
@@ -137,7 +142,7 @@ Each item needs:
    - `getRowKey`
    - empty-state text
 
-See [src/pages/sample-records-page.tsx](/Users/sallysamuel/workspace/amplify-react-template/src/pages/sample-records-page.tsx:1) for the reference pattern.
+See [src/pages/members-page.tsx](/Users/sallysamuel/workspace/amplify-react-template/src/pages/members-page.tsx:1) for a reference pattern.
 
 ## How to add a new right-side drawer form
 
@@ -146,12 +151,12 @@ See [src/pages/sample-records-page.tsx](/Users/sallysamuel/workspace/amplify-rea
 3. Use `RightSideDrawer` for view-only details.
 4. Keep the form state local to the page unless multiple pages need the same form.
 
-The sample records page demonstrates:
+The members page demonstrates:
 
-- create drawer
-- edit drawer
-- read-only details drawer
-- delete confirmation dialog
+- create dialog
+- import dialog
+- list refresh flow
+- API error handling
 
 ## How to add a new Lambda CRUD route
 
@@ -216,4 +221,3 @@ npm run test:lambda
 
 - `amplify_outputs.json` must be regenerated after creating a fresh sandbox or deploy.
 - The template intentionally removed tender-specific workflows, forms, calculations, and entities.
-- The current sample uses a single generic `record` entity so new teams can copy the structure without carrying old domain logic forward.
