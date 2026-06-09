@@ -117,6 +117,9 @@ export const AppShell = () => {
                       <Shield className="h-3 w-3" />
                       <span className="truncate">{primaryGroup}</span>
                     </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      Tenant: {user?.tenantId ?? "No tenant assigned"}
+                    </div>
                   </div>
                   <Button
                     className="rounded-md p-0 text-slate-500 hover:bg-slate-100 hover:text-slate-700"

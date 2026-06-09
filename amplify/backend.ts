@@ -107,6 +107,7 @@ addProtectedRoutes("/members/import", [HttpMethod.POST]);
 addProtectedRoutes("/members/{memberId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
 addProtectedRoutes("/members/{memberId}/events", [HttpMethod.GET]);
 addProtectedRoutes("/events/{eventId}/members", [HttpMethod.GET, HttpMethod.PUT]);
+addProtectedRoutes("/reports/visitations", [HttpMethod.GET]);
 addProtectedRoutes("/schedule/overview", [HttpMethod.GET]);
 addProtectedRoutes("/schedule/google/connect", [HttpMethod.POST]);
 addProtectedRoutes("/schedule/google/connection", [HttpMethod.DELETE]);

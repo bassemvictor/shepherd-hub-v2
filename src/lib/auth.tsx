@@ -21,6 +21,7 @@ export type AppAuthUser = {
   username: string;
   email: string;
   name: string;
+  tenantId: string | null;
   groups: AppCognitoGroup[];
 };
 
@@ -78,12 +79,19 @@ const buildUserFromSession = async (): Promise<AppAuthUser | null> => {
   const groups = normalizeGroups(payload["cognito:groups"]);
   const email = typeof payload.email === "string" ? payload.email : currentUser.signInDetails?.loginId ?? currentUser.username;
   const name = typeof payload.name === "string" ? payload.name : email;
+  const tenantId =
+    typeof payload["custom:tenantId"] === "string" && payload["custom:tenantId"].trim()
+      ? payload["custom:tenantId"].trim()
+      : typeof payload["custom:tenant_id"] === "string" && payload["custom:tenant_id"].trim()
+        ? payload["custom:tenant_id"].trim()
+        : null;
 
   return {
     id: currentUser.userId,
     username: currentUser.username,
     email,
     name,
+    tenantId,
     groups,
   };
 };

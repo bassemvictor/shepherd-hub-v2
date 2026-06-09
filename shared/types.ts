@@ -53,6 +53,7 @@ export type CalendarSyncConfig = {
 };
 
 export type ScheduleCalendar = EntityEnvelope & {
+  ownerUserId: string;
   calendarId: string;
   summary: string;
   description?: string;
@@ -68,7 +69,9 @@ export type ScheduleCalendar = EntityEnvelope & {
 };
 
 export type ScheduleEvent = EntityEnvelope & {
+  ownerUserId: string;
   eventId: string;
+  googleEventId?: string;
   calendarId: string;
   calendarName: string;
   calendarColor?: string;
@@ -83,6 +86,8 @@ export type ScheduleEvent = EntityEnvelope & {
   source: SyncSource;
   htmlLink?: string;
   eventType?: MemberEventType;
+  assignedMemberIds?: string[];
+  assignedMemberNames?: string[];
   memberIds?: string[];
   memberNames?: string[];
 };
@@ -224,15 +229,103 @@ export type MemberIndexResponse = {
   generatedAt: string;
 };
 
-export type MemberEvent = EntityEnvelope & {
-  eventId: string;
+export type MemberVisitation = EntityEnvelope & {
+  visitationId: string;
   memberId: string;
-  eventTitleSnapshot: string;
-  eventStartDateTime: string;
-  eventEndDateTime: string;
+  visitorUserId: string;
+  visitorDisplayName: string;
+  visitDate: string;
+  sourceEventId?: string;
   allDay?: boolean;
   eventType: MemberEventType;
   status: string;
+};
+
+export type VisitationReportItem = MemberVisitation & {
+  memberFullName: string;
+  memberSource: MemberSource;
+};
+
+export type ReportsVisitorFilterMode = "any" | "me_only" | "exclude_me" | "specific";
+export type ReportsVisitCountMode = "all" | "not_visited" | "lte" | "gt";
+export type ReportsMemberScope = "active_only" | "all_members";
+export type ReportsMemberSourceFilter = "all" | "unity" | "manual";
+export type ReportsSortBy = "last_visit_date" | "visit_count" | "member_name";
+export type ReportsSortDirection = "asc" | "desc";
+
+export type VisitationReportFilters = {
+  from?: string;
+  to?: string;
+  sinceBeginning: boolean;
+  visitCountMode: ReportsVisitCountMode;
+  visitCountThreshold: number;
+  visitorMode: ReportsVisitorFilterMode;
+  visitorUserId?: string;
+  memberScope: ReportsMemberScope;
+  memberSource: ReportsMemberSourceFilter;
+  group?: string;
+  search?: string;
+  sortBy: ReportsSortBy;
+  sortDirection: ReportsSortDirection;
+  page: number;
+  pageSize: number;
+};
+
+export type VisitationReportKpiSummary = {
+  totalMembers: number;
+  matchingMembers: number;
+  notVisitedMembers: number;
+  lowVisitationMembers: number;
+  visitedInRangeMembers: number;
+  averageVisitsPerMember: number;
+};
+
+export type VisitationDistributionBucket = {
+  key: "not_visited" | "one_visit" | "two_to_three" | "four_to_six" | "seven_plus";
+  label: string;
+  count: number;
+  percentage: number;
+};
+
+export type VisitationOverviewRow = {
+  memberId: string;
+  memberFullName: string;
+  initials: string;
+  phone?: string;
+  email?: string;
+  unityId?: string;
+  memberSource: MemberSource;
+  sectorOrGroup?: string;
+  lastVisitDate?: string;
+  lastVisitedBy?: string;
+  visitCountInRange: number;
+  totalLifetimeVisits: number;
+  nextScheduledVisit?: string;
+  status: "Not Visited" | "Low Visitation" | "Recently Visited";
+  normalizedSearchText: string;
+};
+
+export type ReportPagination = {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+};
+
+export type ReportVisitorOption = {
+  visitorUserId: string;
+  visitorDisplayName: string;
+};
+
+export type VisitationReportResponse = {
+  filters: VisitationReportFilters;
+  summary: VisitationReportKpiSummary;
+  distribution: VisitationDistributionBucket[];
+  rows: VisitationOverviewRow[];
+  pagination: ReportPagination;
+  visitors: ReportVisitorOption[];
+  availableGroups: string[];
+  generatedAt: string;
 };
 
 export type MemberActivity = {

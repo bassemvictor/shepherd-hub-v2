@@ -5,7 +5,7 @@ import type {
   CreateMemberInput,
   EventMemberSummary,
   Member,
-  MemberEvent,
+  MemberVisitation,
   MemberEventType,
   MemberImportResult,
   MemberIndexItem,
@@ -342,7 +342,7 @@ export const MemberImportDialog = ({
   );
 };
 
-export const formatMemberEventLabel = (event: MemberEvent) =>
+export const formatMemberEventLabel = (event: MemberVisitation) =>
   event.eventType === "VISITATION" ? "Visitation" : "Event";
 
 export const emptyMemberSelection = (items: MemberIndexItem[], memberIds: string[] = []) =>

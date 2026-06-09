@@ -2,7 +2,7 @@ import { ArrowLeft, Ellipsis, Mail, MessageCircle, Phone, Trash2 } from "lucide-
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import type { Member, MemberActivity, MemberDetailResponse, MemberEvent } from "../../shared/types";
+import type { Member, MemberActivity, MemberDetailResponse, MemberVisitation } from "../../shared/types";
 import {
   MemberAvatar,
   MemberDetailsTabs,
@@ -17,16 +17,16 @@ import { api } from "../lib/api";
 
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
-const formatMemberEventDateTime = (event: MemberEvent) => {
-  if (event.allDay || isDateOnlyValue(event.eventStartDateTime)) {
-    const [year, month, day] = event.eventStartDateTime.slice(0, 10).split("-").map(Number);
+const formatVisitDateTime = (event: MemberVisitation) => {
+  if (event.allDay || isDateOnlyValue(event.visitDate)) {
+    const [year, month, day] = event.visitDate.slice(0, 10).split("-").map(Number);
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(year, month - 1, day));
   }
 
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(event.eventStartDateTime));
+  }).format(new Date(event.visitDate));
 };
 
 export const MemberDetailPage = () => {
@@ -34,7 +34,7 @@ export const MemberDetailPage = () => {
   const { memberId = "" } = useParams();
   const [member, setMember] = useState<Member | null>(null);
   const [activity, setActivity] = useState<MemberActivity[]>([]);
-  const [events, setEvents] = useState<MemberEvent[]>([]);
+  const [events, setEvents] = useState<MemberVisitation[]>([]);
   const [activeTab, setActiveTab] = useState<"details" | "visitations" | "activity">("details");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +48,7 @@ export const MemberDetailPage = () => {
     try {
       const [details, memberEvents] = await Promise.all([
         api.get<MemberDetailResponse>(`/members/${memberId}`),
-        api.get<{ items: MemberEvent[] }>(`/members/${memberId}/events`),
+        api.get<{ items: MemberVisitation[] }>(`/members/${memberId}/events`),
       ]);
       setMember(details.member);
       setActivity(details.activity);
@@ -201,17 +201,12 @@ export const MemberDetailPage = () => {
                   {visitationEvents.map((event) => (
                     <button
                       className="w-full rounded-md border border-border bg-white px-3 py-2.5 text-left transition-colors hover:border-primary/25 hover:bg-accent"
-                      key={`${event.eventId}-${event.eventStartDateTime}`}
-                      onClick={() =>
-                        navigate(
-                          `/calendar/schedule?eventId=${encodeURIComponent(event.eventId)}&date=${encodeURIComponent(event.eventStartDateTime)}`,
-                        )
-                      }
+                      key={event.visitationId}
                       type="button"
                     >
                       <div className="text-xs font-semibold text-primary">{formatMemberEventLabel(event)}</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">{event.eventTitleSnapshot}</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">{formatMemberEventDateTime(event)}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{event.visitorDisplayName}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">{formatVisitDateTime(event)}</div>
                     </button>
                   ))}
                 </div>
