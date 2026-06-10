@@ -15,6 +15,7 @@ import type {
 } from "@fullcalendar/core/index.js";
 import {
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -27,7 +28,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import type {
   CreateScheduleEventInput,
-  MemberEventType,
   MemberIndexItem,
   ScheduleCalendar,
   ScheduleEvent,
@@ -72,7 +72,6 @@ type EventFormState = {
   start: string;
   end: string;
   allDay: boolean;
-  eventType: MemberEventType;
   memberIds: string[];
   memberQuery: string;
 };
@@ -201,7 +200,7 @@ const applyMemberSelectionToForm = (
   return {
     ...currentForm,
     summary:
-      currentForm.eventType === "VISITATION" || isVisitationSummary(currentForm.summary)
+      isVisitationSummary(currentForm.summary)
         ? buildVisitationSummary(nextMemberIds, memberIndex)
         : currentForm.summary,
     location:
@@ -225,14 +224,13 @@ const emptyEventForm = (calendarId = ""): EventFormState => {
 
   return {
     calendarId,
-    summary: VISITATION_TITLE_PREFIX,
+    summary: "",
     description: "",
     location: "",
     attendeesText: "",
     start: toLocalDateTimeInput(start.toISOString()),
     end: toLocalDateTimeInput(end.toISOString()),
     allDay: false,
-    eventType: "VISITATION",
     memberIds: [],
     memberQuery: "",
   };
@@ -247,7 +245,6 @@ const eventToFormState = (event: ScheduleEvent): EventFormState => ({
   start: event.allDay ? normalizeAllDayStartValue(event.start) : toLocalDateTimeInput(event.start),
   end: event.allDay ? shiftDateOnlyValue(normalizeAllDayEndValue(event.end), -1) : toLocalDateTimeInput(event.end),
   allDay: event.allDay,
-  eventType: event.eventType ?? "GENERAL",
   memberIds: event.memberIds ?? [],
   memberQuery: "",
 });
@@ -259,14 +256,13 @@ const createFormFromSelection = (
   calendarId: string,
 ): EventFormState => ({
   calendarId,
-  summary: VISITATION_TITLE_PREFIX,
+  summary: "",
   description: "",
   location: "",
   attendeesText: "",
   start: allDay ? toDateOnlyValue(startValue) : toLocalDateTimeInput(startValue.toISOString()),
   end: allDay ? shiftDateOnlyValue(toDateOnlyValue(endValue), -1) : toLocalDateTimeInput(endValue.toISOString()),
   allDay,
-  eventType: "VISITATION",
   memberIds: [],
   memberQuery: "",
 });
@@ -301,13 +297,77 @@ const EventEditor = ({
   onDelete,
 }: EventEditorProps) => {
   const navigate = useNavigate();
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    setDetailsOpen(
+      mode === "edit"
+      || Boolean(form.summary.trim() || form.description.trim() || form.location.trim() || form.attendeesText.trim()),
+    );
+  }, [mode, open]);
 
   if (!open) {
     return null;
   }
 
+  const selectedMembers = emptyMemberSelection(memberIndex, form.memberIds);
+
   const content = (
-    <div className="space-y-3">
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <span className="text-sm font-medium text-slate-900">Members *</span>
+        <MemberSearchAutocomplete
+          items={memberIndex}
+          onQueryChange={(value) => onChange({ ...form, memberQuery: value })}
+          onSelect={(member) =>
+            onChange(
+              applyMemberSelectionToForm(
+                form,
+                [...new Set([...form.memberIds, member.memberId])],
+                memberIndex,
+              ),
+            )
+          }
+          placeholder="Search members"
+          query={form.memberQuery}
+          selectedIds={form.memberIds}
+        />
+        <div className="space-y-2">
+          <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Selected</span>
+          {selectedMembers.length ? (
+            <div className="flex flex-wrap gap-1.5 rounded-md border border-border bg-slate-50 p-2">
+              {selectedMembers.map((member) => (
+                <MemberChip
+                  key={member.memberId}
+                  member={member}
+                  onClick={(memberId) => {
+                    onClose();
+                    navigate(`/members/${memberId}`);
+                  }}
+                  onRemove={(memberId) =>
+                    onChange(
+                      applyMemberSelectionToForm(
+                        form,
+                        form.memberIds.filter((currentId) => currentId !== memberId),
+                        memberIndex,
+                      ),
+                    )
+                  }
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed border-border px-3 py-2 text-sm text-slate-500">
+              No members selected
+            </div>
+          )}
+        </div>
+      </div>
+
       <label className="space-y-1.5">
         <span className="text-sm font-medium text-slate-900">Calendar</span>
         <Select
@@ -323,107 +383,74 @@ const EventEditor = ({
         </Select>
       </label>
 
-      <label className="space-y-1.5">
-        <span className="text-sm font-medium text-slate-900">Event Title</span>
-        <Input onChange={(event) => onChange({ ...form, summary: event.target.value })} value={form.summary} />
-      </label>
-
-      <label className="space-y-1.5">
-        <span className="text-sm font-medium text-slate-900">Description</span>
-        <Textarea onChange={(event) => onChange({ ...form, description: event.target.value })} value={form.description} />
-      </label>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="space-y-1.5">
-          <span className="text-sm font-medium text-slate-900">Start</span>
-          <Input
-            onChange={(event) => onChange({ ...form, start: event.target.value })}
-            type={form.allDay ? "date" : "datetime-local"}
-            value={form.start}
-          />
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-sm font-medium text-slate-900">End</span>
-          <Input
-            onChange={(event) => onChange({ ...form, end: event.target.value })}
-            type={form.allDay ? "date" : "datetime-local"}
-            value={form.end}
-          />
+      <div className="space-y-3">
+        <span className="text-sm font-medium text-slate-900">Start - End</span>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Start</span>
+            <Input
+              onChange={(event) => onChange({ ...form, start: event.target.value })}
+              type={form.allDay ? "date" : "datetime-local"}
+              value={form.start}
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">End</span>
+            <Input
+              onChange={(event) => onChange({ ...form, end: event.target.value })}
+              type={form.allDay ? "date" : "datetime-local"}
+              value={form.end}
+            />
+          </label>
+        </div>
+        <label className="flex items-center gap-2 text-sm font-medium text-slate-900">
+          <Checkbox checked={form.allDay} onChange={(event) => onChange({ ...form, allDay: event.target.checked })} />
+          <span>All Day</span>
         </label>
       </div>
 
-      <label className="flex items-center gap-2 rounded-md border border-border bg-slate-50 px-3 py-2">
-        <Checkbox checked={form.allDay} onChange={(event) => onChange({ ...form, allDay: event.target.checked })} />
-        <span className="text-sm font-medium text-slate-900">All-day event</span>
-      </label>
+      <div className="h-px bg-border" />
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="space-y-1.5">
-          <span className="text-sm font-medium text-slate-900">Type</span>
-          <Select
-            onChange={(event) => onChange({ ...form, eventType: event.target.value as MemberEventType })}
-            value={form.eventType}
-          >
-            <option value="GENERAL">General</option>
-            <option value="VISITATION">Visitation</option>
-          </Select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-sm font-medium text-slate-900">Location</span>
-          <Input onChange={(event) => onChange({ ...form, location: event.target.value })} value={form.location} />
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-sm font-medium text-slate-900">Attendees</span>
-          <Input
-            onChange={(event) => onChange({ ...form, attendeesText: event.target.value })}
-            placeholder="name@example.com, person@example.com"
-            value={form.attendeesText}
-          />
-        </label>
-      </div>
-
-      <div className="space-y-2">
-        <span className="text-sm font-medium text-slate-900">Members</span>
-        <MemberSearchAutocomplete
-          items={memberIndex}
-          onQueryChange={(value) => onChange({ ...form, memberQuery: value })}
-          onSelect={(member) =>
-            onChange(
-              applyMemberSelectionToForm(
-                form,
-                [...new Set([...form.memberIds, member.memberId])],
-                memberIndex,
-              ),
-            )
-          }
-          placeholder="Search members for this event"
-          query={form.memberQuery}
-          selectedIds={form.memberIds}
-        />
-        {form.memberIds.length ? (
-          <div className="flex flex-wrap gap-1.5">
-            {emptyMemberSelection(memberIndex, form.memberIds).map((member) => (
-              <MemberChip
-                key={member.memberId}
-                member={member}
-                onClick={(memberId) => {
-                  onClose();
-                  navigate(`/members/${memberId}`);
-                }}
-                onRemove={(memberId) =>
-                  onChange(
-                    applyMemberSelectionToForm(
-                      form,
-                      form.memberIds.filter((currentId) => currentId !== memberId),
-                      memberIndex,
-                    ),
-                  )
-                }
+      <div className="space-y-3">
+        <button
+          className="flex w-full items-center justify-between text-left"
+          onClick={() => setDetailsOpen((current) => !current)}
+          type="button"
+        >
+          <span className="text-sm font-medium text-slate-900">Additional Details</span>
+          <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${detailsOpen ? "rotate-180" : ""}`} />
+        </button>
+        {detailsOpen ? (
+          <div className="space-y-3">
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium text-slate-900">Event Title</span>
+              <Input
+                onChange={(event) => onChange({ ...form, summary: event.target.value })}
+                placeholder="Add an event title"
+                value={form.summary}
               />
-            ))}
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium text-slate-900">Location</span>
+              <Input onChange={(event) => onChange({ ...form, location: event.target.value })} value={form.location} />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium text-slate-900">Attendees</span>
+              <Input
+                onChange={(event) => onChange({ ...form, attendeesText: event.target.value })}
+                placeholder="name@example.com, person@example.com"
+                value={form.attendeesText}
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium text-slate-900">Description</span>
+              <Textarea onChange={(event) => onChange({ ...form, description: event.target.value })} value={form.description} />
+            </label>
           </div>
         ) : null}
       </div>
+
+      <div className="h-px bg-border" />
     </div>
   );
 
@@ -449,7 +476,7 @@ const EventEditor = ({
 
   if (mobile) {
     return (
-      <Dialog description="Create or edit a calendar event." onClose={onClose} open={open} title={mode === "create" ? "New Event" : "Edit Event"}>
+      <Dialog onClose={onClose} open={open} title={mode === "create" ? "New Event" : "Edit Event"}>
         <div className="space-y-3">
           {content}
           {footer}
@@ -460,7 +487,6 @@ const EventEditor = ({
 
   return (
     <RightSideDrawer
-      description="Create or edit a calendar event."
       footer={footer}
       onClose={onClose}
       open={open}
@@ -911,7 +937,6 @@ export const SchedulePage = () => {
           start: startIso,
           end: endIso,
           allDay: form.allDay,
-          eventType: form.eventType,
           memberIds: form.memberIds,
         };
         await api.post("/schedule/events", payload);
@@ -926,7 +951,6 @@ export const SchedulePage = () => {
           start: startIso,
           end: endIso,
           allDay: form.allDay,
-          eventType: form.eventType,
           memberIds: form.memberIds,
         };
         await api.put(`/schedule/events/${editingEvent.eventId}`, payload);
@@ -957,12 +981,12 @@ export const SchedulePage = () => {
 
     openCreateEditor(
       applyMemberSelectionToForm(
-        emptyEventForm(defaultCalendarId),
+        { ...emptyEventForm(defaultCalendarId), summary: VISITATION_TITLE_PREFIX },
         [memberId],
         memberIndex,
       ),
     );
-    clearIntentSearchParams(["memberId", "eventType"]);
+    clearIntentSearchParams(["memberId"]);
   }, [clearIntentSearchParams, defaultCalendarId, editorOpen, memberIndex, openCreateEditor, searchParams]);
 
   useEffect(() => {

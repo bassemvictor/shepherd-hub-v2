@@ -6,7 +6,6 @@ import type {
   EventMemberSummary,
   Member,
   MemberVisitation,
-  MemberEventType,
   MemberImportResult,
   MemberIndexItem,
 } from "../../../shared/types";
@@ -343,7 +342,7 @@ export const MemberImportDialog = ({
 };
 
 export const formatMemberEventLabel = (event: MemberVisitation) =>
-  event.eventType === "VISITATION" ? "Visitation" : "Event";
+  event.isOwnCalendar ? "In your calendar" : `In ${event.calendarOwnerName}'s calendar`;
 
 export const emptyMemberSelection = (items: MemberIndexItem[], memberIds: string[] = []) =>
   items.filter((item) => memberIds.includes(item.memberId));

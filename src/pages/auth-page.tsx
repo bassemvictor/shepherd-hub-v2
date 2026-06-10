@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { useAuth } from "../lib/auth";
@@ -75,80 +75,84 @@ export const AuthPage = () => {
 
   return (
     <div className="min-h-screen bg-transparent px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mx-auto grid max-w-5xl gap-4 lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="rounded-lg border border-blue-100/80 bg-gradient-to-br from-slate-950 via-blue-950 to-blue-700 p-5 text-white panel-shadow sm:p-6">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-blue-200/80">Project Template</p>
-          <h1 className="mt-3 max-w-xl text-2xl font-semibold leading-tight sm:text-3xl">
-            Secure congregation app with Amplify auth, protected routes, and serverless APIs.
-          </h1>
-          <p className="mt-3 max-w-2xl text-sm text-blue-100/80">
-            Sign in with your Cognito account to access members, calendar settings, and schedule tools.
-          </p>
-        </div>
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-5xl items-center justify-center">
+        <Card className="w-full max-w-2xl rounded-lg px-4 py-5 sm:px-6 sm:py-6">
+          <div className="flex flex-col items-center text-center">
+            <img alt="Shepherd Hub logo" className="h-16 w-auto sm:h-20" src="/logo_blue.png" />
+            <p className="mt-4 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Shepherd Hub 2.0</p>
+            <h1 className="mt-4 text-3xl font-semibold tracking-tight text-balance text-slate-900 sm:text-4xl">
+              {requiresNewPassword ? "Create your new password" : "Sign in to continue"}
+            </h1>
+            <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
+              {requiresNewPassword
+                ? "Complete your first sign-in by choosing a permanent password for your account."
+                : "Use your Cognito username and password to access members, schedules, and congregation tools."}
+            </p>
+          </div>
 
-        <Card className="self-start">
-          <CardHeader className="flex-col gap-3">
-            <div>
-              <CardTitle>{requiresNewPassword ? "Set New Password" : "Sign In"}</CardTitle>
-              <CardDescription>
-                {requiresNewPassword
-                  ? "Complete your first sign-in by choosing a permanent password."
-                  : "Use your Cognito email and password to access the app."}
-              </CardDescription>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {!isConfigured ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                Auth is not configured in `amplify_outputs.json` yet. Provision or regenerate outputs after deploying Amplify.
-              </div>
-            ) : null}
+          <CardContent className="px-0 pb-0">
+            <form
+              className="mt-6 space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault();
 
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-800">Email</label>
-              <Input
-                disabled={requiresNewPassword}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="name@example.com"
-                type="email"
-                value={email}
-              />
-            </div>
+                if (requiresNewPassword) {
+                  void handleCompleteNewPassword();
+                  return;
+                }
 
-            {!requiresNewPassword ? (
+                void handleSignIn();
+              }}
+            >
+              {!isConfigured ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Auth is not configured in `amplify_outputs.json` yet. Provision or regenerate outputs after deploying Amplify.
+                </div>
+              ) : null}
+
               <div className="grid gap-1.5">
-                <label className="text-sm font-medium text-slate-800">Password</label>
+                <label className="text-sm font-medium text-slate-800">Username</label>
                 <Input
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="Enter your password"
-                  type="password"
-                  value={password}
+                  className="h-10 rounded-md px-3 text-sm"
+                  disabled={requiresNewPassword}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="Enter your username"
+                  type="text"
+                  value={email}
                 />
               </div>
-            ) : (
-              <div className="grid gap-1.5">
-                <label className="text-sm font-medium text-slate-800">New Password</label>
-                <Input
-                  onChange={(event) => setNewPassword(event.target.value)}
-                  placeholder="Choose a new password"
-                  type="password"
-                  value={newPassword}
-                />
-              </div>
-            )}
 
-            {message ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
-            {error ? <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p> : null}
+              {!requiresNewPassword ? (
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium text-slate-800">Password</label>
+                  <Input
+                    className="h-10 rounded-md px-3 text-sm"
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder="Enter your password"
+                    type="password"
+                    value={password}
+                  />
+                </div>
+              ) : (
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium text-slate-800">New Password</label>
+                  <Input
+                    className="h-10 rounded-md px-3 text-sm"
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    placeholder="Choose a new password"
+                    type="password"
+                    value={newPassword}
+                  />
+                </div>
+              )}
 
-            {!requiresNewPassword ? (
-              <Button className="min-w-32" disabled={submitting || !isConfigured} onClick={() => void handleSignIn()} type="button">
-                {submitting ? "Signing In..." : "Sign In"}
+              {message ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
+              {error ? <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p> : null}
+
+              <Button className="mt-1 h-10 w-full rounded-md px-4 text-sm font-medium" disabled={submitting || !isConfigured} type="submit">
+                {requiresNewPassword ? (submitting ? "Saving..." : "Set New Password") : submitting ? "Signing In..." : "Sign In"}
               </Button>
-            ) : (
-              <Button className="min-w-40" disabled={submitting || !isConfigured} onClick={() => void handleCompleteNewPassword()} type="button">
-                {submitting ? "Saving..." : "Set New Password"}
-              </Button>
-            )}
+            </form>
           </CardContent>
         </Card>
       </div>

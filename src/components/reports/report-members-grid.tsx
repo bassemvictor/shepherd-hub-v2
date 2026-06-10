@@ -104,7 +104,7 @@ export const ReportMembersGrid = ({ rows }: { rows: VisitationOverviewRow[] }) =
           {row.phone ? <a className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs" href={`sms:${row.phone}`}><MessageCircle className="mr-1 h-3.5 w-3.5" />Text</a> : null}
           {row.phone ? <a className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs" href={`https://wa.me/${row.phone.replace(/\D/g, "")}`} rel="noreferrer" target="_blank"><MessageCircle className="mr-1 h-3.5 w-3.5" />WhatsApp</a> : null}
           {row.email ? <a className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs" href={`mailto:${row.email}`}><Mail className="mr-1 h-3.5 w-3.5" />Email</a> : null}
-          <Button onClick={() => navigate(`/calendar/schedule?memberId=${row.memberId}&eventType=VISITATION`)} size="sm" type="button" variant="outline"><CalendarDays className="mr-1 h-3.5 w-3.5" />Schedule</Button>
+          <Button onClick={() => navigate(`/calendar/schedule?memberId=${row.memberId}`)} size="sm" type="button" variant="outline"><CalendarDays className="mr-1 h-3.5 w-3.5" />Schedule</Button>
         </div>
       ),
     },

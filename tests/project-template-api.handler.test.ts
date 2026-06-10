@@ -442,7 +442,6 @@ test("stores visitation member links with VISITATION type", async () => {
               allDay: false,
               status: "confirmed",
               source: "GOOGLE",
-              eventType: "VISITATION",
             },
           };
         }
@@ -512,10 +511,9 @@ test("stores visitation member links with VISITATION type", async () => {
   assert.equal(response.statusCode, 200);
   const transactWrite = commands.find((command) => command.name === "TransactWriteCommand");
   assert.ok(transactWrite);
-  assert.match(JSON.stringify(transactWrite?.input), /"eventType":"VISITATION"/);
 });
 
-test("stores tenant visitation records separately for same eventId across calendars", async () => {
+test("stores tenant visitation records under the canonical tenant event partition for the Google event id", async () => {
   process.env.PROJECT_TEMPLATE_TABLE = "records-table";
   const writtenVisitations: Array<Record<string, unknown>> = [];
 
@@ -551,7 +549,6 @@ test("stores tenant visitation records separately for same eventId across calend
                 allDay: false,
                 status: "confirmed",
                 source: "GOOGLE",
-                eventType: "VISITATION",
               },
             };
           }
@@ -575,7 +572,6 @@ test("stores tenant visitation records separately for same eventId across calend
                 allDay: false,
                 status: "confirmed",
                 source: "GOOGLE",
-                eventType: "VISITATION",
               },
             };
           }
@@ -663,8 +659,8 @@ test("stores tenant visitation records separately for same eventId across calend
   assert.deepEqual(
     writtenVisitations.map((item) => item.PK),
     [
-      "TENANT#tenant-abc#CALENDAR#calendar-1#EVENT#event-1",
-      "TENANT#tenant-abc#CALENDAR#calendar-2#EVENT#event-1",
+      "TENANT#tenant-abc#EVENT#event-1",
+      "TENANT#tenant-abc#EVENT#event-1",
     ],
   );
   assert.deepEqual(
@@ -962,7 +958,6 @@ test("full sync restores member links from Google event private metadata", async
                   allDay: false,
                   status: "confirmed",
                   source: "GOOGLE",
-                  eventType: "VISITATION",
                   memberIds: ["member-1"],
                   memberNames: ["Adel Abraham"],
                 },
@@ -993,7 +988,6 @@ test("full sync restores member links from Google event private metadata", async
                   allDay: false,
                   status: "confirmed",
                   source: "GOOGLE",
-                  eventType: "VISITATION",
                   memberIds: ["member-1"],
                   memberNames: ["Adel Abraham"],
                 },
@@ -1069,7 +1063,6 @@ test("full sync restores member links from Google event private metadata", async
   const memberLinkWrite = commands.find((command) => command.name === "TransactWriteCommand");
   assert.ok(memberLinkWrite);
   assert.match(JSON.stringify(memberLinkWrite?.input), /"GSI2PK":"TENANT#tenant-abc#MEMBER#member-1"/);
-  assert.match(JSON.stringify(memberLinkWrite?.input), /"eventType":"VISITATION"/);
 });
 
 test("refreshed calendars return events only for the requested schedule range", async () => {
@@ -1218,11 +1211,34 @@ test("refreshed calendars return events only for the requested schedule range", 
   assert.deepEqual(body.events ?? [], []);
 });
 
-test("member visitation history is tenant-shared and includes visitor metadata", async () => {
+test("member visitation history is tenant-shared and includes assignment snapshots", async () => {
   process.env.PROJECT_TEMPLATE_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "TENANT#tenant-abc" && key.SK === "MEMBER#member-1") {
+            return {
+              Item: {
+                PK: "TENANT#tenant-abc",
+                SK: "MEMBER#member-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "MEMBER",
+                tenantId: "tenant-abc",
+                memberId: "member-1",
+                fullName: "Adel Abraham",
+                initials: "AA",
+                source: "UNITY",
+                isUnityMember: true,
+                normalizedSearchText: "adel abraham",
+              },
+            };
+          }
+          return {};
+        }
+
         if (command.constructor.name === "QueryCommand") {
           const values = command.input.ExpressionAttributeValues as Record<string, string>;
 
@@ -1230,28 +1246,34 @@ test("member visitation history is tenant-shared and includes visitor metadata",
             return {
               Items: [
                 {
-                  PK: "TENANT#tenant-abc#CALENDAR#calendar-1#EVENT#event-1",
-                  SK: "VISIT#member-1",
-                  GSI1PK: "TENANT#tenant-abc",
-                  GSI1SK: "VISIT#2026-06-04T15:00:00.000Z#VISITOR#user-456#MEMBER#member-1#VISITATION#calendar-1:event-1:member-1",
+                  PK: "TENANT#tenant-abc#EVENT#event-1",
+                  SK: "MEMBER#member-1",
                   GSI2PK: "TENANT#tenant-abc#MEMBER#member-1",
-                  GSI2SK: "VISIT#2026-06-04T15:00:00.000Z#VISITATION#calendar-1:event-1:member-1",
+                  GSI2SK: "EVENT#2026-06-04T15:00:00.000Z#event-1",
                   createdAt: "2026-06-03T12:00:00.000Z",
                   updatedAt: "2026-06-04T16:00:00.000Z",
-                  entityType: "VISITATION",
+                  entityType: "EVENT_MEMBER",
                   tenantId: "tenant-abc",
                   calendarId: "calendar-1",
-                  visitationId: "calendar-1:event-1:member-1",
+                  eventId: "event-1",
+                  calendarOwnerUserId: "user-456",
+                  calendarOwnerName: "Visitor B",
                   memberId: "member-1",
-                  memberNameSnapshot: "Adel Abraham",
-                  memberSourceSnapshot: "UNITY",
-                  visitorUserId: "user-456",
-                  visitorDisplayName: "Visitor B",
-                  visitDate: "2026-06-04T15:00:00.000Z",
-                  sourceEventId: "event-1",
-                  ownerUserId: "user-456",
-                  eventType: "VISITATION",
-                  status: "confirmed",
+                  memberName: "Adel Abraham",
+                  memberPhoneSnapshot: undefined,
+                  memberEmailSnapshot: undefined,
+                  unityIdSnapshot: undefined,
+                  sourceSnapshot: "UNITY",
+                  eventTitle: "Visitation: Adel Abraham",
+                  eventStart: "2026-06-04T15:00:00.000Z",
+                  eventEnd: "2026-06-04T16:00:00.000Z",
+                  eventLocation: "123 Main St",
+                  eventDescription: "Pastoral visit",
+                  allDay: false,
+                  assignmentStatus: "scheduled",
+                  visitStatus: "scheduled",
+                  createdByUserId: "user-456",
+                  createdByName: "Visitor B",
                 },
               ],
             };
@@ -1294,17 +1316,25 @@ test("member visitation history is tenant-shared and includes visitor metadata",
     items: [
       {
         createdAt: "2026-06-03T12:00:00.000Z",
-        entityType: "VISITATION",
-        eventType: "VISITATION",
+        eventId: "event-1",
+        calendarId: "calendar-1",
+        calendarOwnerName: "Visitor B",
+        calendarOwnerUserId: "user-456",
+        createdByName: "Visitor B",
+        createdByUserId: "user-456",
+        entityType: "EVENT_MEMBER",
+        eventDescription: "Pastoral visit",
+        eventEnd: "2026-06-04T16:00:00.000Z",
+        eventLocation: "123 Main St",
+        eventStart: "2026-06-04T15:00:00.000Z",
+        eventTitle: "Visitation: Adel Abraham",
+        isOwnCalendar: false,
+        memberName: "Adel Abraham",
         memberId: "member-1",
-        sourceEventId: "event-1",
-        status: "confirmed",
+        assignmentStatus: "scheduled",
         tenantId: "tenant-abc",
         updatedAt: "2026-06-04T16:00:00.000Z",
-        visitDate: "2026-06-04T15:00:00.000Z",
-        visitationId: "calendar-1:event-1:member-1",
-        visitorDisplayName: "Visitor B",
-        visitorUserId: "user-456",
+        visitStatus: "scheduled",
       },
     ],
   });
@@ -1383,28 +1413,28 @@ test("member visitation history merges duplicate Unity member rows for the same 
             return {
               Items: [
                 {
-                  PK: "TENANT#tenant-abc#CALENDAR#calendar-1#EVENT#event-1",
-                  SK: "VISIT#member-1",
-                  GSI1PK: "TENANT#tenant-abc",
-                  GSI1SK: "VISIT#2026-06-04T15:00:00.000Z#VISITOR#user-456#MEMBER#member-1#VISITATION#calendar-1:event-1:member-1",
+                  PK: "TENANT#tenant-abc#EVENT#event-1",
+                  SK: "MEMBER#member-1",
                   GSI2PK: "TENANT#tenant-abc#MEMBER#member-1",
-                  GSI2SK: "VISIT#2026-06-04T15:00:00.000Z#VISITATION#calendar-1:event-1:member-1",
+                  GSI2SK: "EVENT#2026-06-04T15:00:00.000Z#event-1",
                   createdAt: "2026-06-03T12:00:00.000Z",
                   updatedAt: "2026-06-04T16:00:00.000Z",
-                  entityType: "VISITATION",
+                  entityType: "EVENT_MEMBER",
                   tenantId: "tenant-abc",
                   calendarId: "calendar-1",
-                  visitationId: "calendar-1:event-1:member-1",
+                  eventId: "event-1",
+                  calendarOwnerUserId: "user-456",
+                  calendarOwnerName: "Visitor B",
                   memberId: "member-1",
-                  memberNameSnapshot: "Bassem Wanis",
-                  memberSourceSnapshot: "UNITY",
-                  visitorUserId: "user-456",
-                  visitorDisplayName: "Visitor B",
-                  visitDate: "2026-06-04T15:00:00.000Z",
-                  sourceEventId: "event-1",
-                  ownerUserId: "user-456",
-                  eventType: "VISITATION",
-                  status: "confirmed",
+                  memberName: "Bassem Wanis",
+                  sourceSnapshot: "UNITY",
+                  eventTitle: "Visitation: Bassem Wanis",
+                  eventStart: "2026-06-04T15:00:00.000Z",
+                  eventEnd: "2026-06-04T16:00:00.000Z",
+                  assignmentStatus: "scheduled",
+                  visitStatus: "scheduled",
+                  createdByUserId: "user-456",
+                  createdByName: "Visitor B",
                 },
               ],
             };
@@ -1414,28 +1444,28 @@ test("member visitation history merges duplicate Unity member rows for the same 
             return {
               Items: [
                 {
-                  PK: "TENANT#tenant-abc#CALENDAR#calendar-2#EVENT#event-2",
-                  SK: "VISIT#member-2",
-                  GSI1PK: "TENANT#tenant-abc",
-                  GSI1SK: "VISIT#2026-06-05T15:00:00.000Z#VISITOR#user-789#MEMBER#member-2#VISITATION#calendar-2:event-2:member-2",
+                  PK: "TENANT#tenant-abc#EVENT#event-2",
+                  SK: "MEMBER#member-2",
                   GSI2PK: "TENANT#tenant-abc#MEMBER#member-2",
-                  GSI2SK: "VISIT#2026-06-05T15:00:00.000Z#VISITATION#calendar-2:event-2:member-2",
+                  GSI2SK: "EVENT#2026-06-05T15:00:00.000Z#event-2",
                   createdAt: "2026-06-03T12:00:00.000Z",
                   updatedAt: "2026-06-05T16:00:00.000Z",
-                  entityType: "VISITATION",
+                  entityType: "EVENT_MEMBER",
                   tenantId: "tenant-abc",
                   calendarId: "calendar-2",
-                  visitationId: "calendar-2:event-2:member-2",
+                  eventId: "event-2",
+                  calendarOwnerUserId: "user-789",
+                  calendarOwnerName: "Visitor C",
                   memberId: "member-2",
-                  memberNameSnapshot: "Bassem Wanis",
-                  memberSourceSnapshot: "UNITY",
-                  visitorUserId: "user-789",
-                  visitorDisplayName: "Visitor C",
-                  visitDate: "2026-06-05T15:00:00.000Z",
-                  sourceEventId: "event-2",
-                  ownerUserId: "user-789",
-                  eventType: "VISITATION",
-                  status: "confirmed",
+                  memberName: "Bassem Wanis",
+                  sourceSnapshot: "UNITY",
+                  eventTitle: "Visitation: Bassem Wanis",
+                  eventStart: "2026-06-05T15:00:00.000Z",
+                  eventEnd: "2026-06-05T16:00:00.000Z",
+                  assignmentStatus: "scheduled",
+                  visitStatus: "scheduled",
+                  createdByUserId: "user-789",
+                  createdByName: "Visitor C",
                 },
               ],
             };
@@ -1474,10 +1504,10 @@ test("member visitation history merges duplicate Unity member rows for the same 
   ) as APIGatewayProxyStructuredResultV2;
 
   assert.equal(response.statusCode, 200);
-  const body = JSON.parse(String(response.body)) as { items: Array<{ visitationId: string }> };
-  assert.deepEqual(body.items.map((item) => item.visitationId), [
-    "calendar-2:event-2:member-2",
-    "calendar-1:event-1:member-1",
+  const body = JSON.parse(String(response.body)) as { items: Array<{ eventId: string }> };
+  assert.deepEqual(body.items.map((item) => item.eventId), [
+    "event-1",
+    "event-2",
   ]);
 });
 
@@ -1510,7 +1540,6 @@ test("visitation reports default to all visitors and support only-my-visits filt
                 visitDate: "2026-06-05T15:00:00.000Z",
                 sourceEventId: "event-1",
                 ownerUserId: "user-123",
-                eventType: "VISITATION",
                 status: "confirmed",
               },
               {
@@ -1534,7 +1563,6 @@ test("visitation reports default to all visitors and support only-my-visits filt
                 visitDate: "2026-06-04T15:00:00.000Z",
                 sourceEventId: "event-2",
                 ownerUserId: "user-456",
-                eventType: "VISITATION",
                 status: "confirmed",
               },
             ],
@@ -1705,4 +1733,389 @@ test("schedule overview excludes user-owned records from a different tenant", as
       calendarListRefreshThresholdMinutes: 30,
     },
   });
+});
+
+test("refreshing calendars returns a reconnect message when the stored Google token lacks calendar scope", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          return {
+            Item: {
+              PK: "USER#user-123",
+              SK: "GOOGLE_CONNECTION",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "google_connection",
+              userId: "user-123",
+              tenantId: "tenant-abc",
+              googleAccountId: "google-account",
+              email: "owner@example.com",
+              accessToken: "token-123",
+              scopes: ["openid", "email", "profile"],
+              status: "connected",
+              connectedAt: "2026-06-03T12:00:00.000Z",
+              lastConnectedAt: "2026-06-03T12:00:00.000Z",
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () => {
+      throw new Error("Google Calendar should not be called when scopes are already known to be insufficient.");
+    },
+    now: () => "2026-06-09T12:00:00.000Z",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/calendars/refresh",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 400);
+  assert.match(String(response.body), /Disconnect and reconnect Google Calendar/);
+  const failedConnectionWrite = commands.find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string; status?: string } | undefined)?.entityType === "google_connection",
+  );
+  assert.equal((failedConnectionWrite?.input.Item as { status?: string } | undefined)?.status, "error");
+});
+
+test("refreshing calendars maps Google scope 403 errors to a reconnect message", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          return {
+            Item: {
+              PK: "USER#user-123",
+              SK: "GOOGLE_CONNECTION",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "google_connection",
+              userId: "user-123",
+              tenantId: "tenant-abc",
+              googleAccountId: "google-account",
+              email: "owner@example.com",
+              accessToken: "token-123",
+              scopes: ["https://www.googleapis.com/auth/calendar"],
+              status: "connected",
+              connectedAt: "2026-06-03T12:00:00.000Z",
+              lastConnectedAt: "2026-06-03T12:00:00.000Z",
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () =>
+      ({
+        ok: false,
+        status: 403,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              code: 403,
+              message: "Request had insufficient authentication scopes.",
+              status: "PERMISSION_DENIED",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                  reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+                },
+              ],
+            },
+          }),
+      }) as Response,
+    now: () => "2026-06-09T12:00:00.000Z",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/calendars/refresh",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 400);
+  assert.match(String(response.body), /Disconnect and reconnect Google Calendar/);
+  const failedConnectionWrite = [...commands]
+    .reverse()
+    .find(
+      (command) =>
+        command.name === "PutCommand" &&
+        (command.input.Item as { entityType?: string; status?: string } | undefined)?.entityType === "google_connection",
+    );
+  assert.equal((failedConnectionWrite?.input.Item as { status?: string } | undefined)?.status, "error");
+});
+
+test("clearing a calendar cache deletes cached events without deleting tenant-shared assignments", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          return {
+            Item: {
+              PK: "USER#user-123",
+              SK: "CALENDAR#calendar-1",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "schedule_calendar",
+              userId: "user-123",
+              tenantId: "tenant-abc",
+              calendarId: "calendar-1",
+              summary: "Main Calendar",
+              primary: true,
+              enabled: true,
+              selected: true,
+              sync: {
+                syncMode: "ALWAYS_GOOGLE",
+                refreshIntervalMinutes: 15,
+                initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                lastSyncStatus: "success",
+                requiresFullSync: false,
+              },
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          return {
+            Items: [
+              {
+                PK: "USER#user-123",
+                SK: "EVENT#calendar-1#google-event-1",
+                GSI1PK: "USER#user-123#CALENDAR#calendar-1",
+                GSI1SK: "EVENT#2026-06-05T15:00:00.000Z#google-event-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_event",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                eventId: "google-event-1",
+                googleEventId: "google-event-1",
+                calendarName: "Main Calendar",
+                summary: "Visitation: Adel Abraham",
+                start: "2026-06-05T15:00:00.000Z",
+                end: "2026-06-05T16:00:00.000Z",
+                allDay: false,
+                status: "confirmed",
+                source: "GOOGLE",
+              },
+            ],
+          };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-09T12:00:00.000Z",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/calendars/calendar-1/cache",
+      pathParameters: { calendarId: "calendar-1" },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "viewer@example.com",
+              name: "Viewer A",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "DELETE",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const deleteCommands = commands.filter((command) => command.name === "DeleteCommand");
+  assert.deepEqual(deleteCommands.map((command) => command.input.Key), [
+    {
+      PK: "USER#user-123",
+      SK: "EVENT#calendar-1#google-event-1",
+    },
+  ]);
+});
+
+test("creating a schedule event stores the Google event id as the canonical event id", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "google_connection",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account",
+                email: "owner@example.com",
+                accessToken: "token-123",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-03T12:00:00.000Z",
+                lastConnectedAt: "2026-06-03T12:00:00.000Z",
+              },
+            };
+          }
+
+          if (key.SK === "CALENDAR#calendar-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "CALENDAR#calendar-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_calendar",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                summary: "Main Calendar",
+                primary: true,
+                enabled: true,
+                selected: true,
+                sync: {
+                  syncMode: "ALWAYS_GOOGLE",
+                  refreshIntervalMinutes: 15,
+                  initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                  lastSyncStatus: "idle",
+                  requiresFullSync: false,
+                },
+              },
+            };
+          }
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () =>
+      ({
+        ok: true,
+        json: async () => ({
+          id: "google-event-1",
+          summary: "Visitation: Adel Abraham",
+          start: { dateTime: "2026-06-05T15:00:00.000Z" },
+          end: { dateTime: "2026-06-05T16:00:00.000Z" },
+          status: "confirmed",
+        }),
+      }) as Response,
+    now: () => "2026-06-03T12:00:00.000Z",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events",
+      body: JSON.stringify({
+        calendarId: "calendar-1",
+        summary: "Visitation: Adel Abraham",
+        start: "2026-06-05T15:00:00.000Z",
+        end: "2026-06-05T16:00:00.000Z",
+        memberIds: [],
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 201);
+  const putEventCommand = commands.find(
+    (command) =>
+      command.name === "PutCommand" &&
+      String((command.input.Item as { entityType?: string }).entityType) === "schedule_event",
+  );
+  assert.equal((putEventCommand?.input.Item as { eventId?: string }).eventId, "google-event-1");
+  assert.equal((putEventCommand?.input.Item as { SK?: string }).SK, "EVENT#calendar-1#google-event-1");
 });

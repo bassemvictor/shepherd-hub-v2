@@ -18,15 +18,15 @@ import { api } from "../lib/api";
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
 const formatVisitDateTime = (event: MemberVisitation) => {
-  if (event.allDay || isDateOnlyValue(event.visitDate)) {
-    const [year, month, day] = event.visitDate.slice(0, 10).split("-").map(Number);
+  if (isDateOnlyValue(event.eventStart)) {
+    const [year, month, day] = event.eventStart.slice(0, 10).split("-").map(Number);
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(year, month - 1, day));
   }
 
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(event.visitDate));
+  }).format(new Date(event.eventStart));
 };
 
 export const MemberDetailPage = () => {
@@ -64,10 +64,7 @@ export const MemberDetailPage = () => {
     void loadMember();
   }, [loadMember]);
 
-  const visitationEvents = useMemo(
-    () => events.filter((item) => item.eventType === "VISITATION"),
-    [events],
-  );
+  const visitationEvents = useMemo(() => events, [events]);
 
   const quickActions = useMemo(() => {
     if (!member) {
@@ -191,7 +188,7 @@ export const MemberDetailPage = () => {
               <Button
                 className="w-full"
                 size="sm"
-                onClick={() => navigate(`/calendar/schedule?memberId=${member.memberId}&eventType=VISITATION`)}
+                onClick={() => navigate(`/calendar/schedule?memberId=${member.memberId}`)}
                 type="button"
               >
                 Schedule
@@ -201,12 +198,16 @@ export const MemberDetailPage = () => {
                   {visitationEvents.map((event) => (
                     <button
                       className="w-full rounded-md border border-border bg-white px-3 py-2.5 text-left transition-colors hover:border-primary/25 hover:bg-accent"
-                      key={event.visitationId}
+                      key={`${event.eventId}:${event.memberId}`}
                       type="button"
                     >
                       <div className="text-xs font-semibold text-primary">{formatMemberEventLabel(event)}</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">{event.visitorDisplayName}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{event.eventTitle}</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">{formatVisitDateTime(event)}</div>
+                      {event.eventLocation ? (
+                        <div className="mt-1 text-xs text-muted-foreground">{event.eventLocation}</div>
+                      ) : null}
+                      <div className="mt-1 text-xs text-muted-foreground">Visit status: {event.visitStatus}</div>
                     </button>
                   ))}
                 </div>

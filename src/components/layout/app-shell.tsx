@@ -37,7 +37,9 @@ export const AppShell = () => {
           <div className="flex min-h-full flex-col">
             <div className="mb-4 flex items-center justify-between">
               <div className="min-w-0">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-blue-200/80">Starter Template</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] text-blue-200/80">
+                  {user?.tenantId ?? "No Tenant Assigned"}
+                </p>
                 <div className="mt-1.5 flex items-center gap-2">
                   <Sparkles className="h-5 w-5" />
                   <h1 className="truncate text-base font-semibold sm:text-lg">Shepherd Hub 2.0</h1>
@@ -55,9 +57,9 @@ export const AppShell = () => {
             <SideMenu onNavigate={() => setSidebarOpen(false)} user={user} />
 
             <div className="rounded-md border border-white/10 bg-white/6 p-3">
-              <p className="text-sm font-medium text-white">Reusable app foundation</p>
+              <p className="text-sm font-medium text-white">Shepherd Hub v0.2.15</p>
               <p className="mt-1 text-xs text-blue-100/70">
-                Keep the shell, auth flow, API wiring, and CRUD patterns. Replace sample pages as your project grows.
+                Coordinate tenant {user?.tenantId ?? "unassigned"} events and member visitations.  
               </p>
             </div>
           </div>

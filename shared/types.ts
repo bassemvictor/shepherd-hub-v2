@@ -85,7 +85,6 @@ export type ScheduleEvent = EntityEnvelope & {
   status: string;
   source: SyncSource;
   htmlLink?: string;
-  eventType?: MemberEventType;
   assignedMemberIds?: string[];
   assignedMemberNames?: string[];
   memberIds?: string[];
@@ -141,7 +140,6 @@ export type CreateScheduleEventInput = {
   start: string;
   end: string;
   allDay?: boolean;
-  eventType?: MemberEventType;
   memberIds?: string[];
 };
 
@@ -154,7 +152,6 @@ export type UpdateScheduleEventInput = {
   start?: string;
   end?: string;
   allDay?: boolean;
-  eventType?: MemberEventType;
   memberIds?: string[];
 };
 
@@ -163,7 +160,6 @@ export type ConnectGoogleResponse = {
 };
 
 export type MemberSource = "UNITY" | "MANUAL";
-export type MemberEventType = "VISITATION" | "GENERAL";
 
 export type MemberIndexItem = {
   memberId: string;
@@ -230,15 +226,22 @@ export type MemberIndexResponse = {
 };
 
 export type MemberVisitation = EntityEnvelope & {
-  visitationId: string;
+  eventId: string;
+  calendarId: string;
+  calendarOwnerUserId: string;
+  calendarOwnerName: string;
+  eventTitle: string;
+  eventStart: string;
+  eventEnd: string;
+  eventLocation?: string;
+  eventDescription?: string;
   memberId: string;
-  visitorUserId: string;
-  visitorDisplayName: string;
-  visitDate: string;
-  sourceEventId?: string;
-  allDay?: boolean;
-  eventType: MemberEventType;
-  status: string;
+  memberName: string;
+  visitStatus: string;
+  assignmentStatus: string;
+  createdByUserId: string;
+  createdByName: string;
+  isOwnCalendar: boolean;
 };
 
 export type VisitationReportItem = MemberVisitation & {

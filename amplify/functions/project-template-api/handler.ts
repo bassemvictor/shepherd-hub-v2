@@ -29,7 +29,6 @@ import type {
   MemberActivity,
   MemberDetailResponse,
   MemberDirectoryResponse,
-  MemberEventType,
   MemberVisitation,
   MemberImportInput,
   MemberImportResult,
@@ -125,7 +124,6 @@ type EventItem = BaseItem & {
   status: string;
   source: SyncSource;
   htmlLink?: string;
-  eventType?: MemberEventType;
   memberIds?: string[];
   memberNames?: string[];
 };
@@ -143,7 +141,6 @@ type VisitationItem = BaseItem & {
   sourceEventId?: string;
   ownerUserId: string;
   allDay?: boolean;
-  eventType: MemberEventType;
   status: string;
 };
 
@@ -155,18 +152,24 @@ type EventMemberItem = BaseItem & {
   tenantId: string;
   calendarId: string;
   eventId: string;
+  calendarOwnerUserId: string;
+  calendarOwnerName: string;
   memberId: string;
-  memberNameSnapshot: string;
+  memberName: string;
   memberPhoneSnapshot?: string;
   memberEmailSnapshot?: string;
   unityIdSnapshot?: string;
   sourceSnapshot: MemberSource;
-  eventTitleSnapshot: string;
-  eventStartDateTime: string;
-  eventEndDateTime: string;
+  eventTitle: string;
+  eventStart: string;
+  eventEnd: string;
+  eventLocation?: string;
+  eventDescription?: string;
   allDay?: boolean;
-  eventType: MemberEventType;
-  status: string;
+  assignmentStatus: string;
+  visitStatus: string;
+  createdByUserId: string;
+  createdByName: string;
 };
 
 type MemberActivityItem = BaseItem & {
@@ -266,6 +269,7 @@ const GOOGLE_SCOPES = [
   "profile",
   "https://www.googleapis.com/auth/calendar",
 ];
+const GOOGLE_REQUIRED_SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -274,6 +278,16 @@ const GOOGLE_CALENDAR_EVENTS_URL = (calendarId: string) =>
   `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
 const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 const GSI1_NAME = "GSI1";
+
+class HttpError extends Error {
+  statusCode: number;
+
+  constructor(statusCode: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+    this.statusCode = statusCode;
+  }
+}
 
 const json = (statusCode: number, body: unknown) => ({
   statusCode,
@@ -359,8 +373,7 @@ const memberGsiPk = (tenantId: string) => `TENANT#${tenantId}#MEMBERS`;
 const memberGsiSk = (normalizedName: string, memberId: string) => `NAME#${normalizedName}#MEMBER#${memberId}`;
 const memberUnityGsiPk = (tenantId: string) => `TENANT#${tenantId}#UNITY`;
 const memberUnityGsiSk = (unityId: string) => `UNITY#${unityId}`;
-const tenantEventPk = (tenantId: string, calendarId: string, eventId: string) =>
-  `TENANT#${tenantId}#CALENDAR#${calendarId}#EVENT#${eventId}`;
+const tenantEventPk = (tenantId: string, eventId: string) => `TENANT#${tenantId}#EVENT#${eventId}`;
 const eventMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const tenantMemberPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
 const memberEventGsiPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
@@ -551,6 +564,17 @@ const toConnectionSummary = (item: GoogleConnectionItem): GoogleConnectionSummar
   tokenExpiresAt: item.tokenExpiresAt,
 });
 
+const normalizeScopeList = (scopes: string[] | undefined) =>
+  [...new Set((scopes ?? []).map((scope) => String(scope).trim()).filter(Boolean))];
+
+const hasRequiredGoogleScopes = (scopes: string[] | undefined) => {
+  const normalized = new Set(normalizeScopeList(scopes));
+  return GOOGLE_REQUIRED_SCOPES.every((scope) => normalized.has(scope));
+};
+
+const googleReconnectMessage =
+  "Google Calendar access is missing the required calendar scope. Disconnect and reconnect Google Calendar, then approve calendar access.";
+
 const toScheduleSettings = (item?: ScheduleSettingsItem | null): ScheduleSettings => ({
   calendarListRefreshThresholdMinutes:
     item?.calendarListRefreshThresholdMinutes ?? defaultCalendarListRefreshThresholdMinutes,
@@ -597,7 +621,6 @@ const toScheduleEvent = (item: EventItem): ScheduleEvent => ({
   summary: item.summary,
   tenantId: item.tenantId,
   updatedAt: item.updatedAt,
-  eventType: item.eventType,
   assignedMemberIds: item.memberIds,
   assignedMemberNames: item.memberNames,
   memberIds: item.memberIds,
@@ -663,28 +686,35 @@ const toMemberIndexItem = (item: MemberItem): MemberIndexItem => ({
 
 const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({
   memberId: item.memberId,
-  fullName: item.memberNameSnapshot,
-  initials: toInitials(item.memberNameSnapshot),
+  fullName: item.memberName,
+  initials: toInitials(item.memberName),
   phone: item.memberPhoneSnapshot,
   email: item.memberEmailSnapshot,
   unityId: item.unityIdSnapshot,
   source: item.sourceSnapshot,
 });
 
-const toMemberVisitation = (item: VisitationItem): MemberVisitation => ({
-  allDay: item.allDay,
+const toMemberVisitation = (item: EventMemberItem, currentUserId: string): MemberVisitation => ({
   createdAt: item.createdAt,
   entityType: item.entityType,
-  visitationId: item.visitationId,
-  eventType: item.eventType,
+  eventId: item.eventId,
+  calendarId: item.calendarId,
+  calendarOwnerUserId: item.calendarOwnerUserId,
+  calendarOwnerName: item.calendarOwnerName,
+  eventTitle: item.eventTitle,
+  eventStart: item.eventStart,
+  eventEnd: item.eventEnd,
+  eventLocation: item.eventLocation,
+  eventDescription: item.eventDescription,
   memberId: item.memberId,
-  sourceEventId: item.sourceEventId,
-  status: item.status,
+  memberName: item.memberName,
+  visitStatus: item.visitStatus,
+  assignmentStatus: item.assignmentStatus,
   tenantId: item.tenantId,
   updatedAt: item.updatedAt,
-  visitDate: item.visitDate,
-  visitorDisplayName: item.visitorDisplayName,
-  visitorUserId: item.visitorUserId,
+  createdByUserId: item.createdByUserId,
+  createdByName: item.createdByName,
+  isOwnCalendar: item.calendarOwnerUserId === currentUserId,
 });
 
 const toMemberActivity = (item: MemberActivityItem): MemberActivity => ({
@@ -1035,6 +1065,21 @@ const putGoogleConnection = async (
   return connection;
 };
 
+const markGoogleConnectionScopeError = async (
+  context: RequestContext,
+  connection: GoogleConnectionItem,
+  deps: HandlerDependencies,
+) => {
+  const failedConnection: GoogleConnectionItem = {
+    ...connection,
+    status: "error",
+    updatedAt: deps.now(),
+  };
+
+  await putGoogleConnection(context, failedConnection, deps);
+  return failedConnection;
+};
+
 const deleteGoogleConnection = async (context: RequestContext, deps: HandlerDependencies) => {
   await deps.documentClient.send(
     new DeleteCommand({
@@ -1175,7 +1220,6 @@ const persistEventWithMemberAssignments = async (
 ) => {
   const normalizedEvent: EventItem = {
     ...event,
-    eventType: event.eventType ?? "GENERAL",
     updatedAt: deps.now(),
   };
   const assignedMembers = await syncEventMembers(context, normalizedEvent, normalizedEvent.memberIds ?? [], deps);
@@ -1303,26 +1347,7 @@ const listMemberEvents = async (context: RequestContext, memberId: string, deps:
     TableName: context.tableName,
   });
 
-  return (items as EventMemberItem[]).sort((left, right) => left.eventStartDateTime.localeCompare(right.eventStartDateTime));
-};
-
-const listMemberVisitations = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
-  const items = await queryAll(deps.documentClient, {
-    ExpressionAttributeNames: {
-      "#gsiPk": "GSI2PK",
-      "#gsiSk": "GSI2SK",
-    },
-    ExpressionAttributeValues: {
-      ":gsiPk": tenantMemberPk(context.tenantId, memberId),
-      ":from": "VISIT#",
-      ":to": "VISIT#~",
-    },
-    IndexName: "GSI2",
-    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
-    TableName: context.tableName,
-  });
-
-  return (items as VisitationItem[]).sort((left, right) => right.visitDate.localeCompare(left.visitDate));
+  return (items as EventMemberItem[]).sort((left, right) => left.eventStart.localeCompare(right.eventStart));
 };
 
 const listVisitationsForMemberRecord = async (context: RequestContext, member: MemberItem, deps: HandlerDependencies) => {
@@ -1330,11 +1355,11 @@ const listVisitationsForMemberRecord = async (context: RequestContext, member: M
     ? await listMembersByUnityId(context, member.unityId, deps)
     : [member];
   const memberIds = [...new Set(relatedMembers.map((item) => item.memberId))];
-  const visitations = await Promise.all(memberIds.map((memberId) => listMemberVisitations(context, memberId, deps)));
+  const visitations = await Promise.all(memberIds.map((memberId) => listMemberEvents(context, memberId, deps)));
 
   return visitations
     .flat()
-    .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
+    .sort((left, right) => left.eventStart.localeCompare(right.eventStart));
 };
 
 const listVisitationsForEvent = async (
@@ -1349,7 +1374,7 @@ const listVisitationsForEvent = async (
       "#sk": "SK",
     },
     ExpressionAttributeValues: {
-      ":pk": tenantEventPk(context.tenantId, calendarId, eventId),
+      ":pk": tenantEventPk(context.tenantId, eventId),
       ":visitPrefix": "VISIT#",
     },
     KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :visitPrefix)",
@@ -1390,14 +1415,14 @@ const listEventMembers = async (
       "#sk": "SK",
     },
     ExpressionAttributeValues: {
-      ":pk": tenantEventPk(context.tenantId, calendarId, eventId),
+      ":pk": tenantEventPk(context.tenantId, eventId),
       ":memberPrefix": "MEMBER#",
     },
     KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :memberPrefix)",
     TableName: context.tableName,
   });
 
-  return (items as EventMemberItem[]).sort((left, right) => left.memberNameSnapshot.localeCompare(right.memberNameSnapshot));
+  return (items as EventMemberItem[]).sort((left, right) => left.memberName.localeCompare(right.memberName));
 };
 
 const putMember = async (context: RequestContext, member: MemberItem, deps: HandlerDependencies) => {
@@ -1523,6 +1548,7 @@ const syncEventMembers = async (
   deps: HandlerDependencies,
 ) => {
   const current = await listEventMembers(context, event.calendarId, event.eventId, deps);
+  const currentByMemberId = new Map(current.map((item) => [item.memberId, item]));
   const currentIds = new Set(current.map((item) => item.memberId));
   const nextIds = [...new Set(memberIds.filter(Boolean))];
 
@@ -1553,7 +1579,7 @@ const syncEventMembers = async (
 
     transactItems.push({
       Delete: {
-        Key: { PK: tenantEventPk(context.tenantId, event.calendarId, event.eventId), SK: eventMemberSk(item.memberId) },
+        Key: { PK: tenantEventPk(context.tenantId, event.eventId), SK: eventMemberSk(item.memberId) },
         TableName: context.tableName,
       },
     });
@@ -1569,33 +1595,40 @@ const syncEventMembers = async (
 
   for (const memberId of nextIds) {
     const member = membersById.get(memberId);
+    const existingAssignment = currentByMemberId.get(memberId);
     if (!member) {
       continue;
     }
 
     const eventMember: EventMemberItem = {
-      PK: tenantEventPk(context.tenantId, event.calendarId, event.eventId),
+      PK: tenantEventPk(context.tenantId, event.eventId),
       SK: eventMemberSk(memberId),
       GSI2PK: memberEventGsiPk(context.tenantId, memberId),
       GSI2SK: memberEventGsiSk(event.start, event.eventId),
-      createdAt: event.createdAt,
+      createdAt: existingAssignment?.createdAt ?? event.createdAt,
       updatedAt: deps.now(),
       entityType: "EVENT_MEMBER",
       tenantId: context.tenantId,
       calendarId: event.calendarId,
       eventId: event.eventId,
+      calendarOwnerUserId: event.userId,
+      calendarOwnerName: context.actorName,
       memberId,
-      memberNameSnapshot: member.fullName,
+      memberName: member.fullName,
       memberPhoneSnapshot: member.phone,
       memberEmailSnapshot: member.email,
       unityIdSnapshot: member.unityId,
       sourceSnapshot: member.source,
-      eventTitleSnapshot: event.summary,
-      eventStartDateTime: event.start,
-      eventEndDateTime: event.end,
+      eventTitle: event.summary,
+      eventStart: event.start,
+      eventEnd: event.end,
+      eventLocation: event.location,
+      eventDescription: event.description,
       allDay: event.allDay,
-      eventType: event.eventType ?? "GENERAL",
-      status: event.status,
+      assignmentStatus: event.status === "cancelled" ? "cancelled" : "scheduled",
+      visitStatus: event.status === "cancelled" ? "cancelled" : "scheduled",
+      createdByUserId: existingAssignment?.createdByUserId ?? context.actorSub,
+      createdByName: existingAssignment?.createdByName ?? context.actorName,
     };
 
     transactItems.push({
@@ -1609,10 +1642,10 @@ const syncEventMembers = async (
       await logMemberActivity(
         context,
         memberId,
-        event.eventType === "VISITATION" ? "Visitation Scheduled" : "Member Assigned To Event",
+        "Visitation Scheduled",
         `${event.summary} scheduled for ${member.fullName}.`,
         deps,
-        { eventId: event.eventId, eventType: event.eventType ?? "GENERAL" },
+        { eventId: event.eventId },
       );
     }
   }
@@ -1636,7 +1669,7 @@ const syncVisitationRecords = async (
 ) => {
   const existingRecords = await listVisitationsForEvent(context, event.calendarId, event.eventId, deps);
   const existingMemberIds = new Set(existingRecords.map((item) => item.memberId));
-  const nextMembers = event.eventType === "VISITATION" ? members : [];
+  const nextMembers = members;
   const nextMemberIds = new Set(nextMembers.map((item) => item.memberId));
 
   for (const record of existingRecords) {
@@ -1647,7 +1680,7 @@ const syncVisitationRecords = async (
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
-          PK: tenantEventPk(context.tenantId, event.calendarId, event.eventId),
+          PK: tenantEventPk(context.tenantId, event.eventId),
           SK: visitationSk(record.memberId),
         },
         TableName: context.tableName,
@@ -1655,14 +1688,10 @@ const syncVisitationRecords = async (
     );
   }
 
-  if (event.eventType !== "VISITATION") {
-    return;
-  }
-
   for (const member of nextMembers) {
     const visitationId = `${event.calendarId}:${event.eventId}:${member.memberId}`;
     const record: VisitationItem = {
-      PK: tenantEventPk(context.tenantId, event.calendarId, event.eventId),
+      PK: tenantEventPk(context.tenantId, event.eventId),
       SK: visitationSk(member.memberId),
       GSI1PK: tenantPk(context.tenantId),
       GSI1SK: tenantVisitationGsiSk(event.start, context.actorSub, member.memberId, visitationId),
@@ -1685,7 +1714,6 @@ const syncVisitationRecords = async (
       sourceEventId: event.eventId,
       ownerUserId: event.userId,
       allDay: event.allDay,
-      eventType: "VISITATION",
       status: event.status,
     };
 
@@ -1725,13 +1753,21 @@ const loadMembersByIds = async (context: RequestContext, memberIds: string[], de
   return normalizedIds.map((memberId) => membersById.get(memberId)).filter(Boolean) as MemberItem[];
 };
 
-const deleteEventMemberLinks = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
+const deleteCachedEventOnly = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
+  await deleteEvent(context, event.calendarId, event.eventId, deps);
+};
+
+const deleteEventMemberAssignmentsForEvent = async (
+  context: RequestContext,
+  event: Pick<EventItem, "calendarId" | "eventId">,
+  deps: HandlerDependencies,
+) => {
   const existingMembers = await listEventMembers(context, event.calendarId, event.eventId, deps);
   for (const member of existingMembers) {
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
-          PK: tenantEventPk(context.tenantId, event.calendarId, event.eventId),
+          PK: tenantEventPk(context.tenantId, event.eventId),
           SK: eventMemberSk(member.memberId),
         },
         TableName: context.tableName,
@@ -1741,14 +1777,14 @@ const deleteEventMemberLinks = async (context: RequestContext, event: EventItem,
 };
 
 const deleteStoredEvent = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
-  await deleteEvent(context, event.calendarId, event.eventId, deps);
-  await deleteEventMemberLinks(context, event, deps);
+  await deleteCachedEventOnly(context, event, deps);
+  await deleteEventMemberAssignmentsForEvent(context, event, deps);
   const visitationRecords = await listVisitationsForEvent(context, event.calendarId, event.eventId, deps);
   for (const record of visitationRecords) {
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
-          PK: tenantEventPk(context.tenantId, event.calendarId, event.eventId),
+          PK: tenantEventPk(context.tenantId, event.eventId),
           SK: visitationSk(record.memberId),
         },
         TableName: context.tableName,
@@ -1844,6 +1880,11 @@ const googleFetch = async (
   init?: RequestInit,
 ) => {
   const currentConnection = await refreshGoogleAccessTokenIfNeeded(context, connection, deps);
+  if (!hasRequiredGoogleScopes(currentConnection.scopes)) {
+    await markGoogleConnectionScopeError(context, currentConnection, deps);
+    throw new HttpError(400, googleReconnectMessage);
+  }
+
   const response = await deps.fetchImpl(url, {
     ...init,
     headers: {
@@ -1855,6 +1896,16 @@ const googleFetch = async (
 
   if (!response.ok) {
     const details = await response.text();
+    if (
+      response.status === 403 &&
+      (details.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT") ||
+        details.includes("insufficientPermissions") ||
+        details.includes("insufficient authentication scopes"))
+    ) {
+      await markGoogleConnectionScopeError(context, currentConnection, deps);
+      throw new HttpError(400, googleReconnectMessage);
+    }
+
     throw new Error(`Google Calendar request failed: ${details}`);
   }
 
@@ -2019,7 +2070,6 @@ const upsertGoogleEventIntoCache = async (
     status: googleEvent.status ?? "confirmed",
     source,
     htmlLink: googleEvent.htmlLink,
-    eventType: existingItem?.eventType,
     memberIds,
   };
   return await persistEventWithMemberAssignments(
@@ -2050,9 +2100,7 @@ const applyFullSync = async (
 
   const allExisting = await listAllEventsForCalendar(context, calendar.calendarId, deps);
   const existingByEventId = new Map(allExisting.map((event) => [event.eventId, event]));
-  for (const event of allExisting) {
-    await deleteStoredEvent(context, event, deps);
-  }
+  const seenEventIds = new Set<string>();
 
   let pageToken = "";
   let nextSyncToken = "";
@@ -2078,7 +2126,12 @@ const applyFullSync = async (
     };
 
     for (const event of payload.items ?? []) {
+      seenEventIds.add(event.id);
       if (event.status === "cancelled") {
+        const existingEvent = existingByEventId.get(event.id);
+        if (existingEvent) {
+          await deleteStoredEvent(context, existingEvent, deps);
+        }
         continue;
       }
 
@@ -2088,6 +2141,12 @@ const applyFullSync = async (
     pageToken = payload.nextPageToken ?? "";
     nextSyncToken = payload.nextSyncToken ?? nextSyncToken;
   } while (pageToken);
+
+  for (const event of allExisting) {
+    if (!seenEventIds.has(event.eventId)) {
+      await deleteCachedEventOnly(context, event, deps);
+    }
+  }
 
   const cachedEvents = await listEventsForCalendar(context, calendar.calendarId, timeMin, timeMax, deps);
   return {
@@ -2428,24 +2487,22 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
-          PK: tenantEventPk(context.tenantId, link.calendarId, link.eventId),
+          PK: tenantEventPk(context.tenantId, link.eventId),
           SK: eventMemberSk(memberId),
         },
         TableName: context.tableName,
       }),
     );
 
-    if (link.eventType === "VISITATION") {
-      await deps.documentClient.send(
-        new DeleteCommand({
-          Key: {
-            PK: tenantEventPk(context.tenantId, link.calendarId, link.eventId),
-            SK: visitationSk(memberId),
-          },
-          TableName: context.tableName,
-        }),
-      );
-    }
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantEventPk(context.tenantId, link.eventId),
+          SK: visitationSk(memberId),
+        },
+        TableName: context.tableName,
+      }),
+    );
   }
 
   await deps.documentClient.send(
@@ -2553,7 +2610,7 @@ const getMemberEventsResponse = async (context: RequestContext, memberId: string
   }
 
   const items = await listVisitationsForMemberRecord(context, member, deps);
-  return json(200, { items: items.map(toMemberVisitation) });
+  return json(200, { items: items.map((item) => toMemberVisitation(item, context.actorSub)) });
 };
 
 const getEventMembersResponse = async (
@@ -2589,7 +2646,6 @@ const updateEventMembersResponse = async (
 
   const updatedEvent: EventItem = {
     ...event,
-    eventType: event.eventType ?? "GENERAL",
     updatedAt: deps.now(),
   };
   const persistedEvent = await persistEventWithMemberAssignments(
@@ -2610,18 +2666,24 @@ const updateEventMembersResponse = async (
     tenantId: context.tenantId,
     calendarId: persistedEvent.calendarId,
     eventId: persistedEvent.eventId,
+    calendarOwnerUserId: persistedEvent.userId,
+    calendarOwnerName: context.actorName,
     memberId: member.memberId,
-    memberNameSnapshot: member.fullName,
+    memberName: member.fullName,
     memberPhoneSnapshot: member.phone,
     memberEmailSnapshot: member.email,
     unityIdSnapshot: member.unityId,
     sourceSnapshot: member.source,
-    eventTitleSnapshot: persistedEvent.summary,
-    eventStartDateTime: persistedEvent.start,
-    eventEndDateTime: persistedEvent.end,
+    eventTitle: persistedEvent.summary,
+    eventStart: persistedEvent.start,
+    eventEnd: persistedEvent.end,
+    eventLocation: persistedEvent.location,
+    eventDescription: persistedEvent.description,
     allDay: persistedEvent.allDay,
-    eventType: persistedEvent.eventType ?? "GENERAL",
-    status: persistedEvent.status,
+    assignmentStatus: persistedEvent.status === "cancelled" ? "cancelled" : "scheduled",
+    visitStatus: persistedEvent.status === "cancelled" ? "cancelled" : "scheduled",
+    createdByUserId: context.actorSub,
+    createdByName: context.actorName,
   })) });
 };
 
@@ -2692,10 +2754,10 @@ const getVisitationReport = async (
   for (const member of filteredMembers) {
     const memberEvents = await listMemberEvents(context, member.memberId, deps);
     const nextScheduled = memberEvents
-      .filter((item) => item.eventType === "VISITATION" && item.status !== "cancelled" && item.eventStartDateTime >= deps.now())
-      .sort((left, right) => left.eventStartDateTime.localeCompare(right.eventStartDateTime))[0];
+      .filter((item) => item.assignmentStatus !== "cancelled" && item.eventStart >= deps.now())
+      .sort((left, right) => left.eventStart.localeCompare(right.eventStart))[0];
     if (nextScheduled) {
-      nextScheduledVisitByMemberId.set(member.memberId, nextScheduled.eventStartDateTime);
+      nextScheduledVisitByMemberId.set(member.memberId, nextScheduled.eventStart);
     }
   }
 
@@ -2870,7 +2932,7 @@ const connectGoogle = async (context: RequestContext, deps: HandlerDependencies)
     redirect_uri: process.env.GOOGLE_REDIRECT_URI ?? "",
     response_type: "code",
     access_type: "offline",
-    prompt: "consent",
+    prompt: "consent select_account",
     include_granted_scopes: "true",
     scope: GOOGLE_SCOPES.join(" "),
     state,
@@ -2932,6 +2994,12 @@ const handleGoogleCallback = async (
   }
 
   const tokens = (await tokenResponse.json()) as GoogleTokenResponse;
+  const grantedScopes = normalizeScopeList(tokens.scope ? tokens.scope.split(" ") : GOOGLE_SCOPES);
+  if (!hasRequiredGoogleScopes(grantedScopes)) {
+    await deleteOAuthState(state, tableName, deps);
+    return html(400, `<h1>Google Calendar access was not granted.</h1><p>${googleReconnectMessage}</p>`);
+  }
+
   const profileResponse = await deps.fetchImpl(GOOGLE_USERINFO_URL, {
     headers: {
       authorization: `Bearer ${tokens.access_token}`,
@@ -2964,7 +3032,7 @@ const handleGoogleCallback = async (
     tokenExpiresAt: tokens.expires_in
       ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       : existing?.tokenExpiresAt,
-    scopes: tokens.scope ? tokens.scope.split(" ") : GOOGLE_SCOPES,
+    scopes: grantedScopes,
     status: "connected",
     connectedAt: existing?.connectedAt ?? now,
     lastConnectedAt: now,
@@ -3154,7 +3222,7 @@ const clearScheduleCache = async (context: RequestContext, deps: HandlerDependen
   for (const calendar of calendars) {
     const events = await listAllEventsForCalendar(context, calendar.calendarId, deps);
     for (const event of events) {
-      await deleteStoredEvent(context, event, deps);
+      await deleteCachedEventOnly(context, event, deps);
     }
 
     const resetCalendar: CalendarItem = {
@@ -3192,7 +3260,7 @@ const clearCalendarCache = async (
 
   const events = await listAllEventsForCalendar(context, calendar.calendarId, deps);
   for (const event of events) {
-    await deleteStoredEvent(context, event, deps);
+    await deleteCachedEventOnly(context, event, deps);
   }
 
   const resetCalendar: CalendarItem = {
@@ -3284,7 +3352,6 @@ const createScheduleEvent = async (
   const stored = await upsertGoogleEventIntoCache(context, calendar, created, "GOOGLE", undefined, deps);
   const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
-    eventType: input.eventType ?? "GENERAL",
     memberIds: input.memberIds ?? [],
   }, deps);
   return json(201, toScheduleEvent(updatedStored));
@@ -3325,7 +3392,6 @@ const updateScheduleEvent = async (
     start: input.start ?? existing.start,
     end: input.end ?? existing.end,
     allDay: input.allDay ?? existing.allDay,
-    eventType: input.eventType ?? existing.eventType,
     memberIds: input.memberIds ?? existing.memberIds,
   };
 
@@ -3349,7 +3415,6 @@ const updateScheduleEvent = async (
   const stored = await upsertGoogleEventIntoCache(context, calendar, updated, "GOOGLE", undefined, deps);
   const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
-    eventType: nextEvent.eventType ?? "GENERAL",
     memberIds: nextEvent.memberIds ?? [],
   }, deps);
   return json(200, toScheduleEvent(updatedStored));
@@ -3554,6 +3619,10 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       return json(404, { message: "Route not found." });
     } catch (error) {
+      if (error instanceof HttpError) {
+        return json(error.statusCode, { message: error.message });
+      }
+
       return json(500, {
         message: error instanceof Error ? error.message : "Unexpected server error.",
       });

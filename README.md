@@ -1,6 +1,4 @@
-# Project Starter Template
-
-This repo is a lightweight starter built from the original Tender App foundations. It keeps the same core stack and UX patterns, with the current app focused on members and calendar workflows.
+# Shepherd Hub
 
 ## What stays in the template
 

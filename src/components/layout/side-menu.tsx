@@ -40,13 +40,6 @@ const baseNavigation: NavigationSection[] = [
         icon: BarChart3,
         children: [
           { label: "Visitation Overview", href: "/reports/visitations" },
-          { label: "My Visitations", href: "/reports/my-visitations" },
-          { label: "Not Visited", href: "/reports/not-visited" },
-          { label: "Low Visitation", href: "/reports/low-visitation" },
-          { label: "Visitor Performance", href: "/reports/visitor-performance" },
-          { label: "Member Engagement", href: "/reports/member-engagement" },
-          { label: "Visit Trends", href: "/reports/visit-trends" },
-          { label: "Custom Report", href: "/reports/custom" },
         ],
       },
     ],
