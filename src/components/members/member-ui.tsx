@@ -342,7 +342,7 @@ export const MemberImportDialog = ({
 };
 
 export const formatMemberEventLabel = (event: MemberVisitation) =>
-  event.isOwnCalendar ? "In your calendar" : `In ${event.calendarOwnerName}'s calendar`;
+  event.isOwnCalendar ? "In your calendar" : `In ${event.calendarOwnerName ?? "shared"} calendar`;
 
 export const emptyMemberSelection = (items: MemberIndexItem[], memberIds: string[] = []) =>
   items.filter((item) => memberIds.includes(item.memberId));

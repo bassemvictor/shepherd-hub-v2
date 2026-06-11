@@ -1007,19 +1007,51 @@ export const SchedulePage = () => {
 
   useEffect(() => {
     const eventId = searchParams.get("eventId");
+    const calendarId = searchParams.get("calendarId");
     if (!eventId || editorOpen || deepLinkedEventRef.current === eventId) {
       return;
     }
 
     const matchingEvent = rawEvents.find((event) => event.eventId === eventId);
-    if (!matchingEvent) {
+    if (matchingEvent) {
+      openEditEditor(matchingEvent);
+      deepLinkedEventRef.current = eventId;
+      clearIntentSearchParams(["eventId", "date", "calendarId"]);
       return;
     }
 
-    openEditEditor(matchingEvent);
-    deepLinkedEventRef.current = eventId;
-    clearIntentSearchParams(["eventId", "date"]);
-  }, [clearIntentSearchParams, editorOpen, openEditEditor, rawEvents, searchParams]);
+    if (!calendarId) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const event = await api.get<ScheduleEvent>(
+          `/schedule/events/${eventId}?calendarId=${encodeURIComponent(calendarId)}`,
+        );
+        if (cancelled) {
+          return;
+        }
+
+        openEditEditor(event);
+        deepLinkedEventRef.current = eventId;
+        clearIntentSearchParams(["eventId", "date", "calendarId"]);
+      } catch (reason) {
+        if (cancelled) {
+          return;
+        }
+
+        const message = reason instanceof Error ? reason.message : "Unable to load event details.";
+        setError(message);
+        pushToast("error", message);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clearIntentSearchParams, editorOpen, openEditEditor, pushToast, rawEvents, searchParams]);
 
   const handleDeleteEvent = useCallback(async () => {
     if (!editingEvent) {

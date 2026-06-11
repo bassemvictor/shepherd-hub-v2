@@ -5,7 +5,9 @@ const routeTitleMap: Record<string, string> = {
   "/calendar": "Connect & Configure",
   "/calendar/schedule": "Schedule",
   "/members": "Congregation",
-  "/reports/visitations": "Visitation Overview",
+  "/reports/visitations": "Reports Dashboard",
+  "/reports/dashboard": "Reports Dashboard",
+  "/reports/member-visitation": "Member Visitation",
   "/auth": "Sign In",
 };
 

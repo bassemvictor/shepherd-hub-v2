@@ -1,58 +1,164 @@
-import { ArrowLeft, Ellipsis, Mail, MessageCircle, Phone, Trash2 } from "lucide-react";
+import { ArrowLeft, Ellipsis, Mail, MessageCircle, Phone } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import type { Member, MemberActivity, MemberDetailResponse, MemberVisitation } from "../../shared/types";
+import type {
+  CreateManualVisitationInput,
+  Member,
+  MemberActivity,
+  MemberDetailResponse,
+  MemberIndexItem,
+  MemberIndexResponse,
+  MemberVisitation,
+  UpdateManualVisitationInput,
+} from "../../shared/types";
+import { ConfirmDialog } from "../components/common/confirm-dialog";
+import { FormDrawer } from "../components/common/form-drawer";
+import { RightSideDrawer } from "../components/common/right-side-drawer";
 import {
   MemberAvatar,
+  MemberChip,
   MemberDetailsTabs,
   MemberFormDialog,
+  MemberSearchAutocomplete,
   UnityBadge,
-  formatMemberEventLabel,
+  emptyMemberSelection,
 } from "../components/members/member-ui";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
+import { Textarea } from "../components/ui/textarea";
 import { api } from "../lib/api";
 
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
-const formatVisitDateTime = (event: MemberVisitation) => {
-  if (isDateOnlyValue(event.eventStart)) {
-    const [year, month, day] = event.eventStart.slice(0, 10).split("-").map(Number);
+const getVisitationDateValue = (visitation: MemberVisitation) => {
+  const visit = visitation as MemberVisitation & {
+    startTime?: string;
+    eventStart?: string;
+  };
+  return visit.visitDate || visit.startTime || visit.eventStart || visitation.createdAt;
+};
+
+const toVisitTimestamp = (visitation: MemberVisitation) => {
+  const value = getVisitationDateValue(visitation);
+  if (!value) {
+    return 0;
+  }
+
+  if (isDateOnlyValue(value)) {
+    return new Date(`${value}T00:00:00`).getTime();
+  }
+
+  return new Date(value).getTime();
+};
+
+const formatVisitDateTime = (visitation: MemberVisitation) => {
+  const value = getVisitationDateValue(visitation);
+  if (isDateOnlyValue(value)) {
+    const [year, month, day] = value.split("-").map(Number);
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(year, month - 1, day));
   }
 
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(event.eventStart));
+  }).format(new Date(value));
 };
+
+const toLocalDateTimeInput = (value: string) => {
+  const date = new Date(value);
+  const adjusted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return adjusted.toISOString().slice(0, 16);
+};
+
+const createEmptyManualForm = (memberId: string) => ({
+  title: "",
+  visitDate: toLocalDateTimeInput(new Date().toISOString()),
+  location: "",
+  visitStatus: "completed",
+  notes: "",
+  memberIds: memberId ? [memberId] : [],
+  memberQuery: "",
+});
+
+type ManualVisitationFormState = ReturnType<typeof createEmptyManualForm>;
+
+type ManualVisitationErrors = Partial<Record<keyof CreateManualVisitationInput | "memberIds", string>>;
+
+const validateManualForm = (form: ManualVisitationFormState): ManualVisitationErrors => {
+  const errors: ManualVisitationErrors = {};
+
+  if (!form.title.trim()) {
+    errors.title = "Enter a visit title.";
+  }
+
+  if (!form.visitDate.trim()) {
+    errors.visitDate = "Choose a visit date and time.";
+  }
+
+  if (!form.memberIds.length) {
+    errors.memberIds = "Select at least one member.";
+  }
+
+  return errors;
+};
+
+const toManualPayload = (form: ManualVisitationFormState): CreateManualVisitationInput => ({
+  title: form.title.trim(),
+  visitDate: new Date(form.visitDate).toISOString(),
+  location: form.location.trim() || undefined,
+  visitStatus: form.visitStatus,
+  notes: form.notes.trim() || undefined,
+  memberIds: form.memberIds,
+});
+
+const visitationStatusLabel = (value: string) =>
+  value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
 
 export const MemberDetailPage = () => {
   const navigate = useNavigate();
   const { memberId = "" } = useParams();
   const [member, setMember] = useState<Member | null>(null);
   const [activity, setActivity] = useState<MemberActivity[]>([]);
-  const [events, setEvents] = useState<MemberVisitation[]>([]);
+  const [visitations, setVisitations] = useState<MemberVisitation[]>([]);
+  const [memberIndex, setMemberIndex] = useState<MemberIndexItem[]>([]);
   const [activeTab, setActiveTab] = useState<"details" | "visitations" | "activity">("details");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [manualEditorOpen, setManualEditorOpen] = useState(false);
+  const [manualEditorMode, setManualEditorMode] = useState<"create" | "edit">("create");
+  const [manualForm, setManualForm] = useState<ManualVisitationFormState>(createEmptyManualForm(memberId));
+  const [manualErrors, setManualErrors] = useState<ManualVisitationErrors>({});
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualDeleting, setManualDeleting] = useState(false);
+  const [selectedManualVisitation, setSelectedManualVisitation] = useState<MemberVisitation | null>(null);
+  const [editingManualVisitation, setEditingManualVisitation] = useState<MemberVisitation | null>(null);
+  const [manualDeleteOpen, setManualDeleteOpen] = useState(false);
 
   const loadMember = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [details, memberEvents] = await Promise.all([
+      const [details, memberEvents, memberIndexResponse] = await Promise.all([
         api.get<MemberDetailResponse>(`/members/${memberId}`),
         api.get<{ items: MemberVisitation[] }>(`/members/${memberId}/events`),
+        api.get<MemberIndexResponse>("/members/index"),
       ]);
       setMember(details.member);
       setActivity(details.activity);
-      setEvents(memberEvents.items);
+      setVisitations(memberEvents.items);
+      setMemberIndex(memberIndexResponse.items);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load member.");
     } finally {
@@ -64,7 +170,10 @@ export const MemberDetailPage = () => {
     void loadMember();
   }, [loadMember]);
 
-  const visitationEvents = useMemo(() => events, [events]);
+  const sortedVisitations = useMemo(
+    () => [...visitations].sort((left, right) => toVisitTimestamp(right) - toVisitTimestamp(left)),
+    [visitations],
+  );
 
   const quickActions = useMemo(() => {
     if (!member) {
@@ -100,6 +209,97 @@ export const MemberDetailPage = () => {
       setError(reason instanceof Error ? reason.message : "Unable to delete member.");
     }
   }, [memberId, navigate]);
+
+  const openCreateManualVisitation = useCallback(() => {
+    setManualEditorMode("create");
+    setEditingManualVisitation(null);
+    setSelectedManualVisitation(null);
+    setManualErrors({});
+    setManualForm(createEmptyManualForm(memberId));
+    setManualEditorOpen(true);
+  }, [memberId]);
+
+  const openEditManualVisitation = useCallback((visitation: MemberVisitation) => {
+    setManualEditorMode("edit");
+    setEditingManualVisitation(visitation);
+    setManualErrors({});
+    setManualForm({
+      title: visitation.title,
+      visitDate: toLocalDateTimeInput(getVisitationDateValue(visitation)),
+      location: visitation.location ?? "",
+      visitStatus: visitation.visitStatus,
+      notes: visitation.notes ?? "",
+      memberIds: visitation.memberIds,
+      memberQuery: "",
+    });
+    setSelectedManualVisitation(null);
+    setManualEditorOpen(true);
+  }, []);
+
+  const handleVisitationClick = useCallback((visitation: MemberVisitation) => {
+    if (visitation.source === "calendar" && visitation.eventId && visitation.calendarId) {
+      const params = new URLSearchParams({
+        eventId: visitation.eventId,
+        calendarId: visitation.calendarId,
+        date: getVisitationDateValue(visitation),
+      });
+      navigate(`/calendar/schedule?${params.toString()}`);
+      return;
+    }
+
+    setSelectedManualVisitation(visitation);
+  }, [navigate]);
+
+  const handleManualSubmit = useCallback(async () => {
+    const nextErrors = validateManualForm(manualForm);
+    setManualErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
+      return;
+    }
+
+    setManualSaving(true);
+    setError(null);
+    try {
+      const payload = toManualPayload(manualForm);
+      if (manualEditorMode === "create") {
+        await api.post(`/members/${memberId}/visitations`, payload);
+      } else if (editingManualVisitation) {
+        await api.put(
+          `/members/${memberId}/visitations/${editingManualVisitation.visitationId}`,
+          payload as UpdateManualVisitationInput,
+        );
+      }
+
+      setManualEditorOpen(false);
+      setEditingManualVisitation(null);
+      setSelectedManualVisitation(null);
+      await loadMember();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to save manual visitation.");
+    } finally {
+      setManualSaving(false);
+    }
+  }, [editingManualVisitation, loadMember, manualEditorMode, manualForm, memberId]);
+
+  const handleManualDelete = useCallback(async () => {
+    if (!selectedManualVisitation) {
+      return;
+    }
+
+    setManualDeleting(true);
+    setError(null);
+    try {
+      await api.delete(`/members/${memberId}/visitations/${selectedManualVisitation.visitationId}`);
+      setManualDeleteOpen(false);
+      setSelectedManualVisitation(null);
+      setManualEditorOpen(false);
+      await loadMember();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to delete manual visitation.");
+    } finally {
+      setManualDeleting(false);
+    }
+  }, [loadMember, memberId, selectedManualVisitation]);
 
   if (loading) {
     return <LoadingState description="Loading member profile." title="Preparing member" />;
@@ -185,35 +385,54 @@ export const MemberDetailPage = () => {
 
           {activeTab === "visitations" ? (
             <div className="space-y-3">
-              <Button
-                className="w-full"
-                size="sm"
-                onClick={() => navigate(`/calendar/schedule?memberId=${member.memberId}`)}
-                type="button"
-              >
-                Schedule
-              </Button>
-              {visitationEvents.length ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  className="w-full"
+                  size="sm"
+                  onClick={() => navigate(`/calendar/schedule?memberId=${member.memberId}`)}
+                  type="button"
+                >
+                  Schedule Visit
+                </Button>
+                <Button className="w-full" onClick={openCreateManualVisitation} size="sm" type="button" variant="outline">
+                  Record Visit
+                </Button>
+              </div>
+
+              {sortedVisitations.length ? (
                 <div className="space-y-2">
-                  {visitationEvents.map((event) => (
-                    <button
-                      className="w-full rounded-md border border-border bg-white px-3 py-2.5 text-left transition-colors hover:border-primary/25 hover:bg-accent"
-                      key={`${event.eventId}:${event.memberId}`}
-                      type="button"
-                    >
-                      <div className="text-xs font-semibold text-primary">{formatMemberEventLabel(event)}</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">{event.eventTitle}</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">{formatVisitDateTime(event)}</div>
-                      {event.eventLocation ? (
-                        <div className="mt-1 text-xs text-muted-foreground">{event.eventLocation}</div>
-                      ) : null}
-                      <div className="mt-1 text-xs text-muted-foreground">Visit status: {event.visitStatus}</div>
-                    </button>
-                  ))}
+                  {sortedVisitations.map((visitation) => {
+                    const isFuture = toVisitTimestamp(visitation) >= Date.now();
+                    return (
+                      <button
+                        className="w-full rounded-md border border-border bg-white px-3 py-2.5 text-left transition-colors hover:border-primary/25 hover:bg-accent"
+                        key={`${visitation.visitationId}:${visitation.memberId}`}
+                        onClick={() => handleVisitationClick(visitation)}
+                        type="button"
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge className={isFuture ? "bg-primary/10 text-primary" : "bg-slate-100 text-slate-600"}>
+                            {isFuture ? "Future" : "Past"}
+                          </Badge>
+                          <Badge variant={visitation.source === "calendar" ? "default" : "neutral"}>
+                            {visitation.source === "calendar" ? "Calendar Event" : "Manual Visit"}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900">{visitation.title}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">{formatVisitDateTime(visitation)}</div>
+                        {visitation.location ? (
+                          <div className="mt-1 text-xs text-muted-foreground">{visitation.location}</div>
+                        ) : null}
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Visit status: {visitationStatusLabel(visitation.visitStatus)}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="flex min-h-32 items-center justify-center rounded-md border border-dashed border-border bg-white px-4 text-center text-sm font-medium text-muted-foreground">
-                  No visitations scheduled yet.
+                  No visitations recorded yet.
                 </div>
               )}
             </div>
@@ -248,6 +467,173 @@ export const MemberDetailPage = () => {
         onSubmit={handleSave}
         open={editing}
         title="Edit Member"
+      />
+
+      <FormDrawer
+        busy={manualSaving}
+        description={manualEditorMode === "create" ? "Add a visit record without creating a Google Calendar event." : "Update this manual visit record."}
+        onClose={() => {
+          setManualEditorOpen(false);
+          setEditingManualVisitation(null);
+        }}
+        onSubmit={() => void handleManualSubmit()}
+        open={manualEditorOpen}
+        submitLabel={manualEditorMode === "create" ? "Save Visit" : "Save Changes"}
+        title={manualEditorMode === "create" ? "Record Visit" : "Edit Manual Visit"}
+      >
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Title</label>
+            <Input
+              onChange={(event) => setManualForm((current) => ({ ...current, title: event.target.value }))}
+              placeholder="Home visit"
+              value={manualForm.title}
+            />
+            {manualErrors.title ? <div className="text-xs text-rose-600">{manualErrors.title}</div> : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Visit Date/Time</label>
+            <Input
+              onChange={(event) => setManualForm((current) => ({ ...current, visitDate: event.target.value }))}
+              type="datetime-local"
+              value={manualForm.visitDate}
+            />
+            {manualErrors.visitDate ? <div className="text-xs text-rose-600">{manualErrors.visitDate}</div> : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Location</label>
+            <Input
+              onChange={(event) => setManualForm((current) => ({ ...current, location: event.target.value }))}
+              placeholder="Optional address or meeting spot"
+              value={manualForm.location}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Visit Status</label>
+            <Select
+              onChange={(event) => setManualForm((current) => ({ ...current, visitStatus: event.target.value }))}
+              value={manualForm.visitStatus}
+            >
+              <option value="completed">Completed</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="follow_up_needed">Follow Up Needed</option>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Notes</label>
+            <Textarea
+              onChange={(event) => setManualForm((current) => ({ ...current, notes: event.target.value }))}
+              placeholder="Optional notes"
+              value={manualForm.notes}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Members</label>
+            <MemberSearchAutocomplete
+              items={memberIndex}
+              onQueryChange={(value) => setManualForm((current) => ({ ...current, memberQuery: value }))}
+              onSelect={(item) =>
+                setManualForm((current) => ({
+                  ...current,
+                  memberIds: [...new Set([...current.memberIds, item.memberId])],
+                  memberQuery: "",
+                }))
+              }
+              query={manualForm.memberQuery}
+              selectedIds={manualForm.memberIds}
+            />
+            {manualForm.memberIds.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {emptyMemberSelection(memberIndex, manualForm.memberIds).map((selectedMember) => (
+                  <MemberChip
+                    key={selectedMember.memberId}
+                    member={selectedMember}
+                    onRemove={(selectedId) =>
+                      setManualForm((current) => ({
+                        ...current,
+                        memberIds: current.memberIds.filter((entry) => entry !== selectedId),
+                      }))
+                    }
+                  />
+                ))}
+              </div>
+            ) : null}
+            {manualErrors.memberIds ? <div className="text-xs text-rose-600">{manualErrors.memberIds}</div> : null}
+          </div>
+        </div>
+      </FormDrawer>
+
+      <RightSideDrawer
+        description="Manual visit details. Editing or deleting here will not affect Google Calendar."
+        footer={
+          selectedManualVisitation ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+              <Button className="bg-rose-600 hover:bg-rose-700" onClick={() => setManualDeleteOpen(true)} type="button">
+                Delete
+              </Button>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                <Button onClick={() => setSelectedManualVisitation(null)} type="button" variant="outline">
+                  Close
+                </Button>
+                <Button onClick={() => openEditManualVisitation(selectedManualVisitation)} type="button">
+                  Edit
+                </Button>
+              </div>
+            </div>
+          ) : null
+        }
+        onClose={() => setSelectedManualVisitation(null)}
+        open={Boolean(selectedManualVisitation)}
+        title={selectedManualVisitation?.title ?? "Manual Visit"}
+      >
+        {selectedManualVisitation ? (
+          <div className="space-y-3">
+            <Badge className="bg-slate-100 text-slate-700">No Calendar Event Attached</Badge>
+            <div className="grid gap-2">
+              {[
+                ["Visit Date", formatVisitDateTime(selectedManualVisitation)],
+                ["Location", selectedManualVisitation.location || "Not set"],
+                ["Visit Status", visitationStatusLabel(selectedManualVisitation.visitStatus)],
+                ["Created By", selectedManualVisitation.createdByName],
+                ["Created Date", new Date(selectedManualVisitation.createdAt).toLocaleString()],
+              ].map(([label, value]) => (
+                <div className="rounded-md border border-border bg-slate-50 px-3 py-2.5" key={label}>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
+                  <div className="mt-1 text-sm text-slate-900">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-md border border-border bg-slate-50 px-3 py-2.5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Notes</div>
+              <div className="mt-1 text-sm text-slate-900">{selectedManualVisitation.notes || "No notes added."}</div>
+            </div>
+            <div className="rounded-md border border-border bg-slate-50 px-3 py-2.5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Members</div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {selectedManualVisitation.memberNames.map((name) => (
+                  <Badge key={name} variant="neutral">{name}</Badge>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </RightSideDrawer>
+
+      <ConfirmDialog
+        busy={manualDeleting}
+        confirmLabel="Delete Visit"
+        description="This deletes only the manual visitation record. No Google Calendar event will be changed."
+        destructive
+        onClose={() => setManualDeleteOpen(false)}
+        onConfirm={() => void handleManualDelete()}
+        open={manualDeleteOpen}
+        title="Delete Manual Visit?"
       />
     </div>
   );

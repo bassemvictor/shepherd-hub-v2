@@ -225,22 +225,30 @@ export type MemberIndexResponse = {
   generatedAt: string;
 };
 
+export type VisitationSource = "calendar" | "manual";
+
 export type MemberVisitation = EntityEnvelope & {
-  eventId: string;
-  calendarId: string;
-  calendarOwnerUserId: string;
-  calendarOwnerName: string;
-  eventTitle: string;
-  eventStart: string;
-  eventEnd: string;
-  eventLocation?: string;
-  eventDescription?: string;
+  visitationId: string;
+  source: VisitationSource;
+  title: string;
+  visitDate: string;
+  endDate?: string;
+  allDay?: boolean;
+  location?: string;
+  notes?: string;
   memberId: string;
-  memberName: string;
+  memberIds: string[];
+  memberNames: string[];
   visitStatus: string;
-  assignmentStatus: string;
+  eventId?: string;
+  calendarEventId?: string;
+  calendarId?: string;
+  calendarOwnerUserId?: string;
+  calendarOwnerName?: string;
   createdByUserId: string;
   createdByName: string;
+  visitorUserId: string;
+  visitorDisplayName: string;
   isOwnCalendar: boolean;
 };
 
@@ -306,6 +314,29 @@ export type VisitationOverviewRow = {
   nextScheduledVisit?: string;
   status: "Not Visited" | "Low Visitation" | "Recently Visited";
   normalizedSearchText: string;
+  scopeMetrics: {
+    everyone: VisitationScopeMetrics;
+    me: VisitationScopeMetrics;
+  };
+};
+
+export type VisitationScopeMetrics = {
+  visitCountInRange: number;
+  totalLifetimeVisits: number;
+  lastVisitDate?: string;
+  lastVisitedBy?: string;
+};
+
+export type VisitorLeaderboardEntry = {
+  visitorUserId: string;
+  visitorDisplayName: string;
+  visitCountInRange: number;
+};
+
+export type CurrentUserVisitationActivity = {
+  thisWeek: number;
+  thisMonth: number;
+  thisYear: number;
 };
 
 export type ReportPagination = {
@@ -328,6 +359,8 @@ export type VisitationReportResponse = {
   pagination: ReportPagination;
   visitors: ReportVisitorOption[];
   availableGroups: string[];
+  topVisitors: VisitorLeaderboardEntry[];
+  currentUserActivity: CurrentUserVisitationActivity;
   generatedAt: string;
 };
 
@@ -375,6 +408,17 @@ export type UpdateEventMembersInput = {
   calendarId: string;
   memberIds: string[];
 };
+
+export type CreateManualVisitationInput = {
+  title: string;
+  visitDate: string;
+  location?: string;
+  visitStatus?: string;
+  notes?: string;
+  memberIds: string[];
+};
+
+export type UpdateManualVisitationInput = Partial<CreateManualVisitationInput>;
 
 export type MemberImportInput = {
   fileName: string;

@@ -41,7 +41,15 @@ export const router = createBrowserRouter([
       },
       {
         path: "reports/visitations",
-        element: <VisitationReportsPage />,
+        element: <Navigate replace to="/reports/dashboard" />,
+      },
+      {
+        path: "reports/dashboard",
+        element: <VisitationReportsPage reportView="dashboard" />,
+      },
+      {
+        path: "reports/member-visitation",
+        element: <VisitationReportsPage reportView="members" />,
       },
       {
         path: "members/:memberId",

@@ -18,6 +18,7 @@ import type {
   CalendarSyncConfig,
   CalendarSyncSnapshot,
   CreateMemberInput,
+  CreateManualVisitationInput,
   ConnectGoogleResponse,
   CreateScheduleEventInput,
   EventMemberSummary,
@@ -55,11 +56,15 @@ import type {
   UpdateMemberInput,
   UpdateScheduleEventInput,
   UpdateCalendarSettingsInput,
+  CurrentUserVisitationActivity,
   VisitationDistributionBucket,
   VisitationOverviewRow,
   VisitationReportFilters,
   VisitationReportKpiSummary,
   VisitationReportResponse,
+  VisitationSource,
+  UpdateManualVisitationInput,
+  VisitorLeaderboardEntry,
 } from "../../../shared/types.js";
 
 type BaseItem = {
@@ -130,18 +135,27 @@ type EventItem = BaseItem & {
 
 type VisitationItem = BaseItem & {
   tenantId: string;
-  calendarId: string;
   visitationId: string;
+  source: VisitationSource;
   memberId: string;
-  memberNameSnapshot: string;
-  memberSourceSnapshot: MemberSource;
+  memberIds: string[];
+  memberNames: string[];
   visitorUserId: string;
   visitorDisplayName: string;
+  createdByUserId: string;
+  createdByName: string;
   visitDate: string;
-  sourceEventId?: string;
-  ownerUserId: string;
+  title: string;
+  endDate?: string;
   allDay?: boolean;
-  status: string;
+  location?: string;
+  notes?: string;
+  visitStatus: string;
+  eventId?: string;
+  calendarEventId?: string;
+  calendarId?: string;
+  calendarOwnerUserId?: string;
+  calendarOwnerName?: string;
 };
 
 type MemberItem = BaseItem & Omit<Member, keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"> & {
@@ -374,15 +388,17 @@ const memberGsiSk = (normalizedName: string, memberId: string) => `NAME#${normal
 const memberUnityGsiPk = (tenantId: string) => `TENANT#${tenantId}#UNITY`;
 const memberUnityGsiSk = (unityId: string) => `UNITY#${unityId}`;
 const tenantEventPk = (tenantId: string, eventId: string) => `TENANT#${tenantId}#EVENT#${eventId}`;
+const tenantVisitationPk = (tenantId: string, visitationId: string) => `TENANT#${tenantId}#VISITATION#${visitationId}`;
 const eventMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const tenantMemberPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
 const memberEventGsiPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
 const memberEventGsiSk = (eventStartDateTime: string, eventId: string) => `EVENT#${eventStartDateTime}#${eventId}`;
 const memberActivitySk = (createdAt: string, activityId: string) => `ACTIVITY#${createdAt}#${activityId}`;
-const visitationSk = (memberId: string) => `VISIT#${memberId}`;
+const visitationMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const tenantVisitationGsiSk = (visitDate: string, visitorUserId: string, memberId: string, visitationId: string) =>
   `VISIT#${visitDate}#VISITOR#${visitorUserId}#MEMBER#${memberId}#VISITATION#${visitationId}`;
 const memberVisitationGsiSk = (visitDate: string, visitationId: string) => `VISIT#${visitDate}#VISITATION#${visitationId}`;
+const eventVisitationId = (calendarId: string, eventId: string) => `CALENDAR#${calendarId}#EVENT#${eventId}`;
 const oauthStatePk = (state: string) => `OAUTH_STATE#${state}`;
 const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
@@ -694,26 +710,32 @@ const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({
   source: item.sourceSnapshot,
 });
 
-const toMemberVisitation = (item: EventMemberItem, currentUserId: string): MemberVisitation => ({
+const toMemberVisitation = (item: VisitationItem, currentUserId: string): MemberVisitation => ({
   createdAt: item.createdAt,
   entityType: item.entityType,
+  visitationId: item.visitationId,
+  source: item.source,
+  title: item.title,
+  visitDate: item.visitDate,
+  endDate: item.endDate,
+  allDay: item.allDay,
+  location: item.location,
+  notes: item.notes,
+  memberId: item.memberId,
+  memberIds: item.memberIds,
+  memberNames: item.memberNames,
+  visitStatus: item.visitStatus,
   eventId: item.eventId,
+  calendarEventId: item.calendarEventId,
   calendarId: item.calendarId,
   calendarOwnerUserId: item.calendarOwnerUserId,
   calendarOwnerName: item.calendarOwnerName,
-  eventTitle: item.eventTitle,
-  eventStart: item.eventStart,
-  eventEnd: item.eventEnd,
-  eventLocation: item.eventLocation,
-  eventDescription: item.eventDescription,
-  memberId: item.memberId,
-  memberName: item.memberName,
-  visitStatus: item.visitStatus,
-  assignmentStatus: item.assignmentStatus,
   tenantId: item.tenantId,
   updatedAt: item.updatedAt,
   createdByUserId: item.createdByUserId,
   createdByName: item.createdByName,
+  visitorUserId: item.visitorUserId,
+  visitorDisplayName: item.visitorDisplayName,
   isOwnCalendar: item.calendarOwnerUserId === currentUserId,
 });
 
@@ -853,6 +875,24 @@ const validateMemberInput = (input: Partial<CreateMemberInput>) => {
   return null;
 };
 
+const validateManualVisitationInput = (
+  input: Partial<CreateManualVisitationInput | UpdateManualVisitationInput>,
+) => {
+  if (!toOptionalString(input.title)) {
+    return "Visit title is required.";
+  }
+
+  if (!toOptionalString(input.visitDate) || Number.isNaN(Date.parse(String(input.visitDate)))) {
+    return "Visit date and time is required.";
+  }
+
+  if (!normalizeMemberIds(input.memberIds).length) {
+    return "Select at least one member.";
+  }
+
+  return null;
+};
+
 const normalizePageNumber = (value: string | undefined, fallback: number) => {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -886,6 +926,22 @@ const startOfCurrentYear = () => {
   const date = new Date();
   date.setHours(0, 0, 0, 0);
   date.setMonth(0, 1);
+  return date.toISOString();
+};
+
+const startOfCurrentMonth = () => {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(1);
+  return date.toISOString();
+};
+
+const startOfCurrentWeek = () => {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  const day = date.getDay();
+  const diff = (day + 6) % 7;
+  date.setDate(date.getDate() - diff);
   return date.toISOString();
 };
 
@@ -1350,16 +1406,35 @@ const listMemberEvents = async (context: RequestContext, memberId: string, deps:
   return (items as EventMemberItem[]).sort((left, right) => left.eventStart.localeCompare(right.eventStart));
 };
 
+const listMemberVisitations = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#gsiPk": "GSI2PK",
+      "#gsiSk": "GSI2SK",
+    },
+    ExpressionAttributeValues: {
+      ":gsiPk": tenantMemberPk(context.tenantId, memberId),
+      ":from": "VISIT#",
+      ":to": "VISIT#~",
+    },
+    IndexName: "GSI2",
+    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
+    TableName: context.tableName,
+  });
+
+  return (items as VisitationItem[]).sort((left, right) => right.visitDate.localeCompare(left.visitDate));
+};
+
 const listVisitationsForMemberRecord = async (context: RequestContext, member: MemberItem, deps: HandlerDependencies) => {
   const relatedMembers = member.unityId
     ? await listMembersByUnityId(context, member.unityId, deps)
     : [member];
   const memberIds = [...new Set(relatedMembers.map((item) => item.memberId))];
-  const visitations = await Promise.all(memberIds.map((memberId) => listMemberEvents(context, memberId, deps)));
+  const visitations = await Promise.all(memberIds.map((memberId) => listMemberVisitations(context, memberId, deps)));
 
   return visitations
     .flat()
-    .sort((left, right) => left.eventStart.localeCompare(right.eventStart));
+    .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
 };
 
 const listVisitationsForEvent = async (
@@ -1374,10 +1449,27 @@ const listVisitationsForEvent = async (
       "#sk": "SK",
     },
     ExpressionAttributeValues: {
-      ":pk": tenantEventPk(context.tenantId, eventId),
-      ":visitPrefix": "VISIT#",
+      ":pk": tenantVisitationPk(context.tenantId, eventVisitationId(calendarId, eventId)),
+      ":memberPrefix": "MEMBER#",
     },
-    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :visitPrefix)",
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :memberPrefix)",
+    TableName: context.tableName,
+  });
+
+  return items as VisitationItem[];
+};
+
+const getVisitationGroup = async (context: RequestContext, visitationId: string, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantVisitationPk(context.tenantId, visitationId),
+      ":memberPrefix": "MEMBER#",
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :memberPrefix)",
     TableName: context.tableName,
   });
 
@@ -1671,6 +1763,9 @@ const syncVisitationRecords = async (
   const existingMemberIds = new Set(existingRecords.map((item) => item.memberId));
   const nextMembers = members;
   const nextMemberIds = new Set(nextMembers.map((item) => item.memberId));
+  const visitationId = eventVisitationId(event.calendarId, event.eventId);
+  const memberIds = nextMembers.map((item) => item.memberId);
+  const memberNames = nextMembers.map((item) => item.fullName);
 
   for (const record of existingRecords) {
     if (nextMemberIds.has(record.memberId)) {
@@ -1680,8 +1775,8 @@ const syncVisitationRecords = async (
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
-          PK: tenantEventPk(context.tenantId, event.eventId),
-          SK: visitationSk(record.memberId),
+          PK: tenantVisitationPk(context.tenantId, visitationId),
+          SK: visitationMemberSk(record.memberId),
         },
         TableName: context.tableName,
       }),
@@ -1689,10 +1784,9 @@ const syncVisitationRecords = async (
   }
 
   for (const member of nextMembers) {
-    const visitationId = `${event.calendarId}:${event.eventId}:${member.memberId}`;
     const record: VisitationItem = {
-      PK: tenantEventPk(context.tenantId, event.eventId),
-      SK: visitationSk(member.memberId),
+      PK: tenantVisitationPk(context.tenantId, visitationId),
+      SK: visitationMemberSk(member.memberId),
       GSI1PK: tenantPk(context.tenantId),
       GSI1SK: tenantVisitationGsiSk(event.start, context.actorSub, member.memberId, visitationId),
       GSI2PK: tenantMemberPk(context.tenantId, member.memberId),
@@ -1703,18 +1797,27 @@ const syncVisitationRecords = async (
       updatedAt: deps.now(),
       entityType: "VISITATION",
       tenantId: context.tenantId,
-      calendarId: event.calendarId,
       visitationId,
+      source: "calendar",
       memberId: member.memberId,
-      memberNameSnapshot: member.fullName,
-      memberSourceSnapshot: member.source,
+      memberIds,
+      memberNames,
       visitorUserId: context.actorSub,
       visitorDisplayName: context.actorName,
+      createdByUserId: existingRecords.find((item) => item.memberId === member.memberId)?.createdByUserId ?? context.actorSub,
+      createdByName: existingRecords.find((item) => item.memberId === member.memberId)?.createdByName ?? context.actorName,
       visitDate: event.start,
-      sourceEventId: event.eventId,
-      ownerUserId: event.userId,
+      title: event.summary,
+      endDate: event.end,
       allDay: event.allDay,
-      status: event.status,
+      location: event.location,
+      notes: event.description,
+      visitStatus: event.status === "cancelled" ? "cancelled" : "scheduled",
+      eventId: event.eventId,
+      calendarEventId: event.googleEventId ?? event.eventId,
+      calendarId: event.calendarId,
+      calendarOwnerUserId: event.userId,
+      calendarOwnerName: existingRecords.find((item) => item.memberId === member.memberId)?.calendarOwnerName ?? context.actorName,
     };
 
     await deps.documentClient.send(
@@ -1753,6 +1856,91 @@ const loadMembersByIds = async (context: RequestContext, memberIds: string[], de
   return normalizedIds.map((memberId) => membersById.get(memberId)).filter(Boolean) as MemberItem[];
 };
 
+const putVisitationRecord = async (context: RequestContext, record: VisitationItem, deps: HandlerDependencies) => {
+  await deps.documentClient.send(
+    new PutCommand({
+      Item: record,
+      TableName: context.tableName,
+    }),
+  );
+};
+
+const persistManualVisitationGroup = async (
+  context: RequestContext,
+  visitationId: string,
+  existing: VisitationItem[] | null,
+  input: CreateManualVisitationInput | Required<Pick<CreateManualVisitationInput, "title" | "visitDate" | "memberIds">> & {
+    location?: string;
+    notes?: string;
+    visitStatus?: string;
+  },
+  deps: HandlerDependencies,
+) => {
+  const members = await loadMembersByIds(context, input.memberIds, deps);
+  if (members.length !== normalizeMemberIds(input.memberIds).length) {
+    throw new HttpError(400, "One or more selected members could not be found.");
+  }
+
+  const memberIds = members.map((member) => member.memberId);
+  const memberNames = members.map((member) => member.fullName);
+  const createdAt = existing?.[0]?.createdAt ?? deps.now();
+  const createdByUserId = existing?.[0]?.createdByUserId ?? context.actorSub;
+  const createdByName = existing?.[0]?.createdByName ?? context.actorName;
+  const existingByMemberId = new Map((existing ?? []).map((item) => [item.memberId, item]));
+
+  for (const record of existing ?? []) {
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantVisitationPk(context.tenantId, visitationId),
+          SK: visitationMemberSk(record.memberId),
+        },
+        TableName: context.tableName,
+      }),
+    );
+  }
+
+  for (const member of members) {
+    const existingRecord = existingByMemberId.get(member.memberId);
+    const nextRecord: VisitationItem = {
+      PK: tenantVisitationPk(context.tenantId, visitationId),
+      SK: visitationMemberSk(member.memberId),
+      GSI1PK: tenantPk(context.tenantId),
+      GSI1SK: tenantVisitationGsiSk(input.visitDate, createdByUserId, member.memberId, visitationId),
+      GSI2PK: tenantMemberPk(context.tenantId, member.memberId),
+      GSI2SK: memberVisitationGsiSk(input.visitDate, visitationId),
+      createdAt: existingRecord?.createdAt ?? createdAt,
+      updatedAt: deps.now(),
+      entityType: "VISITATION",
+      tenantId: context.tenantId,
+      visitationId,
+      source: "manual",
+      memberId: member.memberId,
+      memberIds,
+      memberNames,
+      visitorUserId: createdByUserId,
+      visitorDisplayName: createdByName,
+      createdByUserId,
+      createdByName,
+      visitDate: input.visitDate,
+      title: input.title,
+      endDate: undefined,
+      allDay: false,
+      location: toOptionalString(input.location),
+      notes: toOptionalString(input.notes),
+      visitStatus: toOptionalString(input.visitStatus) ?? "completed",
+      eventId: undefined,
+      calendarEventId: undefined,
+      calendarId: undefined,
+      calendarOwnerUserId: undefined,
+      calendarOwnerName: undefined,
+    };
+    await putVisitationRecord(context, nextRecord, deps);
+  }
+
+  return await getVisitationGroup(context, visitationId, deps);
+};
+
 const deleteCachedEventOnly = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
   await deleteEvent(context, event.calendarId, event.eventId, deps);
 };
@@ -1784,8 +1972,8 @@ const deleteStoredEvent = async (context: RequestContext, event: EventItem, deps
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
-          PK: tenantEventPk(context.tenantId, event.eventId),
-          SK: visitationSk(record.memberId),
+          PK: tenantVisitationPk(context.tenantId, eventVisitationId(event.calendarId, event.eventId)),
+          SK: visitationMemberSk(record.memberId),
         },
         TableName: context.tableName,
       }),
@@ -2497,8 +2685,24 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
-          PK: tenantEventPk(context.tenantId, link.eventId),
-          SK: visitationSk(memberId),
+          PK: tenantVisitationPk(
+            context.tenantId,
+            eventVisitationId(link.calendarId, link.eventId),
+          ),
+          SK: visitationMemberSk(memberId),
+        },
+        TableName: context.tableName,
+      }),
+    );
+  }
+
+  const manualVisitations = await listMemberVisitations(context, memberId, deps);
+  for (const visitation of manualVisitations.filter((item) => item.source === "manual")) {
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantVisitationPk(context.tenantId, visitation.visitationId),
+          SK: visitationMemberSk(memberId),
         },
         TableName: context.tableName,
       }),
@@ -2611,6 +2815,93 @@ const getMemberEventsResponse = async (context: RequestContext, memberId: string
 
   const items = await listVisitationsForMemberRecord(context, member, deps);
   return json(200, { items: items.map((item) => toMemberVisitation(item, context.actorSub)) });
+};
+
+const createManualVisitation = async (
+  context: RequestContext,
+  memberId: string,
+  input: CreateManualVisitationInput,
+  deps: HandlerDependencies,
+) => {
+  const validationError = validateManualVisitationInput(input);
+  if (validationError) {
+    return json(400, { message: validationError });
+  }
+
+  const member = await getMember(context, memberId, deps);
+  if (!member) {
+    return json(404, { message: "Member not found." });
+  }
+
+  const nextMemberIds = [...new Set([memberId, ...normalizeMemberIds(input.memberIds)])];
+  const records = await persistManualVisitationGroup(context, deps.uuid(), null, {
+    ...input,
+    memberIds: nextMemberIds,
+  }, deps);
+  return json(201, { items: records.map((item) => toMemberVisitation(item, context.actorSub)) });
+};
+
+const updateManualVisitation = async (
+  context: RequestContext,
+  memberId: string,
+  visitationId: string,
+  input: UpdateManualVisitationInput,
+  deps: HandlerDependencies,
+) => {
+  const existing = await getVisitationGroup(context, visitationId, deps);
+  if (!existing.length || !existing.some((item) => item.memberId === memberId)) {
+    return json(404, { message: "Visitation not found." });
+  }
+
+  if (existing[0]?.source !== "manual") {
+    return json(400, { message: "Only manual visitations can be updated here." });
+  }
+
+  const merged: CreateManualVisitationInput = {
+    title: input.title ?? existing[0].title,
+    visitDate: input.visitDate ?? existing[0].visitDate,
+    location: input.location ?? existing[0].location,
+    visitStatus: input.visitStatus ?? existing[0].visitStatus,
+    notes: input.notes ?? existing[0].notes,
+    memberIds: normalizeMemberIds(input.memberIds ?? existing[0].memberIds),
+  };
+  const validationError = validateManualVisitationInput(merged);
+  if (validationError) {
+    return json(400, { message: validationError });
+  }
+
+  const records = await persistManualVisitationGroup(context, visitationId, existing, merged, deps);
+  return json(200, { items: records.map((item) => toMemberVisitation(item, context.actorSub)) });
+};
+
+const deleteManualVisitation = async (
+  context: RequestContext,
+  memberId: string,
+  visitationId: string,
+  deps: HandlerDependencies,
+) => {
+  const existing = await getVisitationGroup(context, visitationId, deps);
+  if (!existing.length || !existing.some((item) => item.memberId === memberId)) {
+    return json(404, { message: "Visitation not found." });
+  }
+
+  if (existing[0]?.source !== "manual") {
+    return json(400, { message: "Only manual visitations can be deleted here." });
+  }
+
+  for (const record of existing) {
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantVisitationPk(context.tenantId, visitationId),
+          SK: visitationMemberSk(record.memberId),
+        },
+        TableName: context.tableName,
+      }),
+    );
+  }
+
+  return json(200, { deleted: true, visitationId });
 };
 
 const getEventMembersResponse = async (
@@ -2731,22 +3022,77 @@ const getVisitationReport = async (
   });
 
   const lifetimeVisitsByMemberId = new Map<string, VisitationItem[]>();
+  const visitorScopedLifetimeVisitsByMemberId = new Map<string, VisitationItem[]>();
+  const currentUserLifetimeVisitsByMemberId = new Map<string, VisitationItem[]>();
   const matchingVisitsByMemberId = new Map<string, VisitationItem[]>();
+  const currentUserMatchingVisitsByMemberId = new Map<string, VisitationItem[]>();
+  const topVisitorsByUserId = new Map<string, VisitorLeaderboardEntry>();
+  const currentUserActivity: CurrentUserVisitationActivity = {
+    thisWeek: 0,
+    thisMonth: 0,
+    thisYear: 0,
+  };
+  const weekStart = startOfCurrentWeek();
+  const monthStart = startOfCurrentMonth();
+  const yearStart = startOfCurrentYear();
 
   for (const visitation of visitations) {
     const lifetime = lifetimeVisitsByMemberId.get(visitation.memberId) ?? [];
     lifetime.push(visitation);
     lifetimeVisitsByMemberId.set(visitation.memberId, lifetime);
 
+    if (matchesReportVisitorFilter(visitation, filters, context.actorSub)) {
+      const scopedLifetime = visitorScopedLifetimeVisitsByMemberId.get(visitation.memberId) ?? [];
+      scopedLifetime.push(visitation);
+      visitorScopedLifetimeVisitsByMemberId.set(visitation.memberId, scopedLifetime);
+    }
+
+    if (visitation.visitorUserId === context.actorSub) {
+      const currentUserLifetime = currentUserLifetimeVisitsByMemberId.get(visitation.memberId) ?? [];
+      currentUserLifetime.push(visitation);
+      currentUserLifetimeVisitsByMemberId.set(visitation.memberId, currentUserLifetime);
+
+      if (visitation.visitDate >= weekStart) {
+        currentUserActivity.thisWeek += 1;
+      }
+      if (visitation.visitDate >= monthStart) {
+        currentUserActivity.thisMonth += 1;
+      }
+      if (visitation.visitDate >= yearStart) {
+        currentUserActivity.thisYear += 1;
+      }
+    }
+
     const inFromRange = !filters.from || visitation.visitDate >= filters.from;
     const inToRange = !filters.to || visitation.visitDate <= filters.to;
-    if (!inFromRange || !inToRange || !matchesReportVisitorFilter(visitation, filters, context.actorSub)) {
+    if (!inFromRange || !inToRange) {
+      continue;
+    }
+
+    if (visitation.visitorUserId === context.actorSub) {
+      const currentUserMatching = currentUserMatchingVisitsByMemberId.get(visitation.memberId) ?? [];
+      currentUserMatching.push(visitation);
+      currentUserMatchingVisitsByMemberId.set(visitation.memberId, currentUserMatching);
+    }
+
+    if (!matchesReportVisitorFilter(visitation, filters, context.actorSub)) {
       continue;
     }
 
     const matching = matchingVisitsByMemberId.get(visitation.memberId) ?? [];
     matching.push(visitation);
     matchingVisitsByMemberId.set(visitation.memberId, matching);
+
+    const existingVisitor = topVisitorsByUserId.get(visitation.visitorUserId);
+    if (existingVisitor) {
+      existingVisitor.visitCountInRange += 1;
+    } else {
+      topVisitorsByUserId.set(visitation.visitorUserId, {
+        visitorUserId: visitation.visitorUserId,
+        visitorDisplayName: visitation.visitorDisplayName,
+        visitCountInRange: 1,
+      });
+    }
   }
 
   // TODO: Replace this member-by-member lookup with a tenant/date visitation index or pre-aggregated reporting table if data volume grows.
@@ -2765,10 +3111,16 @@ const getVisitationReport = async (
   const allRows: VisitationOverviewRow[] = filteredMembers.map((member) => {
     const lifetimeVisits = (lifetimeVisitsByMemberId.get(member.memberId) ?? [])
       .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
+    const visitorScopedLifetimeVisits = (visitorScopedLifetimeVisitsByMemberId.get(member.memberId) ?? [])
+      .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
+    const currentUserLifetimeVisits = (currentUserLifetimeVisitsByMemberId.get(member.memberId) ?? [])
+      .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
     const matchingVisits = (matchingVisitsByMemberId.get(member.memberId) ?? [])
       .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
+    const currentUserMatchingVisits = (currentUserMatchingVisitsByMemberId.get(member.memberId) ?? [])
+      .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
     const matchingCount = matchingVisits.length;
-    const lastVisit = lifetimeVisits[0];
+    const lastVisit = visitorScopedLifetimeVisits[0];
     const status: VisitationOverviewRow["status"] =
       matchingCount === 0
         ? "Not Visited"
@@ -2788,10 +3140,28 @@ const getVisitationReport = async (
       lastVisitDate: lastVisit?.visitDate,
       lastVisitedBy: lastVisit?.visitorDisplayName,
       visitCountInRange: matchingCount,
-      totalLifetimeVisits: lifetimeVisits.length,
+      totalLifetimeVisits: visitorScopedLifetimeVisits.length,
       nextScheduledVisit: nextScheduledVisitByMemberId.get(member.memberId),
       status,
       normalizedSearchText: member.normalizedSearchText,
+      scopeMetrics: {
+        everyone: {
+          visitCountInRange: lifetimeVisits.filter((item) => {
+            const inFromRange = !filters.from || item.visitDate >= filters.from;
+            const inToRange = !filters.to || item.visitDate <= filters.to;
+            return inFromRange && inToRange;
+          }).length,
+          totalLifetimeVisits: lifetimeVisits.length,
+          lastVisitDate: lifetimeVisits[0]?.visitDate,
+          lastVisitedBy: lifetimeVisits[0]?.visitorDisplayName,
+        },
+        me: {
+          visitCountInRange: currentUserMatchingVisits.length,
+          totalLifetimeVisits: currentUserLifetimeVisits.length,
+          lastVisitDate: currentUserLifetimeVisits[0]?.visitDate,
+          lastVisitedBy: currentUserLifetimeVisits[0]?.visitorDisplayName,
+        },
+      },
     };
   }).filter((row) => {
     if (filters.visitCountMode === "not_visited") {
@@ -2873,6 +3243,10 @@ const getVisitationReport = async (
     pagination,
     visitors: allVisitors,
     availableGroups,
+    topVisitors: [...topVisitorsByUserId.values()]
+      .sort((left, right) => right.visitCountInRange - left.visitCountInRange || left.visitorDisplayName.localeCompare(right.visitorDisplayName))
+      .slice(0, 5),
+    currentUserActivity,
     generatedAt: deps.now(),
   };
 
@@ -3197,6 +3571,24 @@ const getScheduleEvents = async (
   );
 };
 
+const getScheduleEventResponse = async (
+  context: RequestContext,
+  eventId: string,
+  calendarId: string | undefined,
+  deps: HandlerDependencies,
+) => {
+  if (!calendarId) {
+    return json(400, { message: "Calendar is required." });
+  }
+
+  const event = await getEvent(context, calendarId, eventId, deps);
+  if (!event) {
+    return json(404, { message: "Event not found." });
+  }
+
+  return json(200, toScheduleEvent(event));
+};
+
 const forceSyncCalendars = async (
   context: RequestContext,
   body: { timeMin?: string; timeMax?: string; calendarIds?: string[] } | undefined,
@@ -3510,6 +3902,32 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         return await getMemberEventsResponse(context, memberId, deps);
       }
 
+      if (path === `/members/${memberId}/visitations` && memberId && method === "POST") {
+        return await createManualVisitation(
+          context,
+          memberId,
+          parseBody<CreateManualVisitationInput>(typedEvent.body),
+          deps,
+        );
+      }
+
+      const visitationId = typedEvent.pathParameters?.visitationId;
+      if (path === `/members/${memberId}/visitations/${visitationId}` && memberId && visitationId) {
+        if (method === "PUT") {
+          return await updateManualVisitation(
+            context,
+            memberId,
+            visitationId,
+            parseBody<UpdateManualVisitationInput>(typedEvent.body),
+            deps,
+          );
+        }
+
+        if (method === "DELETE") {
+          return await deleteManualVisitation(context, memberId, visitationId, deps);
+        }
+      }
+
       if (method === "GET" && path === "/schedule/overview") {
         return await getScheduleOverview(context, deps);
       }
@@ -3547,6 +3965,15 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       if (path === `/schedule/events/${eventId}` && eventId) {
+        if (method === "GET") {
+          return await getScheduleEventResponse(
+            context,
+            eventId,
+            typedEvent.queryStringParameters?.calendarId,
+            deps,
+          );
+        }
+
         if (method === "PUT") {
           return await updateScheduleEvent(
             context,

@@ -106,6 +106,8 @@ addProtectedRoutes("/members/index", [HttpMethod.GET]);
 addProtectedRoutes("/members/import", [HttpMethod.POST]);
 addProtectedRoutes("/members/{memberId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
 addProtectedRoutes("/members/{memberId}/events", [HttpMethod.GET]);
+addProtectedRoutes("/members/{memberId}/visitations", [HttpMethod.POST]);
+addProtectedRoutes("/members/{memberId}/visitations/{visitationId}", [HttpMethod.PUT, HttpMethod.DELETE]);
 addProtectedRoutes("/events/{eventId}/members", [HttpMethod.GET, HttpMethod.PUT]);
 addProtectedRoutes("/reports/visitations", [HttpMethod.GET]);
 addProtectedRoutes("/schedule/overview", [HttpMethod.GET]);
@@ -119,7 +121,7 @@ addProtectedRoutes("/schedule/calendars/{calendarId}/cache", [HttpMethod.DELETE]
 addProtectedRoutes("/schedule/sync", [HttpMethod.POST]);
 addProtectedRoutes("/schedule/cache", [HttpMethod.DELETE]);
 addProtectedRoutes("/schedule/events", [HttpMethod.GET, HttpMethod.POST]);
-addProtectedRoutes("/schedule/events/{eventId}", [HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/schedule/events/{eventId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
 
 httpApi.addRoutes({
   path: "/schedule/google/callback",
