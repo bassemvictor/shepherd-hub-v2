@@ -37,13 +37,13 @@ export const AppShell = () => {
           <div className="flex min-h-full flex-col">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2.5">
-                <img alt="Shepherd Hub logo" className="h-12 w-12 shrink-0 object-contain" src="/logo_bw.png" />
+                <img alt="Shepherd Hub logo" className="h-10 w-10 shrink-0 object-contain" src="/logo_bw.png" />
                 <div className="min-w-0 pt-0.5">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-blue-200/80">
                     {user?.tenantId ?? "No Tenant Assigned"}
                   </p>
                   <h1 className="mt-1 truncate text-[1.25rem] font-semibold leading-none tracking-tight text-white sm:text-[1.45rem]">
-                    Shepherd Hub 2.0
+                    Shepherd Hub v0.2
                   </h1>
                 </div>
               </div>
