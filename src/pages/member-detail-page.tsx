@@ -10,6 +10,7 @@ import type {
   MemberIndexItem,
   MemberIndexResponse,
   MemberVisitation,
+  ReportVisitorOption,
   UpdateManualVisitationInput,
 } from "../../shared/types";
 import { ConfirmDialog } from "../components/common/confirm-dialog";
@@ -31,6 +32,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
+import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
 
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -75,7 +77,10 @@ const toLocalDateTimeInput = (value: string) => {
   return adjusted.toISOString().slice(0, 16);
 };
 
-const createEmptyManualForm = (memberId: string) => ({
+const createEmptyManualForm = (
+  memberId: string,
+  currentUser?: { id: string; name: string } | null,
+) => ({
   title: "",
   visitDate: toLocalDateTimeInput(new Date().toISOString()),
   location: "",
@@ -83,6 +88,8 @@ const createEmptyManualForm = (memberId: string) => ({
   notes: "",
   memberIds: memberId ? [memberId] : [],
   memberQuery: "",
+  visitorUserId: currentUser?.id ?? "",
+  visitorDisplayName: currentUser?.name ?? "",
 });
 
 type ManualVisitationFormState = ReturnType<typeof createEmptyManualForm>;
@@ -104,6 +111,10 @@ const validateManualForm = (form: ManualVisitationFormState): ManualVisitationEr
     errors.memberIds = "Select at least one member.";
   }
 
+  if (!form.visitorUserId.trim() || !form.visitorDisplayName.trim()) {
+    errors.visitorUserId = "Choose a visitor.";
+  }
+
   return errors;
 };
 
@@ -114,6 +125,8 @@ const toManualPayload = (form: ManualVisitationFormState): CreateManualVisitatio
   visitStatus: form.visitStatus,
   notes: form.notes.trim() || undefined,
   memberIds: form.memberIds,
+  visitorUserId: form.visitorUserId,
+  visitorDisplayName: form.visitorDisplayName,
 });
 
 const visitationStatusLabel = (value: string) =>
@@ -124,6 +137,7 @@ const visitationStatusLabel = (value: string) =>
     .join(" ");
 
 export const MemberDetailPage = () => {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { memberId = "" } = useParams();
   const [member, setMember] = useState<Member | null>(null);
@@ -138,7 +152,7 @@ export const MemberDetailPage = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [manualEditorOpen, setManualEditorOpen] = useState(false);
   const [manualEditorMode, setManualEditorMode] = useState<"create" | "edit">("create");
-  const [manualForm, setManualForm] = useState<ManualVisitationFormState>(createEmptyManualForm(memberId));
+  const [manualForm, setManualForm] = useState<ManualVisitationFormState>(createEmptyManualForm(memberId, user));
   const [manualErrors, setManualErrors] = useState<ManualVisitationErrors>({});
   const [manualSaving, setManualSaving] = useState(false);
   const [manualDeleting, setManualDeleting] = useState(false);
@@ -174,6 +188,33 @@ export const MemberDetailPage = () => {
     () => [...visitations].sort((left, right) => toVisitTimestamp(right) - toVisitTimestamp(left)),
     [visitations],
   );
+
+  const visitorOptions = useMemo<ReportVisitorOption[]>(() => {
+    const byId = new Map<string, ReportVisitorOption>();
+
+    if (user?.id && user.name) {
+      byId.set(user.id, {
+        visitorUserId: user.id,
+        visitorDisplayName: user.name,
+      });
+    }
+
+    visitations.forEach((visitation) => {
+      if (visitation.visitorUserId && visitation.visitorDisplayName) {
+        byId.set(visitation.visitorUserId, {
+          visitorUserId: visitation.visitorUserId,
+          visitorDisplayName: visitation.visitorDisplayName,
+        });
+      }
+    });
+
+    const currentUserOption = user?.id ? byId.get(user.id) : undefined;
+    const otherOptions = [...byId.values()]
+      .filter((option) => option.visitorUserId !== user?.id)
+      .sort((left, right) => left.visitorDisplayName.localeCompare(right.visitorDisplayName));
+
+    return currentUserOption ? [currentUserOption, ...otherOptions] : otherOptions;
+  }, [user, visitations]);
 
   const quickActions = useMemo(() => {
     if (!member) {
@@ -215,9 +256,9 @@ export const MemberDetailPage = () => {
     setEditingManualVisitation(null);
     setSelectedManualVisitation(null);
     setManualErrors({});
-    setManualForm(createEmptyManualForm(memberId));
+    setManualForm(createEmptyManualForm(memberId, user));
     setManualEditorOpen(true);
-  }, [memberId]);
+  }, [memberId, user]);
 
   const openEditManualVisitation = useCallback((visitation: MemberVisitation) => {
     setManualEditorMode("edit");
@@ -231,6 +272,8 @@ export const MemberDetailPage = () => {
       notes: visitation.notes ?? "",
       memberIds: visitation.memberIds,
       memberQuery: "",
+      visitorUserId: visitation.visitorUserId,
+      visitorDisplayName: visitation.visitorDisplayName,
     });
     setSelectedManualVisitation(null);
     setManualEditorOpen(true);
@@ -423,6 +466,9 @@ export const MemberDetailPage = () => {
                         {visitation.location ? (
                           <div className="mt-1 text-xs text-muted-foreground">{visitation.location}</div>
                         ) : null}
+                        <div className="mt-1 text-xs font-medium text-slate-700">
+                          Visitor: <span className="font-semibold text-slate-900">{visitation.visitorDisplayName || visitation.createdByName}</span>
+                        </div>
                         <div className="mt-1 text-xs text-muted-foreground">
                           Visit status: {visitationStatusLabel(visitation.visitStatus)}
                         </div>
@@ -509,6 +555,29 @@ export const MemberDetailPage = () => {
               placeholder="Optional address or meeting spot"
               value={manualForm.location}
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Visitor</label>
+            <Select
+              onChange={(event) => {
+                const selectedVisitor = visitorOptions.find((option) => option.visitorUserId === event.target.value);
+                setManualForm((current) => ({
+                  ...current,
+                  visitorUserId: event.target.value,
+                  visitorDisplayName: selectedVisitor?.visitorDisplayName ?? "",
+                }));
+              }}
+              value={manualForm.visitorUserId}
+            >
+              <option value="" disabled>Select visitor</option>
+              {visitorOptions.map((visitor) => (
+                <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
+                  {visitor.visitorDisplayName}
+                </option>
+              ))}
+            </Select>
+            {manualErrors.visitorUserId ? <div className="text-xs text-rose-600">{manualErrors.visitorUserId}</div> : null}
           </div>
 
           <div className="space-y-1.5">
@@ -599,6 +668,7 @@ export const MemberDetailPage = () => {
               {[
                 ["Visit Date", formatVisitDateTime(selectedManualVisitation)],
                 ["Location", selectedManualVisitation.location || "Not set"],
+                ["Visitor", selectedManualVisitation.visitorDisplayName],
                 ["Visit Status", visitationStatusLabel(selectedManualVisitation.visitStatus)],
                 ["Created By", selectedManualVisitation.createdByName],
                 ["Created Date", new Date(selectedManualVisitation.createdAt).toLocaleString()],

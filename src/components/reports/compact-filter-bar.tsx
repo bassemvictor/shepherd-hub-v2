@@ -41,7 +41,7 @@ export const CompactFilterBar = ({
   scope: ReportScope;
   includeStatus?: boolean;
 }) => (
-  <div className="rounded-lg border border-border bg-white p-3 panel-shadow">
+  <>
     <div className="grid gap-2 lg:grid-cols-[minmax(0,1.3fr)_160px_160px_160px_auto]">
       {onSearchChange ? (
         <label className="relative block">
@@ -97,5 +97,5 @@ export const CompactFilterBar = ({
         <Input onChange={(event) => onCustomToChange?.(event.target.value)} type="date" value={customTo ?? ""} />
       </div>
     ) : null}
-  </div>
+  </>
 );

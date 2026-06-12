@@ -263,6 +263,7 @@ export type ReportsMemberScope = "active_only" | "all_members";
 export type ReportsMemberSourceFilter = "all" | "unity" | "manual";
 export type ReportsSortBy = "last_visit_date" | "visit_count" | "member_name";
 export type ReportsSortDirection = "asc" | "desc";
+export type ReportsMemberStatusFilter = "all" | "never_visited" | "not_visited_recently" | "low_visitation" | "visited";
 
 export type VisitationReportFilters = {
   from?: string;
@@ -274,6 +275,7 @@ export type VisitationReportFilters = {
   visitorUserId?: string;
   memberScope: ReportsMemberScope;
   memberSource: ReportsMemberSourceFilter;
+  status: ReportsMemberStatusFilter;
   group?: string;
   search?: string;
   sortBy: ReportsSortBy;
@@ -286,6 +288,7 @@ export type VisitationReportKpiSummary = {
   totalMembers: number;
   matchingMembers: number;
   notVisitedMembers: number;
+  overdueMembers: number;
   lowVisitationMembers: number;
   visitedInRangeMembers: number;
   averageVisitsPerMember: number;
@@ -355,6 +358,7 @@ export type VisitationReportResponse = {
   filters: VisitationReportFilters;
   summary: VisitationReportKpiSummary;
   distribution: VisitationDistributionBucket[];
+  attentionMembers: VisitationOverviewRow[];
   rows: VisitationOverviewRow[];
   pagination: ReportPagination;
   visitors: ReportVisitorOption[];
@@ -416,6 +420,8 @@ export type CreateManualVisitationInput = {
   visitStatus?: string;
   notes?: string;
   memberIds: string[];
+  visitorUserId?: string;
+  visitorDisplayName?: string;
 };
 
 export type UpdateManualVisitationInput = Partial<CreateManualVisitationInput>;

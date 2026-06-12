@@ -5,12 +5,12 @@ import { PageHeader } from "../common/page-header";
 export const ReportsLayout = ({
   title,
   subtitle,
-  actions,
+  controls,
   children,
 }: {
   title: string;
   subtitle: string;
-  actions?: ReactNode;
+  controls?: ReactNode;
   children: ReactNode;
 }) => (
   <div className="space-y-3">
@@ -19,7 +19,7 @@ export const ReportsLayout = ({
       description={subtitle}
       title={title}
     >
-      {actions}
+      {controls}
     </PageHeader>
     {children}
   </div>

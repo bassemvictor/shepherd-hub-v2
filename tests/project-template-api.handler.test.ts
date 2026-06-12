@@ -659,15 +659,15 @@ test("stores tenant visitation records under the canonical tenant event partitio
   assert.deepEqual(
     writtenVisitations.map((item) => item.PK),
     [
-      "TENANT#tenant-abc#EVENT#event-1",
-      "TENANT#tenant-abc#EVENT#event-1",
+      "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+      "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-2#EVENT#event-1",
     ],
   );
   assert.deepEqual(
     writtenVisitations.map((item) => item.visitationId),
     [
-      "calendar-1:event-1:member-1",
-      "calendar-2:event-1:member-1",
+      "CALENDAR#calendar-1#EVENT#event-1",
+      "CALENDAR#calendar-2#EVENT#event-1",
     ],
   );
 });
@@ -1063,6 +1063,7 @@ test("full sync restores member links from Google event private metadata", async
   const memberLinkWrite = commands.find((command) => command.name === "TransactWriteCommand");
   assert.ok(memberLinkWrite);
   assert.match(JSON.stringify(memberLinkWrite?.input), /"GSI2PK":"TENANT#tenant-abc#MEMBER#member-1"/);
+  assert.match(JSON.stringify(memberLinkWrite?.input), /"GSI3PK":"TENANT#tenant-abc#EVENT_ASSIGNMENTS"/);
 });
 
 test("refreshed calendars return events only for the requested schedule range", async () => {
@@ -1246,34 +1247,34 @@ test("member visitation history is tenant-shared and includes assignment snapsho
             return {
               Items: [
                 {
-                  PK: "TENANT#tenant-abc#EVENT#event-1",
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
                   SK: "MEMBER#member-1",
                   GSI2PK: "TENANT#tenant-abc#MEMBER#member-1",
-                  GSI2SK: "EVENT#2026-06-04T15:00:00.000Z#event-1",
+                  GSI2SK: "VISIT#2026-06-04T15:00:00.000Z#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
                   createdAt: "2026-06-03T12:00:00.000Z",
                   updatedAt: "2026-06-04T16:00:00.000Z",
-                  entityType: "EVENT_MEMBER",
+                  entityType: "VISITATION",
                   tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
                   calendarId: "calendar-1",
                   eventId: "event-1",
                   calendarOwnerUserId: "user-456",
                   calendarOwnerName: "Visitor B",
+                  memberIds: ["member-1"],
+                  memberNames: ["Adel Abraham"],
                   memberId: "member-1",
-                  memberName: "Adel Abraham",
-                  memberPhoneSnapshot: undefined,
-                  memberEmailSnapshot: undefined,
-                  unityIdSnapshot: undefined,
-                  sourceSnapshot: "UNITY",
-                  eventTitle: "Visitation: Adel Abraham",
-                  eventStart: "2026-06-04T15:00:00.000Z",
-                  eventEnd: "2026-06-04T16:00:00.000Z",
-                  eventLocation: "123 Main St",
-                  eventDescription: "Pastoral visit",
+                  title: "Visitation: Adel Abraham",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  location: "123 Main St",
+                  notes: "Pastoral visit",
                   allDay: false,
-                  assignmentStatus: "scheduled",
                   visitStatus: "scheduled",
                   createdByUserId: "user-456",
                   createdByName: "Visitor B",
+                  visitorUserId: "user-456",
+                  visitorDisplayName: "Visitor B",
                 },
               ],
             };
@@ -1315,26 +1316,31 @@ test("member visitation history is tenant-shared and includes assignment snapsho
   assert.deepEqual(JSON.parse(String(response.body)), {
     items: [
       {
-        createdAt: "2026-06-03T12:00:00.000Z",
-        eventId: "event-1",
+        allDay: false,
         calendarId: "calendar-1",
         calendarOwnerName: "Visitor B",
         calendarOwnerUserId: "user-456",
+        createdAt: "2026-06-03T12:00:00.000Z",
         createdByName: "Visitor B",
         createdByUserId: "user-456",
-        entityType: "EVENT_MEMBER",
-        eventDescription: "Pastoral visit",
-        eventEnd: "2026-06-04T16:00:00.000Z",
-        eventLocation: "123 Main St",
-        eventStart: "2026-06-04T15:00:00.000Z",
-        eventTitle: "Visitation: Adel Abraham",
-        isOwnCalendar: false,
-        memberName: "Adel Abraham",
+        endDate: "2026-06-04T16:00:00.000Z",
+        eventId: "event-1",
+        entityType: "VISITATION",
         memberId: "member-1",
-        assignmentStatus: "scheduled",
+        memberIds: ["member-1"],
+        memberNames: ["Adel Abraham"],
+        isOwnCalendar: false,
+        location: "123 Main St",
+        notes: "Pastoral visit",
+        source: "calendar",
         tenantId: "tenant-abc",
         updatedAt: "2026-06-04T16:00:00.000Z",
+        visitDate: "2026-06-04T15:00:00.000Z",
         visitStatus: "scheduled",
+        visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+        visitorDisplayName: "Visitor B",
+        visitorUserId: "user-456",
+        title: "Visitation: Adel Abraham",
       },
     ],
   });
@@ -1413,28 +1419,31 @@ test("member visitation history merges duplicate Unity member rows for the same 
             return {
               Items: [
                 {
-                  PK: "TENANT#tenant-abc#EVENT#event-1",
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
                   SK: "MEMBER#member-1",
                   GSI2PK: "TENANT#tenant-abc#MEMBER#member-1",
-                  GSI2SK: "EVENT#2026-06-04T15:00:00.000Z#event-1",
+                  GSI2SK: "VISIT#2026-06-04T15:00:00.000Z#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
                   createdAt: "2026-06-03T12:00:00.000Z",
                   updatedAt: "2026-06-04T16:00:00.000Z",
-                  entityType: "EVENT_MEMBER",
+                  entityType: "VISITATION",
                   tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
                   calendarId: "calendar-1",
                   eventId: "event-1",
                   calendarOwnerUserId: "user-456",
                   calendarOwnerName: "Visitor B",
+                  memberIds: ["member-1"],
+                  memberNames: ["Bassem Wanis"],
                   memberId: "member-1",
-                  memberName: "Bassem Wanis",
-                  sourceSnapshot: "UNITY",
-                  eventTitle: "Visitation: Bassem Wanis",
-                  eventStart: "2026-06-04T15:00:00.000Z",
-                  eventEnd: "2026-06-04T16:00:00.000Z",
-                  assignmentStatus: "scheduled",
+                  title: "Visitation: Bassem Wanis",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  endDate: "2026-06-04T16:00:00.000Z",
                   visitStatus: "scheduled",
                   createdByUserId: "user-456",
                   createdByName: "Visitor B",
+                  visitorUserId: "user-456",
+                  visitorDisplayName: "Visitor B",
                 },
               ],
             };
@@ -1444,28 +1453,31 @@ test("member visitation history merges duplicate Unity member rows for the same 
             return {
               Items: [
                 {
-                  PK: "TENANT#tenant-abc#EVENT#event-2",
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-2#EVENT#event-2",
                   SK: "MEMBER#member-2",
                   GSI2PK: "TENANT#tenant-abc#MEMBER#member-2",
-                  GSI2SK: "EVENT#2026-06-05T15:00:00.000Z#event-2",
+                  GSI2SK: "VISIT#2026-06-05T15:00:00.000Z#VISITATION#CALENDAR#calendar-2#EVENT#event-2",
                   createdAt: "2026-06-03T12:00:00.000Z",
                   updatedAt: "2026-06-05T16:00:00.000Z",
-                  entityType: "EVENT_MEMBER",
+                  entityType: "VISITATION",
                   tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-2#EVENT#event-2",
+                  source: "calendar",
                   calendarId: "calendar-2",
                   eventId: "event-2",
                   calendarOwnerUserId: "user-789",
                   calendarOwnerName: "Visitor C",
+                  memberIds: ["member-2"],
+                  memberNames: ["Bassem Wanis"],
                   memberId: "member-2",
-                  memberName: "Bassem Wanis",
-                  sourceSnapshot: "UNITY",
-                  eventTitle: "Visitation: Bassem Wanis",
-                  eventStart: "2026-06-05T15:00:00.000Z",
-                  eventEnd: "2026-06-05T16:00:00.000Z",
-                  assignmentStatus: "scheduled",
+                  title: "Visitation: Bassem Wanis",
+                  visitDate: "2026-06-05T15:00:00.000Z",
+                  endDate: "2026-06-05T16:00:00.000Z",
                   visitStatus: "scheduled",
                   createdByUserId: "user-789",
                   createdByName: "Visitor C",
+                  visitorUserId: "user-789",
+                  visitorDisplayName: "Visitor C",
                 },
               ],
             };
@@ -1506,8 +1518,8 @@ test("member visitation history merges duplicate Unity member rows for the same 
   assert.equal(response.statusCode, 200);
   const body = JSON.parse(String(response.body)) as { items: Array<{ eventId: string }> };
   assert.deepEqual(body.items.map((item) => item.eventId), [
-    "event-1",
     "event-2",
+    "event-1",
   ]);
 });
 
@@ -1517,6 +1529,46 @@ test("visitation reports default to all visitors and support only-my-visits filt
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
         if (command.constructor.name === "QueryCommand" && command.input.IndexName === "GSI1") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+          if (values[":gsiPk"] === "TENANT#tenant-abc#MEMBERS") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#adel abraham#MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  fullName: "Adel Abraham",
+                  initials: "AA",
+                  source: "UNITY",
+                  normalizedSearchText: "adel abraham",
+                  groups: ["North"],
+                },
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-2",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#mary mina#MEMBER#member-2",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-2",
+                  fullName: "Mary Mina",
+                  initials: "MM",
+                  source: "MANUAL",
+                  normalizedSearchText: "mary mina",
+                  groups: ["South"],
+                },
+              ],
+            };
+          }
+
           return {
             Items: [
               {
@@ -1567,6 +1619,10 @@ test("visitation reports default to all visitors and support only-my-visits filt
               },
             ],
           };
+        }
+
+        if (command.constructor.name === "QueryCommand" && command.input.IndexName === "GSI3") {
+          return { Items: [] };
         }
 
         return {};
@@ -1635,6 +1691,115 @@ test("visitation reports default to all visitors and support only-my-visits filt
   assert.equal(myBody.rows.length, 2);
   assert.equal(myBody.rows.find((row) => row.memberId === "member-1")?.visitCountInRange, 1);
   assert.equal(myBody.rows.find((row) => row.memberId === "member-2")?.visitCountInRange, 0);
+});
+
+test("manual visitation creation preserves the selected visitor while keeping the actor as creator", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  const putItems: Array<Record<string, unknown>> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "TENANT#tenant-abc" && key.SK === "MEMBER#member-1") {
+            return {
+              Item: {
+                PK: "TENANT#tenant-abc",
+                SK: "MEMBER#member-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "MEMBER",
+                tenantId: "tenant-abc",
+                memberId: "member-1",
+                fullName: "Adel Abraham",
+                initials: "AA",
+                source: "UNITY",
+                isUnityMember: true,
+                normalizedSearchText: "adel abraham",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          return {
+            Responses: {
+              "records-table": [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  fullName: "Adel Abraham",
+                  initials: "AA",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "adel abraham",
+                },
+              ],
+            },
+          };
+        }
+
+        if (command.constructor.name === "PutCommand") {
+          putItems.push(command.input.Item as Record<string, unknown>);
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          return { Items: putItems };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-06T12:00:00.000Z",
+    uuid: () => "visit-123",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/members/member-1/visitations",
+      pathParameters: { memberId: "member-1" },
+      body: JSON.stringify({
+        title: "Home visit",
+        visitDate: "2026-06-05T15:00:00.000Z",
+        memberIds: ["member-1"],
+        visitorUserId: "user-456",
+        visitorDisplayName: "Visitor B",
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "viewer@example.com",
+              name: "Viewer A",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 201);
+  assert.equal(putItems.length, 1);
+  assert.equal(putItems[0]?.visitorUserId, "user-456");
+  assert.equal(putItems[0]?.visitorDisplayName, "Visitor B");
+  assert.equal(putItems[0]?.createdByUserId, "user-123");
+  assert.equal(putItems[0]?.createdByName, "Viewer A");
+  assert.match(String(putItems[0]?.GSI1SK), /VISITOR#user-456#/);
 });
 
 test("schedule overview excludes user-owned records from a different tenant", async () => {

@@ -45,6 +45,7 @@ import type {
   ReportPagination,
   ReportVisitorOption,
   ReportsMemberScope,
+  ReportsMemberStatusFilter,
   ReportsMemberSourceFilter,
   ReportsSortBy,
   ReportsSortDirection,
@@ -62,6 +63,7 @@ import type {
   VisitationReportFilters,
   VisitationReportKpiSummary,
   VisitationReportResponse,
+  VisitationScopeMetrics,
   VisitationSource,
   UpdateManualVisitationInput,
   VisitorLeaderboardEntry,
@@ -77,6 +79,8 @@ type BaseItem = {
   GSI1SK?: string;
   GSI2PK?: string;
   GSI2SK?: string;
+  GSI3PK?: string;
+  GSI3SK?: string;
 };
 
 type GoogleConnectionItem = BaseItem & {
@@ -393,6 +397,9 @@ const eventMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const tenantMemberPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
 const memberEventGsiPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
 const memberEventGsiSk = (eventStartDateTime: string, eventId: string) => `EVENT#${eventStartDateTime}#${eventId}`;
+const tenantEventAssignmentGsiPk = (tenantId: string) => `TENANT#${tenantId}#EVENT_ASSIGNMENTS`;
+const tenantEventAssignmentGsiSk = (eventStartDateTime: string, memberId: string, eventId: string) =>
+  `EVENT#${eventStartDateTime}#MEMBER#${memberId}#EVENT#${eventId}`;
 const memberActivitySk = (createdAt: string, activityId: string) => `ACTIVITY#${createdAt}#${activityId}`;
 const visitationMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const tenantVisitationGsiSk = (visitDate: string, visitorUserId: string, memberId: string, visitationId: string) =>
@@ -890,6 +897,12 @@ const validateManualVisitationInput = (
     return "Select at least one member.";
   }
 
+  const visitorUserId = toOptionalString(input.visitorUserId);
+  const visitorDisplayName = toOptionalString(input.visitorDisplayName);
+  if ((visitorUserId && !visitorDisplayName) || (!visitorUserId && visitorDisplayName)) {
+    return "Choose a valid visitor.";
+  }
+
   return null;
 };
 
@@ -921,6 +934,15 @@ const normalizeReportMemberScope = (value: string | undefined): ReportsMemberSco
 
 const normalizeReportMemberSource = (value: string | undefined): ReportsMemberSourceFilter =>
   value === "manual" || value === "unity" || value === "all" ? value : "all";
+
+const normalizeReportStatusFilter = (value: string | undefined): ReportsMemberStatusFilter =>
+  value === "all"
+  || value === "never_visited"
+  || value === "not_visited_recently"
+  || value === "low_visitation"
+  || value === "visited"
+    ? value
+    : "all";
 
 const startOfCurrentYear = () => {
   const date = new Date();
@@ -968,6 +990,7 @@ const parseVisitationReportFilters = (event: APIGatewayProxyEventV2WithJWTAuthor
     visitorUserId,
     memberScope: normalizeReportMemberScope(params.memberScope),
     memberSource: normalizeReportMemberSource(params.memberSource),
+    status: normalizeReportStatusFilter(params.status),
     group: toOptionalString(params.group),
     search: toOptionalString(params.search),
     sortBy: normalizeReportSortBy(params.sortBy),
@@ -1406,6 +1429,25 @@ const listMemberEvents = async (context: RequestContext, memberId: string, deps:
   return (items as EventMemberItem[]).sort((left, right) => left.eventStart.localeCompare(right.eventStart));
 };
 
+const listUpcomingEventAssignments = async (context: RequestContext, from: string, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#gsiPk": "GSI3PK",
+      "#gsiSk": "GSI3SK",
+    },
+    ExpressionAttributeValues: {
+      ":gsiPk": tenantEventAssignmentGsiPk(context.tenantId),
+      ":from": `EVENT#${from}`,
+      ":to": "EVENT#~",
+    },
+    IndexName: "GSI3",
+    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
+    TableName: context.tableName,
+  });
+
+  return items as EventMemberItem[];
+};
+
 const listMemberVisitations = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
@@ -1697,6 +1739,8 @@ const syncEventMembers = async (
       SK: eventMemberSk(memberId),
       GSI2PK: memberEventGsiPk(context.tenantId, memberId),
       GSI2SK: memberEventGsiSk(event.start, event.eventId),
+      GSI3PK: tenantEventAssignmentGsiPk(context.tenantId),
+      GSI3SK: tenantEventAssignmentGsiSk(event.start, memberId, event.eventId),
       createdAt: existingAssignment?.createdAt ?? event.createdAt,
       updatedAt: deps.now(),
       entityType: "EVENT_MEMBER",
@@ -1873,6 +1917,8 @@ const persistManualVisitationGroup = async (
     location?: string;
     notes?: string;
     visitStatus?: string;
+    visitorUserId?: string;
+    visitorDisplayName?: string;
   },
   deps: HandlerDependencies,
 ) => {
@@ -1886,6 +1932,8 @@ const persistManualVisitationGroup = async (
   const createdAt = existing?.[0]?.createdAt ?? deps.now();
   const createdByUserId = existing?.[0]?.createdByUserId ?? context.actorSub;
   const createdByName = existing?.[0]?.createdByName ?? context.actorName;
+  const visitorUserId = toOptionalString(input.visitorUserId) ?? existing?.[0]?.visitorUserId ?? context.actorSub;
+  const visitorDisplayName = toOptionalString(input.visitorDisplayName) ?? existing?.[0]?.visitorDisplayName ?? context.actorName;
   const existingByMemberId = new Map((existing ?? []).map((item) => [item.memberId, item]));
 
   for (const record of existing ?? []) {
@@ -1906,7 +1954,7 @@ const persistManualVisitationGroup = async (
       PK: tenantVisitationPk(context.tenantId, visitationId),
       SK: visitationMemberSk(member.memberId),
       GSI1PK: tenantPk(context.tenantId),
-      GSI1SK: tenantVisitationGsiSk(input.visitDate, createdByUserId, member.memberId, visitationId),
+      GSI1SK: tenantVisitationGsiSk(input.visitDate, visitorUserId, member.memberId, visitationId),
       GSI2PK: tenantMemberPk(context.tenantId, member.memberId),
       GSI2SK: memberVisitationGsiSk(input.visitDate, visitationId),
       createdAt: existingRecord?.createdAt ?? createdAt,
@@ -1918,8 +1966,8 @@ const persistManualVisitationGroup = async (
       memberId: member.memberId,
       memberIds,
       memberNames,
-      visitorUserId: createdByUserId,
-      visitorDisplayName: createdByName,
+      visitorUserId,
+      visitorDisplayName,
       createdByUserId,
       createdByName,
       visitDate: input.visitDate,
@@ -2864,6 +2912,8 @@ const updateManualVisitation = async (
     visitStatus: input.visitStatus ?? existing[0].visitStatus,
     notes: input.notes ?? existing[0].notes,
     memberIds: normalizeMemberIds(input.memberIds ?? existing[0].memberIds),
+    visitorUserId: input.visitorUserId ?? existing[0].visitorUserId,
+    visitorDisplayName: input.visitorDisplayName ?? existing[0].visitorDisplayName,
   };
   const validationError = validateManualVisitationInput(merged);
   if (validationError) {
@@ -2984,8 +3034,11 @@ const getVisitationReport = async (
   deps: HandlerDependencies,
 ) => {
   const filters = parseVisitationReportFilters(event);
-  const members = await listMembers(context, deps);
-  const visitations = await listTenantVisitations(context, deps);
+  const [members, visitations, upcomingAssignments] = await Promise.all([
+    listMembers(context, deps),
+    listTenantVisitations(context, deps),
+    listUpcomingEventAssignments(context, deps.now(), deps),
+  ]);
   const allVisitors: ReportVisitorOption[] = [...new Map(
     visitations.map((item) => [item.visitorUserId, {
       visitorUserId: item.visitorUserId,
@@ -3021,36 +3074,51 @@ const getVisitationReport = async (
     return true;
   });
 
-  const lifetimeVisitsByMemberId = new Map<string, VisitationItem[]>();
-  const visitorScopedLifetimeVisitsByMemberId = new Map<string, VisitationItem[]>();
-  const currentUserLifetimeVisitsByMemberId = new Map<string, VisitationItem[]>();
-  const matchingVisitsByMemberId = new Map<string, VisitationItem[]>();
-  const currentUserMatchingVisitsByMemberId = new Map<string, VisitationItem[]>();
   const topVisitorsByUserId = new Map<string, VisitorLeaderboardEntry>();
   const currentUserActivity: CurrentUserVisitationActivity = {
     thisWeek: 0,
     thisMonth: 0,
     thisYear: 0,
   };
+  const everyoneLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
+  const filteredLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
+  const currentUserLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
+  const everyoneRangeCountByMemberId = new Map<string, number>();
+  const filteredRangeCountByMemberId = new Map<string, number>();
+  const currentUserRangeCountByMemberId = new Map<string, number>();
   const weekStart = startOfCurrentWeek();
   const monthStart = startOfCurrentMonth();
   const yearStart = startOfCurrentYear();
 
-  for (const visitation of visitations) {
-    const lifetime = lifetimeVisitsByMemberId.get(visitation.memberId) ?? [];
-    lifetime.push(visitation);
-    lifetimeVisitsByMemberId.set(visitation.memberId, lifetime);
+  const incrementCount = (target: Map<string, number>, memberId: string) => {
+    target.set(memberId, (target.get(memberId) ?? 0) + 1);
+  };
 
-    if (matchesReportVisitorFilter(visitation, filters, context.actorSub)) {
-      const scopedLifetime = visitorScopedLifetimeVisitsByMemberId.get(visitation.memberId) ?? [];
-      scopedLifetime.push(visitation);
-      visitorScopedLifetimeVisitsByMemberId.set(visitation.memberId, scopedLifetime);
+  const updateScopeMetrics = (target: Map<string, VisitationScopeMetrics>, visitation: VisitationItem) => {
+    const current = target.get(visitation.memberId) ?? {
+      visitCountInRange: 0,
+      totalLifetimeVisits: 0,
+      lastVisitDate: undefined,
+      lastVisitedBy: undefined,
+    };
+    current.totalLifetimeVisits += 1;
+    if (!current.lastVisitDate || visitation.visitDate > current.lastVisitDate) {
+      current.lastVisitDate = visitation.visitDate;
+      current.lastVisitedBy = visitation.visitorDisplayName;
+    }
+    target.set(visitation.memberId, current);
+  };
+
+  for (const visitation of visitations) {
+    updateScopeMetrics(everyoneLifetimeByMemberId, visitation);
+
+    const matchesVisitor = matchesReportVisitorFilter(visitation, filters, context.actorSub);
+    if (matchesVisitor) {
+      updateScopeMetrics(filteredLifetimeByMemberId, visitation);
     }
 
     if (visitation.visitorUserId === context.actorSub) {
-      const currentUserLifetime = currentUserLifetimeVisitsByMemberId.get(visitation.memberId) ?? [];
-      currentUserLifetime.push(visitation);
-      currentUserLifetimeVisitsByMemberId.set(visitation.memberId, currentUserLifetime);
+      updateScopeMetrics(currentUserLifetimeByMemberId, visitation);
 
       if (visitation.visitDate >= weekStart) {
         currentUserActivity.thisWeek += 1;
@@ -3069,19 +3137,17 @@ const getVisitationReport = async (
       continue;
     }
 
+    incrementCount(everyoneRangeCountByMemberId, visitation.memberId);
+
     if (visitation.visitorUserId === context.actorSub) {
-      const currentUserMatching = currentUserMatchingVisitsByMemberId.get(visitation.memberId) ?? [];
-      currentUserMatching.push(visitation);
-      currentUserMatchingVisitsByMemberId.set(visitation.memberId, currentUserMatching);
+      incrementCount(currentUserRangeCountByMemberId, visitation.memberId);
     }
 
-    if (!matchesReportVisitorFilter(visitation, filters, context.actorSub)) {
+    if (!matchesVisitor) {
       continue;
     }
 
-    const matching = matchingVisitsByMemberId.get(visitation.memberId) ?? [];
-    matching.push(visitation);
-    matchingVisitsByMemberId.set(visitation.memberId, matching);
+    incrementCount(filteredRangeCountByMemberId, visitation.memberId);
 
     const existingVisitor = topVisitorsByUserId.get(visitation.visitorUserId);
     if (existingVisitor) {
@@ -3095,32 +3161,54 @@ const getVisitationReport = async (
     }
   }
 
-  // TODO: Replace this member-by-member lookup with a tenant/date visitation index or pre-aggregated reporting table if data volume grows.
   const nextScheduledVisitByMemberId = new Map<string, string>();
-  for (const member of filteredMembers) {
-    const memberEvents = await listMemberEvents(context, member.memberId, deps);
-    const nextScheduled = memberEvents
-      .filter((item) => item.assignmentStatus !== "cancelled" && item.eventStart >= deps.now())
-      .sort((left, right) => left.eventStart.localeCompare(right.eventStart))[0];
-    if (nextScheduled) {
-      nextScheduledVisitByMemberId.set(member.memberId, nextScheduled.eventStart);
+  for (const assignment of upcomingAssignments) {
+    if (assignment.assignmentStatus === "cancelled" || nextScheduledVisitByMemberId.has(assignment.memberId)) {
+      continue;
     }
+    nextScheduledVisitByMemberId.set(assignment.memberId, assignment.eventStart);
   }
 
+  const OVERDUE_DAYS = 90;
   const threshold = filters.visitCountThreshold;
-  const allRows: VisitationOverviewRow[] = filteredMembers.map((member) => {
-    const lifetimeVisits = (lifetimeVisitsByMemberId.get(member.memberId) ?? [])
-      .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
-    const visitorScopedLifetimeVisits = (visitorScopedLifetimeVisitsByMemberId.get(member.memberId) ?? [])
-      .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
-    const currentUserLifetimeVisits = (currentUserLifetimeVisitsByMemberId.get(member.memberId) ?? [])
-      .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
-    const matchingVisits = (matchingVisitsByMemberId.get(member.memberId) ?? [])
-      .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
-    const currentUserMatchingVisits = (currentUserMatchingVisitsByMemberId.get(member.memberId) ?? [])
-      .sort((left, right) => right.visitDate.localeCompare(left.visitDate));
-    const matchingCount = matchingVisits.length;
-    const lastVisit = visitorScopedLifetimeVisits[0];
+  const nowTime = new Date(deps.now()).getTime();
+  const getDaysSince = (value?: string) => {
+    if (!value) {
+      return null;
+    }
+
+    return Math.max(0, Math.floor((nowTime - new Date(value).getTime()) / 86_400_000));
+  };
+
+  const getMemberStatus = (
+    totalLifetimeVisits: number,
+    visitCountInRange: number,
+    lastVisitDate?: string,
+  ): ReportsMemberStatusFilter => {
+    if (totalLifetimeVisits === 0) {
+      return "never_visited";
+    }
+
+    const daysSinceLastVisit = getDaysSince(lastVisitDate);
+    if (daysSinceLastVisit !== null && daysSinceLastVisit > OVERDUE_DAYS) {
+      return "not_visited_recently";
+    }
+
+    if (visitCountInRange <= 1) {
+      return "low_visitation";
+    }
+
+    return "visited";
+  };
+
+  const allRows: VisitationOverviewRow[] = [];
+  for (const member of filteredMembers) {
+    const everyoneLifetime = everyoneLifetimeByMemberId.get(member.memberId);
+    const filteredLifetime = filteredLifetimeByMemberId.get(member.memberId);
+    const currentUserLifetime = currentUserLifetimeByMemberId.get(member.memberId);
+    const matchingCount = filteredRangeCountByMemberId.get(member.memberId) ?? 0;
+    const everyoneRangeCount = everyoneRangeCountByMemberId.get(member.memberId) ?? 0;
+    const currentUserRangeCount = currentUserRangeCountByMemberId.get(member.memberId) ?? 0;
     const status: VisitationOverviewRow["status"] =
       matchingCount === 0
         ? "Not Visited"
@@ -3128,7 +3216,7 @@ const getVisitationReport = async (
           ? "Low Visitation"
           : "Recently Visited";
 
-    return {
+    const row: VisitationOverviewRow = {
       memberId: member.memberId,
       memberFullName: member.fullName,
       initials: member.initials,
@@ -3137,47 +3225,56 @@ const getVisitationReport = async (
       unityId: member.unityId,
       memberSource: member.source,
       sectorOrGroup: member.groups?.join(", "),
-      lastVisitDate: lastVisit?.visitDate,
-      lastVisitedBy: lastVisit?.visitorDisplayName,
+      lastVisitDate: filteredLifetime?.lastVisitDate,
+      lastVisitedBy: filteredLifetime?.lastVisitedBy,
       visitCountInRange: matchingCount,
-      totalLifetimeVisits: visitorScopedLifetimeVisits.length,
+      totalLifetimeVisits: filteredLifetime?.totalLifetimeVisits ?? 0,
       nextScheduledVisit: nextScheduledVisitByMemberId.get(member.memberId),
       status,
       normalizedSearchText: member.normalizedSearchText,
       scopeMetrics: {
         everyone: {
-          visitCountInRange: lifetimeVisits.filter((item) => {
-            const inFromRange = !filters.from || item.visitDate >= filters.from;
-            const inToRange = !filters.to || item.visitDate <= filters.to;
-            return inFromRange && inToRange;
-          }).length,
-          totalLifetimeVisits: lifetimeVisits.length,
-          lastVisitDate: lifetimeVisits[0]?.visitDate,
-          lastVisitedBy: lifetimeVisits[0]?.visitorDisplayName,
+          visitCountInRange: everyoneRangeCount,
+          totalLifetimeVisits: everyoneLifetime?.totalLifetimeVisits ?? 0,
+          lastVisitDate: everyoneLifetime?.lastVisitDate,
+          lastVisitedBy: everyoneLifetime?.lastVisitedBy,
         },
         me: {
-          visitCountInRange: currentUserMatchingVisits.length,
-          totalLifetimeVisits: currentUserLifetimeVisits.length,
-          lastVisitDate: currentUserLifetimeVisits[0]?.visitDate,
-          lastVisitedBy: currentUserLifetimeVisits[0]?.visitorDisplayName,
+          visitCountInRange: currentUserRangeCount,
+          totalLifetimeVisits: currentUserLifetime?.totalLifetimeVisits ?? 0,
+          lastVisitDate: currentUserLifetime?.lastVisitDate,
+          lastVisitedBy: currentUserLifetime?.lastVisitedBy,
         },
       },
     };
-  }).filter((row) => {
+
     if (filters.visitCountMode === "not_visited") {
-      return row.visitCountInRange === 0;
+      if (row.visitCountInRange !== 0) {
+        continue;
+      }
     }
 
     if (filters.visitCountMode === "lte") {
-      return row.visitCountInRange <= threshold;
+      if (row.visitCountInRange > threshold) {
+        continue;
+      }
     }
 
     if (filters.visitCountMode === "gt") {
-      return row.visitCountInRange > threshold;
+      if (row.visitCountInRange <= threshold) {
+        continue;
+      }
     }
 
-    return true;
-  });
+    if (filters.status !== "all") {
+      const memberStatus = getMemberStatus(row.totalLifetimeVisits, row.visitCountInRange, row.lastVisitDate);
+      if (memberStatus !== filters.status) {
+        continue;
+      }
+    }
+
+    allRows.push(row);
+  }
 
   allRows.sort((left, right) => {
     const direction = filters.sortDirection === "asc" ? 1 : -1;
@@ -3194,12 +3291,48 @@ const getVisitationReport = async (
     return leftValue.localeCompare(rightValue) * direction;
   });
 
+  let notVisitedCount = 0;
+  let oneVisitCount = 0;
+  let twoToThreeCount = 0;
+  let fourToSixCount = 0;
+  let sevenPlusCount = 0;
+  let overdueCount = 0;
+  let lowVisitationCount = 0;
+  let visitedInRangeCount = 0;
+  let totalVisitCount = 0;
+
+  for (const row of allRows) {
+    const memberStatus = getMemberStatus(row.totalLifetimeVisits, row.visitCountInRange, row.lastVisitDate);
+    totalVisitCount += row.visitCountInRange;
+    if (row.visitCountInRange === 0) {
+      notVisitedCount += 1;
+    } else {
+      visitedInRangeCount += 1;
+      if (row.visitCountInRange <= threshold) {
+        lowVisitationCount += 1;
+      }
+    }
+    if (memberStatus === "not_visited_recently") {
+      overdueCount += 1;
+    }
+
+    if (row.visitCountInRange === 1) {
+      oneVisitCount += 1;
+    } else if (row.visitCountInRange >= 2 && row.visitCountInRange <= 3) {
+      twoToThreeCount += 1;
+    } else if (row.visitCountInRange >= 4 && row.visitCountInRange <= 6) {
+      fourToSixCount += 1;
+    } else if (row.visitCountInRange >= 7) {
+      sevenPlusCount += 1;
+    }
+  }
+
   const distributionCounts = {
-    not_visited: allRows.filter((row) => row.visitCountInRange === 0).length,
-    one_visit: allRows.filter((row) => row.visitCountInRange === 1).length,
-    two_to_three: allRows.filter((row) => row.visitCountInRange >= 2 && row.visitCountInRange <= 3).length,
-    four_to_six: allRows.filter((row) => row.visitCountInRange >= 4 && row.visitCountInRange <= 6).length,
-    seven_plus: allRows.filter((row) => row.visitCountInRange >= 7).length,
+    not_visited: notVisitedCount,
+    one_visit: oneVisitCount,
+    two_to_three: twoToThreeCount,
+    four_to_six: fourToSixCount,
+    seven_plus: sevenPlusCount,
   };
   const distributionTotal = Math.max(allRows.length, 1);
   const distribution: VisitationDistributionBucket[] = [
@@ -3213,13 +3346,26 @@ const getVisitationReport = async (
   const summary: VisitationReportKpiSummary = {
     totalMembers: filteredMembers.length,
     matchingMembers: allRows.length,
-    notVisitedMembers: allRows.filter((row) => row.visitCountInRange === 0).length,
-    lowVisitationMembers: allRows.filter((row) => row.visitCountInRange > 0 && row.visitCountInRange <= threshold).length,
-    visitedInRangeMembers: allRows.filter((row) => row.visitCountInRange > 0).length,
+    notVisitedMembers: notVisitedCount,
+    overdueMembers: overdueCount,
+    lowVisitationMembers: lowVisitationCount,
+    visitedInRangeMembers: visitedInRangeCount,
     averageVisitsPerMember: allRows.length
-      ? Number((allRows.reduce((sum, row) => sum + row.visitCountInRange, 0) / allRows.length).toFixed(2))
+      ? Number((totalVisitCount / allRows.length).toFixed(2))
       : 0,
   };
+
+  const attentionMembers = allRows
+    .filter((row) => {
+      const memberStatus = getMemberStatus(row.totalLifetimeVisits, row.visitCountInRange, row.lastVisitDate);
+      return memberStatus === "never_visited" || memberStatus === "not_visited_recently";
+    })
+    .sort((left, right) => {
+      const leftDays = getDaysSince(left.lastVisitDate) ?? Number.POSITIVE_INFINITY;
+      const rightDays = getDaysSince(right.lastVisitDate) ?? Number.POSITIVE_INFINITY;
+      return rightDays - leftDays || left.memberFullName.localeCompare(right.memberFullName);
+    })
+    .slice(0, 5);
 
   const totalItems = allRows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / filters.pageSize));
@@ -3239,6 +3385,7 @@ const getVisitationReport = async (
     },
     summary,
     distribution,
+    attentionMembers,
     rows: allRows.slice(startIndex, startIndex + filters.pageSize),
     pagination,
     visitors: allVisitors,

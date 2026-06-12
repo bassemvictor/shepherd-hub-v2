@@ -60,6 +60,7 @@ export const buildReportFilters = (
     visitorUserId: selectedVisitorUserId,
     memberScope: "active_only",
     memberSource: "all",
+    status: "all",
     group: undefined,
     search: undefined,
     sortBy: "member_name",
@@ -73,7 +74,14 @@ export const getRelevantVisits = (
   member: VisitationOverviewRow,
   scope: ReportScope,
   _currentUser?: AppAuthUser | null,
-): VisitationScopeMetrics => (scope === "me" ? member.scopeMetrics.me : member.scopeMetrics.everyone);
+): VisitationScopeMetrics => (scope === "me"
+  ? member.scopeMetrics.me
+  : {
+    visitCountInRange: member.visitCountInRange,
+    totalLifetimeVisits: member.totalLifetimeVisits,
+    lastVisitDate: member.lastVisitDate,
+    lastVisitedBy: member.lastVisitedBy,
+  });
 
 export const getVisitCount = (
   member: VisitationOverviewRow,

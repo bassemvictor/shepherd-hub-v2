@@ -1,4 +1,4 @@
-import { Bell, ChevronRight, LogOut, Menu, Search, Shield, Sparkles } from "lucide-react";
+import { Bell, ChevronRight, LogOut, Menu, Search, Shield } from "lucide-react";
 import { useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
@@ -35,14 +35,16 @@ export const AppShell = () => {
           )}
         >
           <div className="flex min-h-full flex-col">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="min-w-0">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-blue-200/80">
-                  {user?.tenantId ?? "No Tenant Assigned"}
-                </p>
-                <div className="mt-1.5 flex items-center gap-2">
-                  <Sparkles className="h-5 w-5" />
-                  <h1 className="truncate text-base font-semibold sm:text-lg">Shepherd Hub 2.0</h1>
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <img alt="Shepherd Hub logo" className="h-12 w-12 shrink-0 object-contain" src="/logo_bw.png" />
+                <div className="min-w-0 pt-0.5">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-blue-200/80">
+                    {user?.tenantId ?? "No Tenant Assigned"}
+                  </p>
+                  <h1 className="mt-1 truncate text-[1.25rem] font-semibold leading-none tracking-tight text-white sm:text-[1.45rem]">
+                    Shepherd Hub 2.0
+                  </h1>
                 </div>
               </div>
               <button

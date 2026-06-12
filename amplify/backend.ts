@@ -55,6 +55,18 @@ recordsTable.addGlobalSecondaryIndex({
   },
 });
 
+recordsTable.addGlobalSecondaryIndex({
+  indexName: "GSI3",
+  partitionKey: {
+    name: "GSI3PK",
+    type: AttributeType.STRING,
+  },
+  sortKey: {
+    name: "GSI3SK",
+    type: AttributeType.STRING,
+  },
+});
+
 backend.projectTemplateApi.addEnvironment("PROJECT_TEMPLATE_TABLE", recordsTable.tableName);
 backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID ?? "");
 backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_SECRET", process.env.GOOGLE_CLIENT_SECRET ?? "");
