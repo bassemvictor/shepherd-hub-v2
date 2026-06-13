@@ -18,6 +18,9 @@ const formatDateTime = (value?: string) => {
   }).format(new Date(value));
 };
 
+const getRowStatus = (row: VisitationOverviewRow) =>
+  (row.totalLifetimeVisits > 0 ? "Visited" : "Need a Visit");
+
 export const ReportMembersGrid = ({ rows }: { rows: VisitationOverviewRow[] }) => {
   const navigate = useNavigate();
 
@@ -82,14 +85,12 @@ export const ReportMembersGrid = ({ rows }: { rows: VisitationOverviewRow[] }) =
       cell: (row) => (
         <span
           className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
-            row.status === "Not Visited"
-              ? "bg-rose-50 text-rose-700"
-              : row.status === "Low Visitation"
-                ? "bg-amber-50 text-amber-700"
-                : "bg-emerald-50 text-emerald-700"
+            getRowStatus(row) === "Need a Visit"
+              ? "bg-amber-50 text-amber-700"
+              : "bg-emerald-50 text-emerald-700"
           }`}
         >
-          {row.status}
+          {getRowStatus(row)}
         </span>
       ),
     },

@@ -3,14 +3,25 @@ import type { VisitationOverviewRow, VisitationReportFilters, VisitationScopeMet
 
 export type ReportScope = "me" | "everyone";
 export type ReportView = "dashboard" | "members";
-export type ReportPeriod = "this_week" | "this_month" | "this_year" | "custom";
-export type MemberStatusFilter = "all" | "never_visited" | "not_visited_recently" | "low_visitation" | "visited";
-export type AttentionBucket = "never_visited" | "overdue";
+export type ReportPeriod = "all_time" | "last_30_days" | "last_90_days" | "this_year" | "custom";
+export type ReportShowFilter = "everyone" | "need_visit" | "visited";
 
-export const OVERDUE_DAYS = 90;
+const DAY_IN_MS = 86_400_000;
+
+const startOfToday = () => {
+  const value = new Date();
+  value.setHours(0, 0, 0, 0);
+  return value;
+};
 
 export const getPeriodDateRange = (period: ReportPeriod, customFrom?: string, customTo?: string) => {
-  const now = new Date();
+  if (period === "all_time") {
+    return {
+      from: undefined,
+      to: undefined,
+      sinceBeginning: true,
+    };
+  }
 
   if (period === "custom") {
     return {
@@ -20,21 +31,12 @@ export const getPeriodDateRange = (period: ReportPeriod, customFrom?: string, cu
     };
   }
 
-  if (period === "this_week") {
-    const start = new Date(now);
-    const day = start.getDay();
-    const diff = (day + 6) % 7;
-    start.setDate(start.getDate() - diff);
-    start.setHours(0, 0, 0, 0);
-    return { from: start.toISOString(), to: undefined, sinceBeginning: false };
-  }
+  const now = new Date();
 
-  if (period === "this_month") {
-    return {
-      from: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
-      to: undefined,
-      sinceBeginning: false,
-    };
+  if (period === "last_30_days" || period === "last_90_days") {
+    const start = startOfToday();
+    start.setDate(start.getDate() - (period === "last_30_days" ? 29 : 89));
+    return { from: start.toISOString(), to: undefined, sinceBeginning: false };
   }
 
   return {
@@ -83,12 +85,15 @@ export const getRelevantVisits = (
     lastVisitedBy: member.lastVisitedBy,
   });
 
-export const getVisitCount = (
+export const getVisitCountForPeriod = (
   member: VisitationOverviewRow,
-  _period: ReportPeriod,
+  period: ReportPeriod,
   scope: ReportScope,
   currentUser?: AppAuthUser | null,
-) => getRelevantVisits(member, scope, currentUser).visitCountInRange;
+) => {
+  const relevant = getRelevantVisits(member, scope, currentUser);
+  return period === "all_time" ? relevant.totalLifetimeVisits : relevant.visitCountInRange;
+};
 
 export const getLastVisit = (
   member: VisitationOverviewRow,
@@ -102,57 +107,46 @@ export const getDaysSinceLastVisit = (value?: string) => {
   }
 
   const diff = Date.now() - new Date(value).getTime();
-  return Math.max(0, Math.floor(diff / 86_400_000));
+  return Math.max(0, Math.floor(diff / DAY_IN_MS));
 };
+
+export const hasVisitInPeriod = (
+  member: VisitationOverviewRow,
+  period: ReportPeriod,
+  scope: ReportScope,
+  currentUser?: AppAuthUser | null,
+) => getVisitCountForPeriod(member, period, scope, currentUser) > 0;
+
+export const needsVisitInPeriod = (
+  member: VisitationOverviewRow,
+  period: ReportPeriod,
+  scope: ReportScope,
+  currentUser?: AppAuthUser | null,
+) => !hasVisitInPeriod(member, period, scope, currentUser);
 
 export const getVisitStatus = (
   member: VisitationOverviewRow,
+  period: ReportPeriod,
   scope: ReportScope,
   currentUser?: AppAuthUser | null,
-) => {
-  const relevant = getRelevantVisits(member, scope, currentUser);
-  const daysSinceLastVisit = getDaysSinceLastVisit(relevant.lastVisitDate);
+) => (hasVisitInPeriod(member, period, scope, currentUser) ? "Visited" as const : "Need a Visit" as const);
 
-  if (relevant.totalLifetimeVisits === 0) {
-    return "Never Visited" as const;
-  }
-
-  if (daysSinceLastVisit !== null && daysSinceLastVisit > OVERDUE_DAYS) {
-    return "Overdue" as const;
-  }
-
-  if (relevant.visitCountInRange <= 1) {
-    return "Low Visitation" as const;
-  }
-
-  return "Healthy" as const;
-};
-
-export const matchesStatusFilter = (
+export const matchesShowFilter = (
   member: VisitationOverviewRow,
+  period: ReportPeriod,
   scope: ReportScope,
-  statusFilter: MemberStatusFilter,
+  showFilter: ReportShowFilter,
   currentUser?: AppAuthUser | null,
 ) => {
-  const status = getVisitStatus(member, scope, currentUser);
-
-  if (statusFilter === "all") {
+  if (showFilter === "everyone") {
     return true;
   }
 
-  if (statusFilter === "never_visited") {
-    return status === "Never Visited";
+  if (showFilter === "need_visit") {
+    return needsVisitInPeriod(member, period, scope, currentUser);
   }
 
-  if (statusFilter === "not_visited_recently") {
-    return status === "Overdue";
-  }
-
-  if (statusFilter === "low_visitation") {
-    return status === "Low Visitation";
-  }
-
-  return status === "Healthy";
+  return hasVisitInPeriod(member, period, scope, currentUser);
 };
 
 export const formatReportDate = (value?: string) => {
@@ -178,11 +172,14 @@ export const formatRelativeVisitAge = (value?: string) => {
 };
 
 export const getPeriodLabel = (period: ReportPeriod) => {
-  if (period === "this_week") {
-    return "This Week";
+  if (period === "all_time") {
+    return "All Time";
   }
-  if (period === "this_month") {
-    return "This Month";
+  if (period === "last_30_days") {
+    return "Last 30 Days";
+  }
+  if (period === "last_90_days") {
+    return "Last 90 Days";
   }
   if (period === "this_year") {
     return "This Year";
@@ -190,31 +187,62 @@ export const getPeriodLabel = (period: ReportPeriod) => {
   return "Custom";
 };
 
-export const getVisitedLabel = (period: ReportPeriod, scope: ReportScope) => {
-  const base = `Visited ${getPeriodLabel(period)}`;
-  return scope === "me" ? `${base} by Me` : base;
+export const getPeriodDescription = (period: ReportPeriod) => {
+  if (period === "all_time") {
+    return "all time";
+  }
+  if (period === "last_30_days") {
+    return "the last 30 days";
+  }
+  if (period === "last_90_days") {
+    return "the last 90 days";
+  }
+  if (period === "this_year") {
+    return "this year";
+  }
+  return "the selected period";
 };
 
-export const getAverageVisitsLabel = (scope: ReportScope) =>
-  scope === "me" ? "Average Visits / Member by Me" : "Average Visits / Member";
+export const getFilterSummary = (showFilter: ReportShowFilter, period: ReportPeriod) => {
+  if (showFilter === "everyone") {
+    return "Showing all members.";
+  }
 
-export const getNeverVisitedLabel = (scope: ReportScope) =>
-  scope === "me" ? "Never Visited by Me" : "Never Visited";
+  if (showFilter === "need_visit") {
+    if (period === "all_time") {
+      return "Showing members who have never been visited.";
+    }
+    return `Showing members who have not been visited in ${getPeriodDescription(period)}.`;
+  }
 
-export const getOverdueLabel = (scope: ReportScope) =>
-  scope === "me" ? "Not Visited > 90 Days by Me" : "Not Visited > 90 Days";
+  if (period === "all_time") {
+    return "Showing members who have been visited at least once.";
+  }
 
-export const getCoverageChartData = (rows: VisitationOverviewRow[], scope: ReportScope, currentUser?: AppAuthUser | null) => {
-  const visited = rows.filter((row) => getRelevantVisits(row, scope, currentUser).totalLifetimeVisits > 0).length;
-  const notVisited = rows.length - visited;
+  return `Showing members who were visited in ${getPeriodDescription(period)}.`;
+};
+
+export const getCoverageChartData = (
+  rows: VisitationOverviewRow[],
+  period: ReportPeriod,
+  scope: ReportScope,
+  currentUser?: AppAuthUser | null,
+) => {
+  const visited = rows.filter((row) => hasVisitInPeriod(row, period, scope, currentUser)).length;
+  const needVisit = rows.length - visited;
 
   return [
     { key: "visited", label: "Visited", count: visited },
-    { key: "not_visited", label: "Not Visited", count: notVisited },
+    { key: "need_visit", label: "Need a Visit", count: needVisit },
   ] as const;
 };
 
-export const getFrequencyChartData = (rows: VisitationOverviewRow[], scope: ReportScope, currentUser?: AppAuthUser | null) => {
+export const getFrequencyChartData = (
+  rows: VisitationOverviewRow[],
+  period: ReportPeriod,
+  scope: ReportScope,
+  currentUser?: AppAuthUser | null,
+) => {
   const counts = {
     zero: 0,
     one: 0,
@@ -224,7 +252,7 @@ export const getFrequencyChartData = (rows: VisitationOverviewRow[], scope: Repo
   };
 
   rows.forEach((row) => {
-    const total = getRelevantVisits(row, scope, currentUser).totalLifetimeVisits;
+    const total = getVisitCountForPeriod(row, period, scope, currentUser);
     if (total === 0) {
       counts.zero += 1;
     } else if (total === 1) {
@@ -247,40 +275,47 @@ export const getFrequencyChartData = (rows: VisitationOverviewRow[], scope: Repo
   ] as const;
 };
 
-export const getMembersRequiringAttention = (
+export const getAverageDaysSinceLastVisit = (
   rows: VisitationOverviewRow[],
   scope: ReportScope,
   currentUser?: AppAuthUser | null,
-) =>
-  [...rows]
-    .filter((row) => {
-      const status = getVisitStatus(row, scope, currentUser);
-      return status === "Never Visited" || status === "Overdue";
-    })
-    .sort((left, right) => {
-      const leftDays = getDaysSinceLastVisit(getLastVisit(left, scope, currentUser)) ?? Number.POSITIVE_INFINITY;
-      const rightDays = getDaysSinceLastVisit(getLastVisit(right, scope, currentUser)) ?? Number.POSITIVE_INFINITY;
-      return rightDays - leftDays;
-    })
-    .slice(0, 5);
+) => {
+  const values = rows
+    .map((row) => getDaysSinceLastVisit(getLastVisit(row, scope, currentUser)))
+    .filter((value): value is number => value !== null);
 
-export const sortMembersForGrid = (
+  if (!values.length) {
+    return null;
+  }
+
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+};
+
+export const getTotalVisits = (
   rows: VisitationOverviewRow[],
+  period: ReportPeriod,
+  scope: ReportScope,
+  currentUser?: AppAuthUser | null,
+) => rows.reduce((sum, row) => sum + getVisitCountForPeriod(row, period, scope, currentUser), 0);
+
+export const getNeverVisitedCount = (
+  rows: VisitationOverviewRow[],
+  scope: ReportScope,
+  currentUser?: AppAuthUser | null,
+) => rows.filter((row) => getRelevantVisits(row, scope, currentUser).totalLifetimeVisits === 0).length;
+
+export const sortMembersForDisplay = (
+  rows: VisitationOverviewRow[],
+  period: ReportPeriod,
   scope: ReportScope,
   currentUser?: AppAuthUser | null,
 ) =>
   [...rows].sort((left, right) => {
-    const leftStatus = getVisitStatus(left, scope, currentUser);
-    const rightStatus = getVisitStatus(right, scope, currentUser);
-    const statusWeight = {
-      "Never Visited": 0,
-      Overdue: 1,
-      "Low Visitation": 2,
-      Healthy: 3,
-    } as const;
+    const leftNeedsVisit = needsVisitInPeriod(left, period, scope, currentUser);
+    const rightNeedsVisit = needsVisitInPeriod(right, period, scope, currentUser);
 
-    if (statusWeight[leftStatus] !== statusWeight[rightStatus]) {
-      return statusWeight[leftStatus] - statusWeight[rightStatus];
+    if (leftNeedsVisit !== rightNeedsVisit) {
+      return leftNeedsVisit ? -1 : 1;
     }
 
     const leftDays = getDaysSinceLastVisit(getLastVisit(left, scope, currentUser)) ?? Number.POSITIVE_INFINITY;

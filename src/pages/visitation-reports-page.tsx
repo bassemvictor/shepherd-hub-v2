@@ -9,25 +9,30 @@ import { ReportsLayout } from "../components/reports/reports-layout";
 import {
   buildReportFilters,
   formatReportDate,
+  getFilterSummary,
   getLastVisit,
   getRelevantVisits,
+  getVisitCountForPeriod,
   getVisitStatus,
-  type MemberStatusFilter,
+  matchesShowFilter,
+  sortMembersForDisplay,
   type ReportPeriod,
   type ReportScope,
+  type ReportShowFilter,
   type ReportView,
 } from "../components/reports/visitation-report-utils";
 import { useAuth } from "../lib/auth";
 import { api, isApiConfigured } from "../lib/api";
 
 const DEFAULT_PAGE_SIZE = 25;
+const FETCH_PAGE_SIZE = 100;
 const MEMBER_VISITATION_ROUTE = "/reports/member-visitation";
 const REPORT_SCOPE: ReportScope = "everyone";
 
 const buildSearchState = (params: URLSearchParams) => ({
-  period: (params.get("period") as ReportPeriod) || "this_month",
+  period: (params.get("period") as ReportPeriod) || "last_90_days",
   selectedVisitorUserId: params.get("visitor") || undefined,
-  status: (params.get("status") as MemberStatusFilter) || "all",
+  show: (params.get("show") as ReportShowFilter) || "everyone",
   search: params.get("search") || "",
   customFrom: params.get("from") || "",
   customTo: params.get("to") || "",
@@ -37,7 +42,7 @@ const buildSearchState = (params: URLSearchParams) => ({
 const buildParams = (state: ReturnType<typeof buildSearchState>) => {
   const params = new URLSearchParams();
   params.set("period", state.period);
-  params.set("status", state.status);
+  params.set("show", state.show);
   params.set("page", String(state.page));
 
   if (state.search) {
@@ -61,9 +66,10 @@ const buildParams = (state: ReturnType<typeof buildSearchState>) => {
 const toCsv = (
   rows: VisitationOverviewRow[],
   scope: ReportScope,
+  period: ReportPeriod,
   currentUserName?: string,
 ) => {
-  const headers = ["Member", "Phone", "Group", "Last Visit", "Visit Count", "Visitor", "Status", "Scope"];
+  const headers = ["Member", "Phone", "Group", "Last Visit", "Visits", "Visitor", "Status", "Scope"];
   const lines = rows.map((row) => {
     const metrics = getRelevantVisits(row, scope);
     return [
@@ -71,9 +77,9 @@ const toCsv = (
       row.phone ?? "",
       row.sectorOrGroup ?? "",
       formatReportDate(getLastVisit(row, scope)),
-      metrics.visitCountInRange,
+      getVisitCountForPeriod(row, period, scope),
       metrics.lastVisitedBy ?? "",
-      getVisitStatus(row, scope),
+      getVisitStatus(row, period, scope),
       scope === "me" ? `Me${currentUserName ? ` (${currentUserName})` : ""}` : "Everyone",
     ];
   });
@@ -113,15 +119,19 @@ const filtersToQueryString = (filters: ReturnType<typeof buildReportFilters>, pa
   params.set("memberScope", filters.memberScope);
   params.set("memberSource", filters.memberSource);
   params.set("status", filters.status);
-  if (filters.search) {
-    params.set("search", filters.search);
-  }
   params.set("sortBy", filters.sortBy);
   params.set("sortDirection", filters.sortDirection);
   params.set("page", String(page));
   params.set("pageSize", String(filters.pageSize));
   return params.toString();
 };
+
+const normalizeSearchText = (row: VisitationOverviewRow) =>
+  row.normalizedSearchText
+  || [row.memberFullName, row.phone, row.email, row.unityId, row.sectorOrGroup]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 
 export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }) => {
   const { user } = useAuth();
@@ -133,10 +143,17 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
   const [error, setError] = useState<string | null>(null);
 
   const setState = useCallback((patch: Partial<ReturnType<typeof buildSearchState>>) => {
+    const shouldResetPage = patch.search !== undefined
+      || patch.show !== undefined
+      || patch.period !== undefined
+      || patch.selectedVisitorUserId !== undefined
+      || patch.customFrom !== undefined
+      || patch.customTo !== undefined;
+
     setSearchParams(buildParams({
       ...searchState,
       ...patch,
-      page: patch.page ?? (patch.search !== undefined || patch.status !== undefined || patch.period !== undefined || patch.selectedVisitorUserId !== undefined ? 1 : searchState.page),
+      page: patch.page ?? (shouldResetPage ? 1 : searchState.page),
     }));
   }, [searchState, setSearchParams]);
 
@@ -151,33 +168,72 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
         searchState.customFrom || undefined,
         searchState.customTo || undefined,
       );
-      filters.search = searchState.search || undefined;
-      filters.status = searchState.status;
-      filters.pageSize = reportView === "dashboard" ? 1 : DEFAULT_PAGE_SIZE;
+      filters.pageSize = FETCH_PAGE_SIZE;
 
-      const response = await api.get<VisitationReportResponse>(
-        `/reports/visitations?${filtersToQueryString(filters, reportView === "dashboard" ? 1 : searchState.page)}`,
-      );
+      const firstPage = await api.get<VisitationReportResponse>(`/reports/visitations?${filtersToQueryString(filters, 1)}`);
+      let rows = [...firstPage.rows];
 
-      setReport(response);
+      if (firstPage.pagination.totalPages > 1) {
+        const remainingPages = await Promise.all(
+          Array.from({ length: firstPage.pagination.totalPages - 1 }, (_, index) => api.get<VisitationReportResponse>(
+            `/reports/visitations?${filtersToQueryString(filters, index + 2)}`,
+          )),
+        );
+        rows = rows.concat(remainingPages.flatMap((page) => page.rows));
+      }
+
+      setReport({
+        ...firstPage,
+        rows,
+        pagination: {
+          page: 1,
+          pageSize: rows.length || FETCH_PAGE_SIZE,
+          totalItems: rows.length,
+          totalPages: rows.length ? 1 : 0,
+        },
+      });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load visitation reports.");
     } finally {
       setLoading(false);
     }
-  }, [reportView, searchState.customFrom, searchState.customTo, searchState.page, searchState.period, searchState.search, searchState.selectedVisitorUserId, searchState.status]);
+  }, [searchState.customFrom, searchState.customTo, searchState.period, searchState.selectedVisitorUserId]);
 
   useEffect(() => {
     void loadReport();
   }, [loadReport]);
 
-  const totalPages = report?.pagination.totalPages ?? 1;
-  const currentPage = report?.pagination.page ?? searchState.page;
+  const activeSearch = reportView === "members" ? searchState.search : "";
 
-  const applyDashboardFilter = useCallback((filter: { view: "members"; status?: MemberStatusFilter }) => {
+  const filteredRows = useMemo(() => {
+    if (!report) {
+      return [];
+    }
+
+    const showFiltered = report.rows.filter((row) => matchesShowFilter(
+      row,
+      searchState.period,
+      REPORT_SCOPE,
+      searchState.show,
+      user,
+    ));
+    const searchValue = activeSearch.trim().toLowerCase();
+    const searchFiltered = searchValue
+      ? showFiltered.filter((row) => normalizeSearchText(row).includes(searchValue))
+      : showFiltered;
+
+    return sortMembersForDisplay(searchFiltered, searchState.period, REPORT_SCOPE, user);
+  }, [activeSearch, report, searchState.period, searchState.show, user]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / DEFAULT_PAGE_SIZE));
+  const currentPage = Math.min(searchState.page, totalPages);
+  const paginatedRows = filteredRows.slice((currentPage - 1) * DEFAULT_PAGE_SIZE, currentPage * DEFAULT_PAGE_SIZE);
+
+  const applyDashboardFilter = useCallback((filter: { view: "members"; show?: ReportShowFilter; period?: ReportPeriod }) => {
     const nextState = {
       ...searchState,
-      status: filter.status ?? "all",
+      show: filter.show ?? searchState.show,
+      period: filter.period ?? searchState.period,
       page: 1,
     };
     navigate({
@@ -186,27 +242,9 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     });
   }, [navigate, searchState]);
 
-  const exportCsv = useCallback(async () => {
-    const filters = buildReportFilters(
-      searchState.period,
-      searchState.selectedVisitorUserId,
-      searchState.customFrom || undefined,
-      searchState.customTo || undefined,
-    );
-    filters.search = searchState.search || undefined;
-    filters.status = searchState.status;
-    filters.pageSize = 100;
-
-    const firstPage = await api.get<VisitationReportResponse>(`/reports/visitations?${filtersToQueryString(filters, 1)}`);
-    let rows = [...firstPage.rows];
-
-    for (let page = 2; page <= firstPage.pagination.totalPages; page += 1) {
-      const response = await api.get<VisitationReportResponse>(`/reports/visitations?${filtersToQueryString(filters, page)}`);
-      rows = rows.concat(response.rows);
-    }
-
-    downloadCsv(toCsv(rows, REPORT_SCOPE, user?.name), "visitation-report.csv");
-  }, [searchState.customFrom, searchState.customTo, searchState.period, searchState.search, searchState.selectedVisitorUserId, searchState.status, user?.name]);
+  const exportCsv = useCallback(() => {
+    downloadCsv(toCsv(filteredRows, REPORT_SCOPE, searchState.period, user?.name), "visitation-report.csv");
+  }, [filteredRows, searchState.period, user?.name]);
 
   if (!isApiConfigured) {
     return <div className="rounded-lg border border-border bg-white p-4 text-sm text-slate-700">Configure the API before using visitation reports.</div>;
@@ -215,29 +253,33 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
   return (
     <ReportsLayout
       controls={(
-        <CompactFilterBar
-          customFrom={searchState.customFrom}
-          customTo={searchState.customTo}
-          includeStatus={reportView === "members"}
-          onCustomFromChange={(customFrom) => setState({ customFrom, page: 1 })}
-          onCustomToChange={(customTo) => setState({ customTo, page: 1 })}
-          onExport={exportCsv}
-          onPeriodChange={(period) => setState({ period, page: 1 })}
-          onSearchChange={reportView === "members" ? (search) => setState({ search, page: 1 }) : undefined}
-          onStatusChange={reportView === "members" ? (status) => setState({ status, page: 1 }) : undefined}
-          onVisitorChange={(selectedVisitorUserId) => setState({ selectedVisitorUserId, page: 1 })}
-          period={searchState.period}
-          scope={REPORT_SCOPE}
-          search={searchState.search}
-          selectedVisitorUserId={searchState.selectedVisitorUserId}
-          statusFilter={searchState.status}
-          visitors={report?.visitors ?? []}
-        />
+        <div className="space-y-2">
+          <CompactFilterBar
+            customFrom={searchState.customFrom}
+            customTo={searchState.customTo}
+            onCustomFromChange={(customFrom) => setState({ customFrom })}
+            onCustomToChange={(customTo) => setState({ customTo })}
+            onExport={exportCsv}
+            onPeriodChange={(period) => setState({ period })}
+            onSearchChange={reportView === "members" ? (search) => setState({ search }) : undefined}
+            onShowFilterChange={(show) => setState({ show })}
+            onVisitorChange={(selectedVisitorUserId) => setState({ selectedVisitorUserId })}
+            period={searchState.period}
+            scope={REPORT_SCOPE}
+            search={activeSearch}
+            selectedVisitorUserId={searchState.selectedVisitorUserId}
+            showFilter={searchState.show}
+            visitors={report?.visitors ?? []}
+          />
+          <div className="text-xs text-muted-foreground">
+            {getFilterSummary(searchState.show, searchState.period)}
+          </div>
+        </div>
       )}
       subtitle={
         reportView === "dashboard"
-          ? "A compact dashboard for visitation health and coverage."
-          : "Detailed member-level visitation analysis and filtering."
+          ? "Track who needs a visit, who has been visited, and who to follow up with next."
+          : "See exactly which members match the visitation filters you selected."
       }
       title={reportView === "dashboard" ? "Reports Dashboard" : "Member Visitation"}
     >
@@ -256,14 +298,17 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
             onApplyDashboardFilter={applyDashboardFilter}
             period={searchState.period}
             report={report}
+            rows={report.rows}
             scope={REPORT_SCOPE}
+            showFilter={searchState.show}
           />
-        ) : report.rows.length ? (
+        ) : filteredRows.length ? (
           <MemberVisitationView
             currentUser={user}
             onPageChange={(page) => setState({ page })}
             page={currentPage}
-            rows={report.rows}
+            period={searchState.period}
+            rows={paginatedRows}
             scope={REPORT_SCOPE}
             totalPages={totalPages}
           />

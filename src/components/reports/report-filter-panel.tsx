@@ -16,8 +16,6 @@ export type VisitationReportDraft = VisitationReportFilters;
 
 const quickRanges = [
   { id: "since_beginning", label: "Since beginning" },
-  { id: "this_week", label: "This week" },
-  { id: "this_month", label: "This month" },
   { id: "this_year", label: "This year" },
   { id: "last_30_days", label: "Last 30 days" },
   { id: "last_90_days", label: "Last 90 days" },
@@ -48,7 +46,7 @@ export const ReportFilterPanel = ({
     <div className="flex items-center justify-between gap-2">
       <div>
         <div className="text-sm font-semibold text-slate-900">Filters</div>
-        <div className="text-xs text-muted-foreground">Date, visitor, member scope, and visit thresholds.</div>
+        <div className="text-xs text-muted-foreground">Date, visitor, and member filters for visitation reports.</div>
       </div>
       <Button onClick={onToggleOpen} size="sm" type="button" variant="outline">
         {open ? "Hide Filters" : "Show Filters"}

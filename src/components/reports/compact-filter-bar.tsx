@@ -4,7 +4,22 @@ import type { ReportVisitorOption } from "../../../shared/types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
-import type { MemberStatusFilter, ReportPeriod, ReportScope } from "./visitation-report-utils";
+import type { ReportPeriod, ReportScope, ReportShowFilter } from "./visitation-report-utils";
+
+const FilterField = ({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) => (
+  <label className="space-y-1">
+    <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+      {label}
+    </span>
+    {children}
+  </label>
+);
 
 export const CompactFilterBar = ({
   search,
@@ -18,11 +33,10 @@ export const CompactFilterBar = ({
   selectedVisitorUserId,
   onVisitorChange,
   visitors,
-  statusFilter,
-  onStatusChange,
+  showFilter,
+  onShowFilterChange,
   onExport,
   scope,
-  includeStatus = true,
 }: {
   search?: string;
   onSearchChange?: (value: string) => void;
@@ -35,66 +49,76 @@ export const CompactFilterBar = ({
   selectedVisitorUserId?: string;
   onVisitorChange: (value?: string) => void;
   visitors: ReportVisitorOption[];
-  statusFilter?: MemberStatusFilter;
-  onStatusChange?: (value: MemberStatusFilter) => void;
+  showFilter: ReportShowFilter;
+  onShowFilterChange: (value: ReportShowFilter) => void;
   onExport: () => void;
   scope: ReportScope;
-  includeStatus?: boolean;
 }) => (
   <>
-    <div className="grid gap-2 lg:grid-cols-[minmax(0,1.3fr)_160px_160px_160px_auto]">
+    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_170px_170px_170px_auto]">
       {onSearchChange ? (
-        <label className="relative block">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-          <Input
-            className="pl-8"
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Search members"
-            value={search ?? ""}
-          />
-        </label>
+        <FilterField label="Search">
+          <label className="relative block">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <Input
+              className="pl-8"
+              onChange={(event) => onSearchChange(event.target.value)}
+              placeholder="Search members"
+              value={search ?? ""}
+            />
+          </label>
+        </FilterField>
       ) : null}
 
-      <Select
-        disabled={scope === "me"}
-        onChange={(event) => onVisitorChange(event.target.value || undefined)}
-        value={scope === "me" ? "" : (selectedVisitorUserId ?? "")}
-      >
-        <option value="">Visitor: Everyone</option>
-        {visitors.map((visitor) => (
-          <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
-            {visitor.visitorDisplayName}
-          </option>
-        ))}
-      </Select>
-
-      <Select onChange={(event) => onPeriodChange(event.target.value as ReportPeriod)} value={period}>
-        <option value="this_week">This Week</option>
-        <option value="this_month">This Month</option>
-        <option value="this_year">This Year</option>
-        <option value="custom">Custom</option>
-      </Select>
-
-      {includeStatus && onStatusChange ? (
-        <Select onChange={(event) => onStatusChange(event.target.value as MemberStatusFilter)} value={statusFilter}>
-          <option value="all">All Statuses</option>
-          <option value="never_visited">Never Visited</option>
-          <option value="not_visited_recently">Not Visited Recently</option>
-          <option value="low_visitation">Low Visitation</option>
+      <FilterField label="Show">
+        <Select onChange={(event) => onShowFilterChange(event.target.value as ReportShowFilter)} value={showFilter}>
+          <option value="everyone">Everyone</option>
+          <option value="need_visit">Need a Visit</option>
           <option value="visited">Visited</option>
         </Select>
-      ) : null}
+      </FilterField>
 
-      <Button className="w-full lg:w-auto" onClick={onExport} type="button">
-        <Download className="h-3.5 w-3.5" />
-        Export
-      </Button>
+      <FilterField label="Period">
+        <Select onChange={(event) => onPeriodChange(event.target.value as ReportPeriod)} value={period}>
+          <option value="all_time">All Time</option>
+          <option value="last_30_days">Last 30 Days</option>
+          <option value="last_90_days">Last 90 Days</option>
+          <option value="this_year">This Year</option>
+          <option value="custom">Custom</option>
+        </Select>
+      </FilterField>
+
+      <FilterField label="Visitor">
+        <Select
+          disabled={scope === "me"}
+          onChange={(event) => onVisitorChange(event.target.value || undefined)}
+          value={scope === "me" ? "" : (selectedVisitorUserId ?? "")}
+        >
+          <option value="">Everyone</option>
+          {visitors.map((visitor) => (
+            <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
+              {visitor.visitorDisplayName}
+            </option>
+          ))}
+        </Select>
+      </FilterField>
+
+      <FilterField label="Export">
+        <Button className="w-full" onClick={onExport} type="button">
+          <Download className="h-3.5 w-3.5" />
+          Export
+        </Button>
+      </FilterField>
     </div>
 
     {period === "custom" ? (
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        <Input onChange={(event) => onCustomFromChange?.(event.target.value)} type="date" value={customFrom ?? ""} />
-        <Input onChange={(event) => onCustomToChange?.(event.target.value)} type="date" value={customTo ?? ""} />
+        <FilterField label="From">
+          <Input onChange={(event) => onCustomFromChange?.(event.target.value)} type="date" value={customFrom ?? ""} />
+        </FilterField>
+        <FilterField label="To">
+          <Input onChange={(event) => onCustomToChange?.(event.target.value)} type="date" value={customTo ?? ""} />
+        </FilterField>
       </div>
     ) : null}
   </>

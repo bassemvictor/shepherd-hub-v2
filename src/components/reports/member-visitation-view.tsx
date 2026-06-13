@@ -10,23 +10,19 @@ import {
   formatReportDate,
   getLastVisit,
   getRelevantVisits,
+  getVisitCountForPeriod,
   getVisitStatus,
+  type ReportPeriod,
   type ReportScope,
 } from "./visitation-report-utils";
 
-const statusVariant = (status: ReturnType<typeof getVisitStatus>) => {
-  if (status === "Never Visited" || status === "Overdue") {
-    return "default" as const;
-  }
-  if (status === "Low Visitation") {
-    return "warning" as const;
-  }
-  return "success" as const;
-};
+const statusVariant = (status: ReturnType<typeof getVisitStatus>) =>
+  (status === "Need a Visit" ? "warning" as const : "success" as const);
 
 export const MemberVisitationView = ({
   rows,
   scope,
+  period,
   currentUser,
   page,
   totalPages,
@@ -34,6 +30,7 @@ export const MemberVisitationView = ({
 }: {
   rows: VisitationOverviewRow[];
   scope: ReportScope;
+  period: ReportPeriod;
   currentUser?: AppAuthUser | null;
   page: number;
   totalPages: number;
@@ -46,7 +43,7 @@ export const MemberVisitationView = ({
       <CardHeader className="items-start sm:flex-row sm:items-center sm:justify-between">
         <div>
           <CardTitle>Member Visitation</CardTitle>
-          <div className="text-xs text-muted-foreground">Detailed, scope-aware visitation status for each member.</div>
+          <div className="text-xs text-muted-foreground">Clear member-by-member results for the filters you selected.</div>
         </div>
         <div className="flex items-center gap-2">
           <Button disabled={page <= 1} onClick={() => onPageChange(page - 1)} size="sm" type="button" variant="outline">
@@ -62,7 +59,7 @@ export const MemberVisitationView = ({
         <div className="grid gap-3 md:hidden">
           {rows.map((row) => {
             const relevant = getRelevantVisits(row, scope, currentUser);
-            const status = getVisitStatus(row, scope, currentUser);
+            const status = getVisitStatus(row, period, scope, currentUser);
             return (
               <button
                 className="rounded-lg border border-border/80 bg-slate-50 p-3 text-left"
@@ -80,7 +77,7 @@ export const MemberVisitationView = ({
                 <div className="mt-3 grid gap-2 text-sm text-slate-700">
                   <div>Group: {row.sectorOrGroup || "Not set"}</div>
                   <div>Last Visit: {formatReportDate(getLastVisit(row, scope, currentUser))}</div>
-                  <div>Visit Count: {relevant.visitCountInRange}</div>
+                  <div>Visits: {getVisitCountForPeriod(row, period, scope, currentUser)}</div>
                   <div>Visitor: {relevant.lastVisitedBy || "No visitor yet"}</div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
@@ -98,7 +95,7 @@ export const MemberVisitationView = ({
           <table className="min-w-full border-separate border-spacing-0">
             <thead>
               <tr className="text-left">
-                {["Member", "Phone", "Group", "Last Visit", "Visit Count", "Visitor", "Status", "Actions"].map((header) => (
+                {["Member", "Phone", "Group", "Last Visit", "Visits", "Visitor", "Status", "Actions"].map((header) => (
                   <th className="border-b border-border px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground" key={header}>
                     {header}
                   </th>
@@ -108,7 +105,7 @@ export const MemberVisitationView = ({
             <tbody>
               {rows.map((row) => {
                 const relevant = getRelevantVisits(row, scope, currentUser);
-                const status = getVisitStatus(row, scope, currentUser);
+                const status = getVisitStatus(row, period, scope, currentUser);
                 return (
                   <tr className="bg-white hover:bg-slate-50/80" key={row.memberId}>
                     <td className="border-b border-border/70 px-3 py-3">
@@ -120,7 +117,7 @@ export const MemberVisitationView = ({
                     <td className="border-b border-border/70 px-3 py-3 text-sm">{row.phone || "Not set"}</td>
                     <td className="border-b border-border/70 px-3 py-3 text-sm">{row.sectorOrGroup || "Not set"}</td>
                     <td className="border-b border-border/70 px-3 py-3 text-sm">{formatReportDate(getLastVisit(row, scope, currentUser))}</td>
-                    <td className="border-b border-border/70 px-3 py-3 text-sm">{relevant.visitCountInRange}</td>
+                    <td className="border-b border-border/70 px-3 py-3 text-sm">{getVisitCountForPeriod(row, period, scope, currentUser)}</td>
                     <td className="border-b border-border/70 px-3 py-3 text-sm">{relevant.lastVisitedBy || "No visitor yet"}</td>
                     <td className="border-b border-border/70 px-3 py-3"><Badge variant={statusVariant(status)}>{status}</Badge></td>
                     <td className="border-b border-border/70 px-3 py-3">

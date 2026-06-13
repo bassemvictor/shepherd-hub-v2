@@ -7,9 +7,9 @@ export const ReportKpiStrip = ({ summary }: { summary: VisitationReportKpiSummar
   const items = [
     { label: "Total Members", value: summary.totalMembers },
     { label: "Matching Members", value: summary.matchingMembers },
-    { label: "Not Visited", value: summary.notVisitedMembers },
-    { label: "Low Visitation", value: summary.lowVisitationMembers },
-    { label: "Visited In Range", value: summary.visitedInRangeMembers },
+    { label: "Never Visited", value: summary.notVisitedMembers },
+    { label: "Members Needing Visits", value: summary.overdueMembers + summary.lowVisitationMembers },
+    { label: "Members Visited", value: summary.visitedInRangeMembers },
     { label: "Avg Visits / Member", value: summary.averageVisitsPerMember },
   ];
 

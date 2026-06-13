@@ -6,10 +6,12 @@ import type { VisitationOverviewRow } from "../../../shared/types";
 import { formatRelativeVisitAge } from "./visitation-report-utils";
 
 export const MembersRequiringAttentionCard = ({
+  title = "Members Needing a Visit",
   members,
   getLastVisitLabel,
   onViewAll,
 }: {
+  title?: string;
   members: VisitationOverviewRow[];
   getLastVisitLabel: (member: VisitationOverviewRow) => string | undefined;
   onViewAll: () => void;
@@ -17,7 +19,7 @@ export const MembersRequiringAttentionCard = ({
   <Card>
     <CardHeader className="items-start sm:flex-row sm:items-center sm:justify-between">
       <div>
-        <CardTitle>Members Requiring Attention</CardTitle>
+        <CardTitle>{title}</CardTitle>
       </div>
       <Button onClick={onViewAll} size="sm" type="button" variant="outline">
         View All
@@ -38,7 +40,7 @@ export const MembersRequiringAttentionCard = ({
         </div>
       )) : (
         <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
-          No members need attention right now.
+          Everyone has been visited for this period.
         </div>
       )}
     </CardContent>

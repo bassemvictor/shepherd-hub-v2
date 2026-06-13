@@ -4,13 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 
 const colors = {
   visited: "#0f766e",
-  not_visited: "#e11d48",
+  need_visit: "#e11d48",
 };
 
 export const VisitCoverageChart = ({
   data,
 }: {
-  data: ReadonlyArray<{ key: "visited" | "not_visited"; label: string; count: number }>;
+  data: ReadonlyArray<{ key: "visited" | "need_visit"; label: string; count: number }>;
 }) => {
   const total = data.reduce((sum, item) => sum + item.count, 0);
   const visited = data.find((item) => item.key === "visited")?.count ?? 0;
