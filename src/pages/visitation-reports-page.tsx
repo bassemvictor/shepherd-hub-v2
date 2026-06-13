@@ -14,8 +14,6 @@ import {
   getRelevantVisits,
   getVisitCountForPeriod,
   getVisitStatus,
-  matchesShowFilter,
-  sortMembersForDisplay,
   type ReportPeriod,
   type ReportScope,
   type ReportShowFilter,
@@ -25,7 +23,6 @@ import { useAuth } from "../lib/auth";
 import { api, isApiConfigured } from "../lib/api";
 
 const DEFAULT_PAGE_SIZE = 25;
-const FETCH_PAGE_SIZE = 100;
 const MEMBER_VISITATION_ROUTE = "/reports/member-visitation";
 const REPORT_SCOPE: ReportScope = "everyone";
 
@@ -126,12 +123,21 @@ const filtersToQueryString = (filters: ReturnType<typeof buildReportFilters>, pa
   return params.toString();
 };
 
-const normalizeSearchText = (row: VisitationOverviewRow) =>
-  row.normalizedSearchText
-  || [row.memberFullName, row.phone, row.email, row.unityId, row.sectorOrGroup]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+const applyShowFilter = (
+  filters: ReturnType<typeof buildReportFilters>,
+  show: ReportShowFilter,
+) => {
+  if (show === "need_visit") {
+    filters.visitCountMode = "not_visited";
+    filters.visitCountThreshold = 0;
+    return;
+  }
+
+  if (show === "visited") {
+    filters.visitCountMode = "gt";
+    filters.visitCountThreshold = 0;
+  }
+};
 
 export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }) => {
   const { user } = useAuth();
@@ -168,66 +174,37 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
         searchState.customFrom || undefined,
         searchState.customTo || undefined,
       );
-      filters.pageSize = FETCH_PAGE_SIZE;
+      filters.page = reportView === "members" ? searchState.page : 1;
+      filters.pageSize = DEFAULT_PAGE_SIZE;
+      filters.search = reportView === "members" ? searchState.search.trim() || undefined : undefined;
+      applyShowFilter(filters, searchState.show);
 
-      const firstPage = await api.get<VisitationReportResponse>(`/reports/visitations?${filtersToQueryString(filters, 1)}`);
-      let rows = [...firstPage.rows];
+      const nextReport = await api.get<VisitationReportResponse>(
+        `/reports/visitations?${filtersToQueryString(filters, filters.page)}`,
+      );
 
-      if (firstPage.pagination.totalPages > 1) {
-        const remainingPages = await Promise.all(
-          Array.from({ length: firstPage.pagination.totalPages - 1 }, (_, index) => api.get<VisitationReportResponse>(
-            `/reports/visitations?${filtersToQueryString(filters, index + 2)}`,
-          )),
-        );
-        rows = rows.concat(remainingPages.flatMap((page) => page.rows));
-      }
-
-      setReport({
-        ...firstPage,
-        rows,
-        pagination: {
-          page: 1,
-          pageSize: rows.length || FETCH_PAGE_SIZE,
-          totalItems: rows.length,
-          totalPages: rows.length ? 1 : 0,
-        },
-      });
+      setReport(nextReport);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load visitation reports.");
     } finally {
       setLoading(false);
     }
-  }, [searchState.customFrom, searchState.customTo, searchState.period, searchState.selectedVisitorUserId]);
+  }, [
+    reportView,
+    searchState.customFrom,
+    searchState.customTo,
+    searchState.page,
+    searchState.period,
+    searchState.search,
+    searchState.selectedVisitorUserId,
+    searchState.show,
+  ]);
 
   useEffect(() => {
     void loadReport();
   }, [loadReport]);
 
   const activeSearch = reportView === "members" ? searchState.search : "";
-
-  const filteredRows = useMemo(() => {
-    if (!report) {
-      return [];
-    }
-
-    const showFiltered = report.rows.filter((row) => matchesShowFilter(
-      row,
-      searchState.period,
-      REPORT_SCOPE,
-      searchState.show,
-      user,
-    ));
-    const searchValue = activeSearch.trim().toLowerCase();
-    const searchFiltered = searchValue
-      ? showFiltered.filter((row) => normalizeSearchText(row).includes(searchValue))
-      : showFiltered;
-
-    return sortMembersForDisplay(searchFiltered, searchState.period, REPORT_SCOPE, user);
-  }, [activeSearch, report, searchState.period, searchState.show, user]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / DEFAULT_PAGE_SIZE));
-  const currentPage = Math.min(searchState.page, totalPages);
-  const paginatedRows = filteredRows.slice((currentPage - 1) * DEFAULT_PAGE_SIZE, currentPage * DEFAULT_PAGE_SIZE);
 
   const applyDashboardFilter = useCallback((filter: { view: "members"; show?: ReportShowFilter; period?: ReportPeriod }) => {
     const nextState = {
@@ -243,8 +220,12 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
   }, [navigate, searchState]);
 
   const exportCsv = useCallback(() => {
-    downloadCsv(toCsv(filteredRows, REPORT_SCOPE, searchState.period, user?.name), "visitation-report.csv");
-  }, [filteredRows, searchState.period, user?.name]);
+    if (!report) {
+      return;
+    }
+
+    downloadCsv(toCsv(report.rows, REPORT_SCOPE, searchState.period, user?.name), "visitation-report.csv");
+  }, [report, searchState.period, user?.name]);
 
   if (!isApiConfigured) {
     return <div className="rounded-lg border border-border bg-white p-4 text-sm text-slate-700">Configure the API before using visitation reports.</div>;
@@ -298,19 +279,18 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
             onApplyDashboardFilter={applyDashboardFilter}
             period={searchState.period}
             report={report}
-            rows={report.rows}
             scope={REPORT_SCOPE}
             showFilter={searchState.show}
           />
-        ) : filteredRows.length ? (
+        ) : report.rows.length ? (
           <MemberVisitationView
             currentUser={user}
             onPageChange={(page) => setState({ page })}
-            page={currentPage}
+            page={report.pagination.page}
             period={searchState.period}
-            rows={paginatedRows}
+            rows={report.rows}
             scope={REPORT_SCOPE}
-            totalPages={totalPages}
+            totalPages={report.pagination.totalPages}
           />
         ) : (
           <div className="rounded-lg border border-border bg-white p-8 text-center text-sm text-muted-foreground">

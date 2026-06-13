@@ -11,6 +11,7 @@ import { Button } from "../components/ui/button";
 import { api, isApiConfigured } from "../lib/api";
 
 type SortMode = "az" | "recent";
+const PAGE_SIZE = 25;
 
 const fileToBase64 = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -30,6 +31,7 @@ export const MembersPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
+  const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
@@ -65,6 +67,13 @@ export const MembersPage = () => {
         : right.updatedAt.localeCompare(left.updatedAt),
     );
   }, [members, query, sortMode]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredMembers.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paginatedMembers = useMemo(
+    () => filteredMembers.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [currentPage, filteredMembers],
+  );
 
   const handleCreateMember = useCallback(async (value: CreateMemberInput) => {
     setSavingMember(true);
@@ -120,7 +129,10 @@ export const MembersPage = () => {
             <input
               aria-label="Search members"
               className="w-full min-w-0 bg-transparent text-sm outline-none"
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
               placeholder="Search members"
               value={query}
             />
@@ -132,7 +144,10 @@ export const MembersPage = () => {
             <Button
               aria-label={sortMode === "az" ? "Sort A to Z" : "Sort by recent"}
               className="w-full sm:w-auto"
-              onClick={() => setSortMode((current) => (current === "az" ? "recent" : "az"))}
+              onClick={() => {
+                setSortMode((current) => (current === "az" ? "recent" : "az"));
+                setPage(1);
+              }}
               size="sm"
               type="button"
               variant="outline"
@@ -167,8 +182,37 @@ export const MembersPage = () => {
 
       {error ? <ErrorState description={error} title="Member action failed" /> : null}
 
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-white px-3 py-2 text-sm">
+        <div className="text-muted-foreground">
+          Showing {filteredMembers.length ? (currentPage - 1) * PAGE_SIZE + 1 : 0}
+          {" "}-{" "}
+          {Math.min(currentPage * PAGE_SIZE, filteredMembers.length)} of {filteredMembers.length}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            disabled={currentPage <= 1}
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Previous
+          </Button>
+          <div className="text-xs text-muted-foreground">Page {currentPage} of {totalPages}</div>
+          <Button
+            disabled={currentPage >= totalPages}
+            onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Next
+          </Button>
+        </div>
+      </div>
+
       <div className="grid gap-2">
-        {filteredMembers.map((member) => (
+        {paginatedMembers.map((member) => (
           <button
             className="flex items-center gap-3 rounded-lg border border-border bg-white px-3 py-2 text-left transition-colors hover:border-primary/25 hover:bg-accent"
             key={member.memberId}

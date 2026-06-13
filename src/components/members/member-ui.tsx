@@ -305,26 +305,32 @@ export const MemberImportDialog = ({
       title="Import Excel"
     >
       <div className="space-y-3">
-        <input accept=".xls,.xlsx" className="hidden" ref={inputRef} type="file" />
-        <button
-          className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-border bg-slate-50 px-4 py-8 text-sm font-medium text-slate-700"
-          onClick={() => inputRef.current?.click()}
-          type="button"
-        >
-          <Upload className="h-4 w-4" />
-          Choose Excel file
-        </button>
         <input
           accept=".xls,.xlsx"
-          className="w-full rounded-xl border border-border px-3 py-2 text-sm"
+          className="hidden"
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) {
               void onImport(file);
             }
+
+            event.target.value = "";
           }}
+          ref={inputRef}
           type="file"
         />
+        <button
+          className="flex w-full flex-col items-center justify-center gap-2 rounded-3xl border border-dashed border-border bg-slate-50 px-4 py-8 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-70"
+          disabled={busy}
+          onClick={() => inputRef.current?.click()}
+          type="button"
+        >
+          {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
+          <span>{busy ? "Importing Excel..." : "Choose Excel file"}</span>
+          <span className="text-xs font-normal text-slate-500">
+            {busy ? "Please wait while members are updated." : "Supports .xls and .xlsx files."}
+          </span>
+        </button>
         {result ? (
           <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-700">
             <p>{result.created} created, {result.updated} updated, {result.skipped} skipped.</p>
@@ -332,7 +338,7 @@ export const MemberImportDialog = ({
           </div>
         ) : null}
         <div className="flex justify-end">
-          <Button onClick={onClose} type="button" variant="outline">
+          <Button disabled={busy} onClick={onClose} type="button" variant="outline">
             {busy ? "Importing..." : "Close"}
           </Button>
         </div>

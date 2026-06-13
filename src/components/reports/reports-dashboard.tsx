@@ -1,32 +1,20 @@
 import type { AppAuthUser } from "../../lib/auth";
-import type { VisitationOverviewRow, VisitationReportResponse } from "../../../shared/types";
+import type { VisitationReportResponse } from "../../../shared/types";
 import { DashboardKpiCard } from "./dashboard-kpi-card";
 import { MembersRequiringAttentionCard } from "./members-requiring-attention-card";
+import { ReportKpiStrip } from "./report-kpi-strip";
 import { TopVisitorsCard } from "./top-visitors-card";
-import { VisitCoverageChart } from "./visit-coverage-chart";
-import { VisitFrequencyChart } from "./visit-frequency-chart";
+import { VisitDistributionDonutChart } from "./visit-distribution-donut-chart";
 import {
-  getAverageDaysSinceLastVisit,
-  getCoverageChartData,
   getFilterSummary,
-  getFrequencyChartData,
   getLastVisit,
-  getNeverVisitedCount,
-  getTotalVisits,
-  matchesShowFilter,
-  needsVisitInPeriod,
-  sortMembersForDisplay,
   type ReportPeriod,
   type ReportScope,
   type ReportShowFilter,
 } from "./visitation-report-utils";
 
-const formatNumber = (value: number) =>
-  Number.isInteger(value) ? String(value) : value.toFixed(2);
-
 export const ReportsDashboard = ({
   report,
-  rows,
   scope,
   period,
   showFilter,
@@ -34,64 +22,60 @@ export const ReportsDashboard = ({
   onApplyDashboardFilter,
 }: {
   report: VisitationReportResponse;
-  rows: VisitationOverviewRow[];
   scope: ReportScope;
   period: ReportPeriod;
   showFilter: ReportShowFilter;
   currentUser?: AppAuthUser | null;
   onApplyDashboardFilter: (filter: { view: "members"; show?: ReportShowFilter; period?: ReportPeriod }) => void;
 }) => {
-  const filteredRows = rows.filter((row) => matchesShowFilter(row, period, scope, showFilter, currentUser));
-  const membersNeedingVisits = rows.filter((row) => needsVisitInPeriod(row, period, scope, currentUser)).length;
-  const neverVisitedCount = getNeverVisitedCount(rows, scope, currentUser);
-  const totalVisits = getTotalVisits(filteredRows, period, scope, currentUser);
-  const averageDaysSinceLastVisit = getAverageDaysSinceLastVisit(filteredRows, scope, currentUser);
-  const averageVisitsPerMember = filteredRows.length ? totalVisits / filteredRows.length : 0;
-  const coverageData = getCoverageChartData(rows, period, scope, currentUser);
-  const frequencyData = getFrequencyChartData(rows, period, scope, currentUser);
-  const membersNeedingVisitRows = sortMembersForDisplay(
-    rows.filter((row) => needsVisitInPeriod(row, period, scope, currentUser)),
-    period,
-    scope,
-    currentUser,
-  ).slice(0, 5);
+  const notVisitedCount = report.distribution.find((bucket) => bucket.key === "not_visited")?.count ?? 0;
+  const totalMembers = report.summary.matchingMembers;
+  const coverageData = [
+    { key: "visited" as const, label: "Visited", count: Math.max(0, totalMembers - notVisitedCount) },
+    { key: "need_visit" as const, label: "Need a Visit", count: notVisitedCount },
+  ];
+  const frequencyData = report.distribution.map((bucket) => ({
+    key: bucket.key,
+    label: bucket.label,
+    count: bucket.count,
+  }));
 
   const cards = showFilter === "need_visit"
     ? [
       {
         label: "Members Needing Visits",
-        value: String(filteredRows.length),
+        value: String(report.summary.matchingMembers),
         accent: "danger" as const,
         onClick: () => onApplyDashboardFilter({ view: "members", show: "need_visit" }),
       },
       {
-        label: "Never Visited",
-        value: String(filteredRows.filter((row) => row.totalLifetimeVisits === 0).length),
+        label: period === "all_time" ? "Never Visited" : "Not Visited",
+        value: String(notVisitedCount),
         onClick: () => onApplyDashboardFilter({ view: "members", show: "need_visit", period: "all_time" }),
       },
       {
-        label: "Average Days Since Last Visit",
-        value: averageDaysSinceLastVisit === null ? "Never" : String(averageDaysSinceLastVisit),
+        label: "Avg Visits / Member",
+        value: String(report.summary.averageVisitsPerMember),
         helper: getFilterSummary(showFilter, period),
-        onClick: () => onApplyDashboardFilter({ view: "members", show: "need_visit" }),
+        onClick: () => onApplyDashboardFilter({ view: "members", show: "visited" }),
       },
     ]
     : showFilter === "visited"
       ? [
         {
           label: "Members Visited",
-          value: String(filteredRows.length),
+          value: String(report.summary.matchingMembers),
           accent: "success" as const,
           onClick: () => onApplyDashboardFilter({ view: "members", show: "visited" }),
         },
         {
-          label: "Total Visits",
-          value: String(totalVisits),
+          label: "Visited In Period",
+          value: String(report.summary.visitedInRangeMembers),
           onClick: () => onApplyDashboardFilter({ view: "members", show: "visited" }),
         },
         {
           label: "Average Visits Per Member",
-          value: formatNumber(averageVisitsPerMember),
+          value: String(report.summary.averageVisitsPerMember),
           helper: getFilterSummary(showFilter, period),
           onClick: () => onApplyDashboardFilter({ view: "members", show: "visited" }),
         },
@@ -99,17 +83,17 @@ export const ReportsDashboard = ({
       : [
         {
           label: "Total Members",
-          value: String(rows.length),
+          value: String(report.summary.totalMembers),
           onClick: () => onApplyDashboardFilter({ view: "members", show: "everyone" }),
         },
         {
-          label: "Never Visited",
-          value: String(neverVisitedCount),
+          label: period === "all_time" ? "Never Visited" : "Not Visited",
+          value: String(notVisitedCount),
           onClick: () => onApplyDashboardFilter({ view: "members", show: "need_visit", period: "all_time" }),
         },
         {
           label: "Members Needing Visits",
-          value: String(membersNeedingVisits),
+          value: String(notVisitedCount),
           accent: "danger" as const,
           helper: getFilterSummary("need_visit", period),
           onClick: () => onApplyDashboardFilter({ view: "members", show: "need_visit" }),
@@ -131,25 +115,51 @@ export const ReportsDashboard = ({
         ))}
       </div>
 
+      <ReportKpiStrip summary={report.summary} />
+
+      <VisitDistributionDonutChart
+        distribution={report.distribution}
+        totalMembers={report.summary.matchingMembers}
+      />
+
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <VisitCoverageChart data={coverageData} />
-        <VisitFrequencyChart data={frequencyData} />
+        <TopVisitorsCard entries={report.topVisitors} />
+        <TopVisitorsCard
+          title="My Visitation Activity"
+          entries={[
+            { visitorUserId: "week", visitorDisplayName: "Visits This Week", visitCountInRange: report.currentUserActivity.thisWeek },
+            { visitorUserId: "month", visitorDisplayName: "Visits This Month", visitCountInRange: report.currentUserActivity.thisMonth },
+            { visitorUserId: "year", visitorDisplayName: "Visits This Year", visitCountInRange: report.currentUserActivity.thisYear },
+          ]}
+        />
       </div>
 
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        {scope === "everyone" ? (
-          <TopVisitorsCard entries={report.topVisitors} />
-        ) : (
-          <TopVisitorsCard
-            title="My Visitation Activity"
-            entries={[
-              { visitorUserId: "year", visitorDisplayName: "Visits This Year", visitCountInRange: report.currentUserActivity.thisYear },
-            ]}
-          />
-        )}
+        <div className="rounded-lg border border-border bg-white p-3 panel-shadow">
+          <div className="text-sm font-semibold text-slate-900">Coverage Snapshot</div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {coverageData.map((item) => (
+              <div className="rounded-md border border-border/80 px-3 py-2" key={item.key}>
+                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">{item.label}</div>
+                <div className="mt-1 text-lg font-semibold text-slate-900">{item.count}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4">
+            <div className="text-sm font-semibold text-slate-900">Visit Frequency</div>
+            <div className="mt-2 space-y-2">
+              {frequencyData.map((item) => (
+                <div className="flex items-center justify-between rounded-md border border-border/80 px-3 py-2" key={item.key}>
+                  <div className="text-sm text-slate-900">{item.label}</div>
+                  <div className="text-sm font-semibold text-slate-900">{item.count}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
         <MembersRequiringAttentionCard
           getLastVisitLabel={(member) => getLastVisit(member, scope, currentUser)}
-          members={membersNeedingVisitRows}
+          members={report.attentionMembers}
           onViewAll={() => onApplyDashboardFilter({ view: "members", show: "need_visit" })}
           title="Members Needing a Visit"
         />

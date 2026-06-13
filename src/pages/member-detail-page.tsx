@@ -77,11 +77,27 @@ const toLocalDateTimeInput = (value: string) => {
   return adjusted.toISOString().slice(0, 16);
 };
 
+const VISITATION_TITLE_PREFIX = "Visitation: ";
+
+const isVisitationTitle = (value: string) => {
+  const normalized = value.trim();
+  return normalized === "Visitation" || normalized.startsWith(VISITATION_TITLE_PREFIX.trim());
+};
+
+const buildVisitationTitle = (memberIds: string[], memberIndex: MemberIndexItem[]) => {
+  const memberNames = emptyMemberSelection(memberIndex, memberIds)
+    .map((selectedMember) => selectedMember.fullName)
+    .filter(Boolean);
+
+  return memberNames.length ? `${VISITATION_TITLE_PREFIX}${memberNames.join(", ")}` : "Visitation";
+};
+
 const createEmptyManualForm = (
   memberId: string,
   currentUser?: { id: string; name: string } | null,
+  memberName?: string,
 ) => ({
-  title: "",
+  title: memberName ? `${VISITATION_TITLE_PREFIX}${memberName}` : "",
   visitDate: toLocalDateTimeInput(new Date().toISOString()),
   location: "",
   visitStatus: "completed",
@@ -144,6 +160,8 @@ export const MemberDetailPage = () => {
   const [activity, setActivity] = useState<MemberActivity[]>([]);
   const [visitations, setVisitations] = useState<MemberVisitation[]>([]);
   const [memberIndex, setMemberIndex] = useState<MemberIndexItem[]>([]);
+  const [memberIndexLoaded, setMemberIndexLoaded] = useState(false);
+  const [memberIndexLoading, setMemberIndexLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"details" | "visitations" | "activity">("details");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -164,15 +182,13 @@ export const MemberDetailPage = () => {
     setLoading(true);
     setError(null);
     try {
-      const [details, memberEvents, memberIndexResponse] = await Promise.all([
+      const [details, memberEvents] = await Promise.all([
         api.get<MemberDetailResponse>(`/members/${memberId}`),
         api.get<{ items: MemberVisitation[] }>(`/members/${memberId}/events`),
-        api.get<MemberIndexResponse>("/members/index"),
       ]);
       setMember(details.member);
       setActivity(details.activity);
       setVisitations(memberEvents.items);
-      setMemberIndex(memberIndexResponse.items);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load member.");
     } finally {
@@ -229,6 +245,23 @@ export const MemberDetailPage = () => {
     ].filter((item) => item.href);
   }, [member]);
 
+  const ensureMemberIndexLoaded = useCallback(async () => {
+    if (memberIndexLoaded || memberIndexLoading) {
+      return;
+    }
+
+    setMemberIndexLoading(true);
+    try {
+      const memberIndexResponse = await api.get<MemberIndexResponse>("/members/index");
+      setMemberIndex(memberIndexResponse.items);
+      setMemberIndexLoaded(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to load members for visitation selection.");
+    } finally {
+      setMemberIndexLoading(false);
+    }
+  }, [memberIndexLoaded, memberIndexLoading]);
+
   const handleSave = useCallback(async (value: Partial<Member>) => {
     setSaving(true);
     try {
@@ -256,9 +289,10 @@ export const MemberDetailPage = () => {
     setEditingManualVisitation(null);
     setSelectedManualVisitation(null);
     setManualErrors({});
-    setManualForm(createEmptyManualForm(memberId, user));
+    setManualForm(createEmptyManualForm(memberId, user, member?.fullName));
     setManualEditorOpen(true);
-  }, [memberId, user]);
+    void ensureMemberIndexLoaded();
+  }, [ensureMemberIndexLoaded, member?.fullName, memberId, user]);
 
   const openEditManualVisitation = useCallback((visitation: MemberVisitation) => {
     setManualEditorMode("edit");
@@ -277,7 +311,8 @@ export const MemberDetailPage = () => {
     });
     setSelectedManualVisitation(null);
     setManualEditorOpen(true);
-  }, []);
+    void ensureMemberIndexLoaded();
+  }, [ensureMemberIndexLoaded]);
 
   const handleVisitationClick = useCallback((visitation: MemberVisitation) => {
     if (visitation.source === "calendar" && visitation.eventId && visitation.calendarId) {
@@ -437,7 +472,7 @@ export const MemberDetailPage = () => {
                 >
                   Schedule Visit
                 </Button>
-                <Button className="w-full" onClick={openCreateManualVisitation} size="sm" type="button" variant="outline">
+                <Button className="w-full" onClick={() => void openCreateManualVisitation()} size="sm" type="button" variant="outline">
                   Record Visit
                 </Button>
               </div>
@@ -528,6 +563,12 @@ export const MemberDetailPage = () => {
         title={manualEditorMode === "create" ? "Record Visit" : "Edit Manual Visit"}
       >
         <div className="space-y-3">
+          {memberIndexLoading ? (
+            <div className="rounded-md border border-border bg-slate-50 px-3 py-2 text-sm text-muted-foreground">
+              Loading members for selection...
+            </div>
+          ) : null}
+
           <div className="space-y-1.5">
             <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Title</label>
             <Input
@@ -610,6 +651,10 @@ export const MemberDetailPage = () => {
               onSelect={(item) =>
                 setManualForm((current) => ({
                   ...current,
+                  title:
+                    !current.title.trim() || isVisitationTitle(current.title)
+                      ? buildVisitationTitle([...new Set([...current.memberIds, item.memberId])], memberIndex)
+                      : current.title,
                   memberIds: [...new Set([...current.memberIds, item.memberId])],
                   memberQuery: "",
                 }))
@@ -626,6 +671,13 @@ export const MemberDetailPage = () => {
                     onRemove={(selectedId) =>
                       setManualForm((current) => ({
                         ...current,
+                        title:
+                          !current.title.trim() || isVisitationTitle(current.title)
+                            ? buildVisitationTitle(
+                              current.memberIds.filter((entry) => entry !== selectedId),
+                              memberIndex,
+                            )
+                            : current.title,
                         memberIds: current.memberIds.filter((entry) => entry !== selectedId),
                       }))
                     }
@@ -650,7 +702,7 @@ export const MemberDetailPage = () => {
                 <Button onClick={() => setSelectedManualVisitation(null)} type="button" variant="outline">
                   Close
                 </Button>
-                <Button onClick={() => openEditManualVisitation(selectedManualVisitation)} type="button">
+                <Button onClick={() => void openEditManualVisitation(selectedManualVisitation)} type="button">
                   Edit
                 </Button>
               </div>

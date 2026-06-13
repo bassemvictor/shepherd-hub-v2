@@ -175,17 +175,27 @@ const parseAttendees = (value: string) =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
+const getSelectedMemberNames = (memberIds: string[], memberIndex: MemberIndexItem[]) =>
+  emptyMemberSelection(memberIndex, memberIds)
+    .map((member) => member.fullName)
+    .filter(Boolean);
+
 const isVisitationSummary = (value: string) => {
   const normalized = value.trim();
   return normalized === "Visitation" || normalized.startsWith(VISITATION_TITLE_PREFIX.trim());
 };
 
 const buildVisitationSummary = (memberIds: string[], memberIndex: MemberIndexItem[]) => {
-  const memberNames = emptyMemberSelection(memberIndex, memberIds)
-    .map((member) => member.fullName)
-    .filter(Boolean);
+  const memberNames = getSelectedMemberNames(memberIds, memberIndex);
 
-  return `${VISITATION_TITLE_PREFIX}${memberNames.join(", ")}`;
+  return memberNames.length ? `${VISITATION_TITLE_PREFIX}${memberNames.join(", ")}` : "Visitation";
+};
+
+const isVisitationDescription = (value: string) => value.trim().startsWith("Members:");
+
+const buildVisitationDescription = (memberIds: string[], memberIndex: MemberIndexItem[]) => {
+  const memberNames = getSelectedMemberNames(memberIds, memberIndex);
+  return memberNames.length ? `Members: ${memberNames.join(", ")}` : "";
 };
 
 const applyMemberSelectionToForm = (
@@ -200,9 +210,13 @@ const applyMemberSelectionToForm = (
   return {
     ...currentForm,
     summary:
-      isVisitationSummary(currentForm.summary)
+      !currentForm.summary.trim() || isVisitationSummary(currentForm.summary)
         ? buildVisitationSummary(nextMemberIds, memberIndex)
         : currentForm.summary,
+    description:
+      !currentForm.description.trim() || isVisitationDescription(currentForm.description)
+        ? buildVisitationDescription(nextMemberIds, memberIndex)
+        : currentForm.description,
     location:
       previousFirstMember?.memberId !== nextFirstMember?.memberId
         ? nextFirstMember?.address ?? ""
