@@ -467,7 +467,21 @@ export const MemberDetailPage = () => {
                 <Button
                   className="w-full"
                   size="sm"
-                  onClick={() => navigate(`/calendar/schedule?memberId=${member.memberId}`)}
+                  onClick={() => {
+                    const params = new URLSearchParams({ memberId: member.memberId });
+
+                    if (member.fullName) {
+                      params.set("memberName", member.fullName);
+                    }
+                    if (member.email) {
+                      params.set("memberEmail", member.email);
+                    }
+                    if (member.address) {
+                      params.set("memberAddress", member.address);
+                    }
+
+                    navigate(`/calendar/schedule?${params.toString()}`);
+                  }}
                   type="button"
                 >
                   Schedule Visit

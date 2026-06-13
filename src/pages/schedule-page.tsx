@@ -80,6 +80,7 @@ const fullCalendarPlugins = [dayGridPlugin, timeGridPlugin, listPlugin, interact
 
 const FALLBACK_EVENT_COLOR = "#2563eb";
 const VISITATION_TITLE_PREFIX = "Visitation: ";
+const QUARTER_HOUR_MINUTES = 15;
 
 const normalizeHexColor = (value?: string | null) => {
   const color = value?.trim();
@@ -161,12 +162,88 @@ const toLocalDateTimeInput = (value: string) => {
   return adjusted.toISOString().slice(0, 16);
 };
 
+const toLocalDateTimeInputFromDate = (date: Date) => {
+  const adjusted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return adjusted.toISOString().slice(0, 16);
+};
+
+const parseLocalDateTimeInput = (value: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day, hours, minutes] = match;
+  const date = new Date(
+    Number.parseInt(year, 10),
+    Number.parseInt(month, 10) - 1,
+    Number.parseInt(day, 10),
+    Number.parseInt(hours, 10),
+    Number.parseInt(minutes, 10),
+    0,
+    0,
+  );
+
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const formatDateWithLocalOffset = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteOffsetMinutes = Math.abs(offsetMinutes);
+  const offsetHours = String(Math.floor(absoluteOffsetMinutes / 60)).padStart(2, "0");
+  const offsetRemainderMinutes = String(absoluteOffsetMinutes % 60).padStart(2, "0");
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${sign}${offsetHours}:${offsetRemainderMinutes}`;
+};
+
+const snapDateToQuarterHour = (date: Date, mode: "floor" | "ceil" | "nearest" = "nearest") => {
+  const snapped = new Date(date);
+  snapped.setSeconds(0, 0);
+
+  const minutes = snapped.getMinutes();
+  const remainder = minutes % QUARTER_HOUR_MINUTES;
+
+  if (remainder === 0) {
+    return snapped;
+  }
+
+  if (mode === "floor") {
+    snapped.setMinutes(minutes - remainder);
+    return snapped;
+  }
+
+  if (mode === "ceil") {
+    snapped.setMinutes(minutes + (QUARTER_HOUR_MINUTES - remainder));
+    return snapped;
+  }
+
+  snapped.setMinutes(
+    remainder < QUARTER_HOUR_MINUTES / 2
+      ? minutes - remainder
+      : minutes + (QUARTER_HOUR_MINUTES - remainder),
+  );
+  return snapped;
+};
+
+const snapDateTimeInputToQuarterHour = (value: string, mode: "floor" | "ceil" | "nearest" = "nearest") => {
+  const parsed = parseLocalDateTimeInput(value);
+  return parsed ? toLocalDateTimeInputFromDate(snapDateToQuarterHour(parsed, mode)) : value;
+};
+
 const localInputToIso = (value: string, allDay: boolean, boundary: "start" | "end") => {
   if (allDay) {
     return boundary === "start" ? value : shiftDateOnlyValue(value, 1);
   }
 
-  return new Date(value).toISOString();
+  const parsed = parseLocalDateTimeInput(value);
+  return parsed ? formatDateWithLocalOffset(parsed) : "";
 };
 
 const parseAttendees = (value: string) =>
@@ -174,6 +251,19 @@ const parseAttendees = (value: string) =>
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+
+const buildOptionalEventFields = (form: EventFormState) => {
+  const attendees = parseAttendees(form.attendeesText);
+  const description = form.description.trim();
+  const location = form.location.trim();
+
+  return {
+    ...(description ? { description } : {}),
+    ...(location ? { location } : {}),
+    ...(attendees.length ? { attendees } : {}),
+    ...(form.memberIds.length ? { memberIds: form.memberIds } : {}),
+  };
+};
 
 const getSelectedMemberNames = (memberIds: string[], memberIndex: MemberIndexItem[]) =>
   emptyMemberSelection(memberIndex, memberIds)
@@ -231,8 +321,7 @@ const applyMemberSelectionToForm = (
 };
 
 const emptyEventForm = (calendarId = ""): EventFormState => {
-  const start = new Date();
-  start.setMinutes(0, 0, 0);
+  const start = snapDateToQuarterHour(new Date(), "ceil");
   const end = new Date(start);
   end.setHours(end.getHours() + 1);
 
@@ -242,8 +331,8 @@ const emptyEventForm = (calendarId = ""): EventFormState => {
     description: "",
     location: "",
     attendeesText: "",
-    start: toLocalDateTimeInput(start.toISOString()),
-    end: toLocalDateTimeInput(end.toISOString()),
+    start: toLocalDateTimeInputFromDate(start),
+    end: toLocalDateTimeInputFromDate(end),
     allDay: false,
     memberIds: [],
     memberQuery: "",
@@ -274,12 +363,39 @@ const createFormFromSelection = (
   description: "",
   location: "",
   attendeesText: "",
-  start: allDay ? toDateOnlyValue(startValue) : toLocalDateTimeInput(startValue.toISOString()),
-  end: allDay ? shiftDateOnlyValue(toDateOnlyValue(endValue), -1) : toLocalDateTimeInput(endValue.toISOString()),
+  start: allDay ? toDateOnlyValue(startValue) : toLocalDateTimeInputFromDate(snapDateToQuarterHour(startValue)),
+  end: allDay ? shiftDateOnlyValue(toDateOnlyValue(endValue), -1) : toLocalDateTimeInputFromDate(snapDateToQuarterHour(endValue)),
   allDay,
   memberIds: [],
   memberQuery: "",
 });
+
+const createIntentFormFromSearchParams = (
+  searchParams: URLSearchParams,
+  calendarId: string,
+  memberIndex: MemberIndexItem[],
+) => {
+  const memberId = searchParams.get("memberId");
+  if (!memberId) {
+    return null;
+  }
+
+  const memberName = searchParams.get("memberName")?.trim() ?? "";
+  const memberEmail = searchParams.get("memberEmail")?.trim() ?? "";
+  const memberAddress = searchParams.get("memberAddress")?.trim() ?? "";
+  const baseForm: EventFormState = {
+    ...emptyEventForm(calendarId),
+    summary: memberName ? `${VISITATION_TITLE_PREFIX}${memberName}` : "Visitation",
+    description: memberName ? `Members: ${memberName}` : "",
+    location: memberAddress,
+    attendeesText: memberEmail,
+    memberIds: [memberId],
+  };
+
+  return memberIndex.length
+    ? applyMemberSelectionToForm(baseForm, [memberId], memberIndex)
+    : baseForm;
+};
 
 type EventEditorProps = {
   calendars: ScheduleCalendar[];
@@ -333,7 +449,7 @@ const EventEditor = ({
   const content = (
     <div className="space-y-5">
       <div className="space-y-2">
-        <span className="text-sm font-medium text-slate-900">Members *</span>
+        <span className="text-sm font-medium text-slate-900">Members</span>
         <MemberSearchAutocomplete
           items={memberIndex}
           onQueryChange={(value) => onChange({ ...form, memberQuery: value })}
@@ -397,13 +513,26 @@ const EventEditor = ({
         </Select>
       </label>
 
+      <label className="space-y-1.5">
+        <span className="text-sm font-medium text-slate-900">Event Title</span>
+        <Input
+          onChange={(event) => onChange({ ...form, summary: event.target.value })}
+          placeholder="Add an event title"
+          value={form.summary}
+        />
+      </label>
+
       <div className="space-y-3">
         <span className="text-sm font-medium text-slate-900">Start - End</span>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="space-y-1.5">
             <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Start</span>
             <Input
-              onChange={(event) => onChange({ ...form, start: event.target.value })}
+              onChange={(event) => onChange({
+                ...form,
+                start: form.allDay ? event.target.value : snapDateTimeInputToQuarterHour(event.target.value),
+              })}
+              step={form.allDay ? undefined : 900}
               type={form.allDay ? "date" : "datetime-local"}
               value={form.start}
             />
@@ -411,14 +540,36 @@ const EventEditor = ({
           <label className="space-y-1.5">
             <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">End</span>
             <Input
-              onChange={(event) => onChange({ ...form, end: event.target.value })}
+              onChange={(event) => onChange({
+                ...form,
+                end: form.allDay ? event.target.value : snapDateTimeInputToQuarterHour(event.target.value),
+              })}
+              step={form.allDay ? undefined : 900}
               type={form.allDay ? "date" : "datetime-local"}
               value={form.end}
             />
           </label>
         </div>
         <label className="flex items-center gap-2 text-sm font-medium text-slate-900">
-          <Checkbox checked={form.allDay} onChange={(event) => onChange({ ...form, allDay: event.target.checked })} />
+          <Checkbox
+            checked={form.allDay}
+            onChange={(event) => {
+              const nextAllDay = event.target.checked;
+              const nextStart = nextAllDay
+                ? form.start.slice(0, 10)
+                : snapDateTimeInputToQuarterHour(`${form.start.slice(0, 10)}T09:00`, "nearest");
+              const nextEnd = nextAllDay
+                ? form.end.slice(0, 10)
+                : snapDateTimeInputToQuarterHour(`${form.end.slice(0, 10)}T10:00`, "nearest");
+
+              onChange({
+                ...form,
+                allDay: nextAllDay,
+                start: nextAllDay ? nextStart : nextStart,
+                end: nextAllDay ? nextEnd : nextEnd,
+              });
+            }}
+          />
           <span>All Day</span>
         </label>
       </div>
@@ -436,14 +587,6 @@ const EventEditor = ({
         </button>
         {detailsOpen ? (
           <div className="space-y-3">
-            <label className="space-y-1.5">
-              <span className="text-sm font-medium text-slate-900">Event Title</span>
-              <Input
-                onChange={(event) => onChange({ ...form, summary: event.target.value })}
-                placeholder="Add an event title"
-                value={form.summary}
-              />
-            </label>
             <label className="space-y-1.5">
               <span className="text-sm font-medium text-slate-900">Location</span>
               <Input onChange={(event) => onChange({ ...form, location: event.target.value })} value={form.location} />
@@ -934,6 +1077,11 @@ export const SchedulePage = () => {
       return;
     }
 
+    if (!startIso || !endIso) {
+      pushToast("error", "Choose a valid start and end time.");
+      return;
+    }
+
     if (new Date(endIso).getTime() <= new Date(startIso).getTime()) {
       pushToast("error", "End time must be after start time.");
       return;
@@ -945,13 +1093,10 @@ export const SchedulePage = () => {
         const payload: CreateScheduleEventInput = {
           calendarId: form.calendarId,
           summary: form.summary,
-          description: form.description,
-          location: form.location,
-          attendees: parseAttendees(form.attendeesText),
           start: startIso,
           end: endIso,
           allDay: form.allDay,
-          memberIds: form.memberIds,
+          ...buildOptionalEventFields(form),
         };
         await api.post("/schedule/events", payload);
         pushToast("success", "Event created.");
@@ -959,13 +1104,10 @@ export const SchedulePage = () => {
         const payload: UpdateScheduleEventInput = {
           calendarId: editingEvent.calendarId,
           summary: form.summary,
-          description: form.description,
-          location: form.location,
-          attendees: parseAttendees(form.attendeesText),
           start: startIso,
           end: endIso,
           allDay: form.allDay,
-          memberIds: form.memberIds,
+          ...buildOptionalEventFields(form),
         };
         await api.put(`/schedule/events/${editingEvent.eventId}`, payload);
         pushToast("success", "Event updated.");
@@ -989,18 +1131,17 @@ export const SchedulePage = () => {
 
   useEffect(() => {
     const memberId = searchParams.get("memberId");
-    if (!memberId || searchParams.get("eventId") || !defaultCalendarId || editorOpen || !memberIndex.length) {
+    if (!memberId || searchParams.get("eventId") || !defaultCalendarId || editorOpen) {
       return;
     }
 
-    openCreateEditor(
-      applyMemberSelectionToForm(
-        { ...emptyEventForm(defaultCalendarId), summary: VISITATION_TITLE_PREFIX },
-        [memberId],
-        memberIndex,
-      ),
-    );
-    clearIntentSearchParams(["memberId"]);
+    const nextForm = createIntentFormFromSearchParams(searchParams, defaultCalendarId, memberIndex);
+    if (!nextForm) {
+      return;
+    }
+
+    openCreateEditor(nextForm);
+    clearIntentSearchParams(["memberId", "memberName", "memberEmail", "memberAddress"]);
   }, [clearIntentSearchParams, defaultCalendarId, editorOpen, memberIndex, openCreateEditor, searchParams]);
 
   useEffect(() => {
@@ -1351,9 +1492,11 @@ export const SchedulePage = () => {
                 initialView={isMobile ? "timeGridDay" : "dayGridMonth"}
                 nowIndicator
                 plugins={fullCalendarPlugins}
+                slotDuration="00:15:00"
                 scrollTime="06:00:00"
                 selectable
                 select={handleSelect}
+                snapDuration="00:15:00"
                 slotMaxTime="24:00:00"
                 slotMinTime="06:00:00"
                 weekends

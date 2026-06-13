@@ -3828,16 +3828,23 @@ const buildGoogleEventBody = (
   input: Pick<CreateScheduleEventInput, "summary" | "description" | "location" | "attendees" | "start" | "end" | "allDay" | "memberIds">,
 ) => {
   const memberIds = normalizeMemberIds(input.memberIds);
+  const attendees = normalizeAttendees(input.attendees).map((email) => ({ email }));
+  const description = input.description?.trim();
+  const location = input.location?.trim();
   const base = {
     summary: input.summary.trim(),
-    description: input.description?.trim(),
-    location: input.location?.trim(),
-    attendees: normalizeAttendees(input.attendees).map((email) => ({ email })),
-    extendedProperties: {
-      private: {
-        memberIds: memberIds.length ? serializeGoogleMemberIds(memberIds) : null,
-      },
-    },
+    ...(description ? { description } : {}),
+    ...(location ? { location } : {}),
+    ...(attendees.length ? { attendees } : {}),
+    ...(memberIds.length
+      ? {
+        extendedProperties: {
+          private: {
+            memberIds: serializeGoogleMemberIds(memberIds),
+          },
+        },
+      }
+      : {}),
   };
 
   if (input.allDay) {
