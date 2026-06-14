@@ -1,4 +1,18 @@
-import { ArrowLeft, Ellipsis, Mail, MessageCircle, Phone } from "lucide-react";
+import {
+  AlignLeft,
+  ArrowLeft,
+  CalendarDays,
+  CheckCheck,
+  Clock3,
+  Ellipsis,
+  FileText,
+  Mail,
+  MapPin,
+  MessageCircle,
+  Phone,
+  UserRound,
+  Users,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -14,7 +28,6 @@ import type {
   UpdateManualVisitationInput,
 } from "../../shared/types";
 import { ConfirmDialog } from "../components/common/confirm-dialog";
-import { FormDrawer } from "../components/common/form-drawer";
 import { RightSideDrawer } from "../components/common/right-side-drawer";
 import {
   MemberAvatar,
@@ -564,145 +577,238 @@ export const MemberDetailPage = () => {
         title="Edit Member"
       />
 
-      <FormDrawer
-        busy={manualSaving}
+      <RightSideDrawer
+        contentClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3 sm:py-3"
         description={manualEditorMode === "create" ? "Add a visit record without creating a Google Calendar event." : "Update this manual visit record."}
+        descriptionClassName="text-xs text-slate-500 sm:text-sm"
+        footer={(
+          <div className="space-y-2.5">
+            <Button className="h-11 w-full rounded-xl text-sm font-semibold shadow-[0_14px_26px_rgba(37,99,235,0.24)]" disabled={manualSaving} onClick={() => void handleManualSubmit()} type="button">
+              <CalendarDays className="h-4 w-4" />
+              {manualSaving ? "Saving..." : manualEditorMode === "create" ? "Save Visit" : "Save Changes"}
+            </Button>
+            <Button
+              className="h-11 w-full rounded-xl text-sm font-semibold"
+              onClick={() => {
+                setManualEditorOpen(false);
+                setEditingManualVisitation(null);
+              }}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
+        footerClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3"
+        headerClassName="border-b border-slate-200/80 bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3"
+        headerLeading={(
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1rem] bg-[linear-gradient(180deg,#eef4ff_0%,#f6f9ff_100%)] text-primary shadow-inner">
+            <CalendarDays className="h-6 w-6" />
+          </div>
+        )}
         onClose={() => {
           setManualEditorOpen(false);
           setEditingManualVisitation(null);
         }}
-        onSubmit={() => void handleManualSubmit()}
         open={manualEditorOpen}
-        submitLabel={manualEditorMode === "create" ? "Save Visit" : "Save Changes"}
+        panelClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)]"
         title={manualEditorMode === "create" ? "Record Visit" : "Edit Manual Visit"}
+        titleClassName="text-2xl font-semibold tracking-tight text-slate-950"
+        width="lg"
       >
-        <div className="space-y-3">
-          {memberIndexLoading ? (
-            <div className="rounded-md border border-border bg-slate-50 px-3 py-2 text-sm text-muted-foreground">
-              Loading members for selection...
-            </div>
-          ) : null}
+        {(() => {
+          const sectionCardClassName = "space-y-3 rounded-[1.2rem] border border-slate-200/80 bg-white/96 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur sm:p-3.5";
+          const fieldClassName = "h-10 rounded-xl border-slate-200 bg-white px-3 text-sm shadow-sm shadow-slate-200/35 transition focus:border-primary focus:ring-primary/10";
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Title</label>
-            <Input
-              onChange={(event) => setManualForm((current) => ({ ...current, title: event.target.value }))}
-              placeholder="Home visit"
-              value={manualForm.title}
-            />
-            {manualErrors.title ? <div className="text-xs text-rose-600">{manualErrors.title}</div> : null}
-          </div>
+          return (
+            <div className="space-y-3">
+              {memberIndexLoading ? (
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-muted-foreground shadow-sm shadow-slate-200/30">
+                  Loading members for selection...
+                </div>
+              ) : null}
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Visit Date/Time</label>
-            <Input
-              onChange={(event) => setManualForm((current) => ({ ...current, visitDate: event.target.value }))}
-              type="datetime-local"
-              value={manualForm.visitDate}
-            />
-            {manualErrors.visitDate ? <div className="text-xs text-rose-600">{manualErrors.visitDate}</div> : null}
-          </div>
+              <section className={sectionCardClassName}>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-slate-950">
+                    <Users className="h-4 w-4 text-primary" />
+                    <h4 className="text-lg font-semibold tracking-tight">Members</h4>
+                  </div>
+                  <p className="text-sm text-slate-500">Add one or more members to this visitation.</p>
+                </div>
+                <MemberSearchAutocomplete
+                  items={memberIndex}
+                  onQueryChange={(value) => setManualForm((current) => ({ ...current, memberQuery: value }))}
+                  onSelect={(item) =>
+                    setManualForm((current) => ({
+                      ...current,
+                      title:
+                        !current.title.trim() || isVisitationTitle(current.title)
+                          ? buildVisitationTitle([...new Set([...current.memberIds, item.memberId])], memberIndex)
+                          : current.title,
+                      memberIds: [...new Set([...current.memberIds, item.memberId])],
+                      memberQuery: "",
+                    }))
+                  }
+                  placeholder="Search members..."
+                  query={manualForm.memberQuery}
+                  selectedIds={manualForm.memberIds}
+                />
+                <div className="space-y-1.5">
+                  <div className="text-sm font-semibold text-slate-500">Selected ({manualForm.memberIds.length})</div>
+                  {manualForm.memberIds.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {emptyMemberSelection(memberIndex, manualForm.memberIds).map((selectedMember) => (
+                        <MemberChip
+                          key={selectedMember.memberId}
+                          member={selectedMember}
+                          onRemove={(selectedId) =>
+                            setManualForm((current) => ({
+                              ...current,
+                              title:
+                                !current.title.trim() || isVisitationTitle(current.title)
+                                  ? buildVisitationTitle(
+                                    current.memberIds.filter((entry) => entry !== selectedId),
+                                    memberIndex,
+                                  )
+                                  : current.title,
+                              memberIds: current.memberIds.filter((entry) => entry !== selectedId),
+                            }))
+                          }
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-500">
+                      No members selected yet.
+                    </div>
+                  )}
+                  {manualErrors.memberIds ? <div className="text-xs text-rose-600">{manualErrors.memberIds}</div> : null}
+                </div>
+              </section>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Location</label>
-            <Input
-              onChange={(event) => setManualForm((current) => ({ ...current, location: event.target.value }))}
-              placeholder="Optional address or meeting spot"
-              value={manualForm.location}
-            />
-          </div>
+              <section className={sectionCardClassName}>
+                <label className="space-y-1.5">
+                  <span className="text-lg font-semibold tracking-tight text-slate-950">Visit Title</span>
+                  <div className="relative">
+                    <FileText className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      className={`${fieldClassName} pl-10`}
+                      onChange={(event) => setManualForm((current) => ({ ...current, title: event.target.value }))}
+                      placeholder="Home visit"
+                      value={manualForm.title}
+                    />
+                  </div>
+                  {manualErrors.title ? <div className="text-xs text-rose-600">{manualErrors.title}</div> : null}
+                </label>
+              </section>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Visitor</label>
-            <Select
-              onChange={(event) => {
-                const selectedVisitor = visitorOptions.find((option) => option.visitorUserId === event.target.value);
-                setManualForm((current) => ({
-                  ...current,
-                  visitorUserId: event.target.value,
-                  visitorDisplayName: selectedVisitor?.visitorDisplayName ?? "",
-                }));
-              }}
-              value={manualForm.visitorUserId}
-            >
-              <option value="" disabled>Select visitor</option>
-              {visitorOptions.map((visitor) => (
-                <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
-                  {visitor.visitorDisplayName}
-                </option>
-              ))}
-            </Select>
-            {manualErrors.visitorUserId ? <div className="text-xs text-rose-600">{manualErrors.visitorUserId}</div> : null}
-          </div>
+              <section className={sectionCardClassName}>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-slate-950">
+                    <Clock3 className="h-4 w-4 text-primary" />
+                    <h4 className="text-lg font-semibold tracking-tight">Visit Details</h4>
+                  </div>
+                  <p className="text-[13px] text-slate-500">Set the date, visitor, and current status.</p>
+                </div>
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium text-slate-900">Visit Date/Time</span>
+                    <div className="relative">
+                      <Clock3 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        className={`${fieldClassName} pl-10`}
+                        onChange={(event) => setManualForm((current) => ({ ...current, visitDate: event.target.value }))}
+                        type="datetime-local"
+                        value={manualForm.visitDate}
+                      />
+                    </div>
+                    {manualErrors.visitDate ? <div className="text-xs text-rose-600">{manualErrors.visitDate}</div> : null}
+                  </label>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Visit Status</label>
-            <Select
-              onChange={(event) => setManualForm((current) => ({ ...current, visitStatus: event.target.value }))}
-              value={manualForm.visitStatus}
-            >
-              <option value="completed">Completed</option>
-              <option value="scheduled">Scheduled</option>
-              <option value="cancelled">Cancelled</option>
-              <option value="follow_up_needed">Follow Up Needed</option>
-            </Select>
-          </div>
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium text-slate-900">Visitor</span>
+                    <div className="relative">
+                      <UserRound className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <Select
+                        className={`${fieldClassName} pl-10`}
+                        onChange={(event) => {
+                          const selectedVisitor = visitorOptions.find((option) => option.visitorUserId === event.target.value);
+                          setManualForm((current) => ({
+                            ...current,
+                            visitorUserId: event.target.value,
+                            visitorDisplayName: selectedVisitor?.visitorDisplayName ?? "",
+                          }));
+                        }}
+                        value={manualForm.visitorUserId}
+                      >
+                        <option value="" disabled>Select visitor</option>
+                        {visitorOptions.map((visitor) => (
+                          <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
+                            {visitor.visitorDisplayName}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    {manualErrors.visitorUserId ? <div className="text-xs text-rose-600">{manualErrors.visitorUserId}</div> : null}
+                  </label>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Notes</label>
-            <Textarea
-              onChange={(event) => setManualForm((current) => ({ ...current, notes: event.target.value }))}
-              placeholder="Optional notes"
-              value={manualForm.notes}
-            />
-          </div>
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium text-slate-900">Visit Status</span>
+                    <div className="relative">
+                      <CheckCheck className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <Select
+                        className={`${fieldClassName} pl-10`}
+                        onChange={(event) => setManualForm((current) => ({ ...current, visitStatus: event.target.value }))}
+                        value={manualForm.visitStatus}
+                      >
+                        <option value="completed">Completed</option>
+                        <option value="scheduled">Scheduled</option>
+                        <option value="cancelled">Cancelled</option>
+                        <option value="follow_up_needed">Follow Up Needed</option>
+                      </Select>
+                    </div>
+                  </label>
 
-          <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Members</label>
-            <MemberSearchAutocomplete
-              items={memberIndex}
-              onQueryChange={(value) => setManualForm((current) => ({ ...current, memberQuery: value }))}
-              onSelect={(item) =>
-                setManualForm((current) => ({
-                  ...current,
-                  title:
-                    !current.title.trim() || isVisitationTitle(current.title)
-                      ? buildVisitationTitle([...new Set([...current.memberIds, item.memberId])], memberIndex)
-                      : current.title,
-                  memberIds: [...new Set([...current.memberIds, item.memberId])],
-                  memberQuery: "",
-                }))
-              }
-              query={manualForm.memberQuery}
-              selectedIds={manualForm.memberIds}
-            />
-            {manualForm.memberIds.length ? (
-              <div className="flex flex-wrap gap-1.5">
-                {emptyMemberSelection(memberIndex, manualForm.memberIds).map((selectedMember) => (
-                  <MemberChip
-                    key={selectedMember.memberId}
-                    member={selectedMember}
-                    onRemove={(selectedId) =>
-                      setManualForm((current) => ({
-                        ...current,
-                        title:
-                          !current.title.trim() || isVisitationTitle(current.title)
-                            ? buildVisitationTitle(
-                              current.memberIds.filter((entry) => entry !== selectedId),
-                              memberIndex,
-                            )
-                            : current.title,
-                        memberIds: current.memberIds.filter((entry) => entry !== selectedId),
-                      }))
-                    }
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium text-slate-900">Location</span>
+                    <div className="relative">
+                      <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        className={`${fieldClassName} pl-10`}
+                        onChange={(event) => setManualForm((current) => ({ ...current, location: event.target.value }))}
+                        placeholder="Optional address or meeting spot"
+                        value={manualForm.location}
+                      />
+                    </div>
+                  </label>
+                </div>
+              </section>
+
+              <section className="rounded-[1.2rem] border border-slate-200/80 bg-white/96 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur">
+                <div className="flex items-center gap-3 px-3 py-3 sm:px-3.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+                    <AlignLeft className="h-4.5 w-4.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-lg font-semibold tracking-tight text-slate-950">Notes</div>
+                    <div className="text-[13px] text-slate-500">Capture anything worth remembering from the visit.</div>
+                  </div>
+                </div>
+                <div className="border-t border-slate-200/80 px-3 pb-3 pt-3 sm:px-3.5 sm:pb-3.5">
+                  <Textarea
+                    className="min-h-20 rounded-xl border-slate-200 bg-white px-3 py-2.5 text-sm shadow-sm shadow-slate-200/35 focus:border-primary focus:ring-primary/10"
+                    onChange={(event) => setManualForm((current) => ({ ...current, notes: event.target.value }))}
+                    placeholder="Optional notes"
+                    value={manualForm.notes}
                   />
-                ))}
-              </div>
-            ) : null}
-            {manualErrors.memberIds ? <div className="text-xs text-rose-600">{manualErrors.memberIds}</div> : null}
-          </div>
-        </div>
-      </FormDrawer>
+                </div>
+              </section>
+            </div>
+          );
+        })()}
+      </RightSideDrawer>
 
       <RightSideDrawer
         description="Manual visit details. Editing or deleting here will not affect Google Calendar."

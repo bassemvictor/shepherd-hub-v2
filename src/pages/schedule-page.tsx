@@ -14,14 +14,20 @@ import type {
   DateSelectArg,
 } from "@fullcalendar/core/index.js";
 import {
+  AlignLeft,
   CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock3,
+  FileText,
+  Mail,
+  MapPin,
   Plus,
   RefreshCcw,
   Search,
   Trash2,
+  Users,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -445,11 +451,23 @@ const EventEditor = ({
   }
 
   const selectedMembers = emptyMemberSelection(memberIndex, form.memberIds);
+  const editorTitle = mode === "create" ? "New Event" : "Edit Event";
+  const editorDescription = mode === "create" ? "Create a new calendar event." : "Update the calendar event details.";
+  const primaryActionLabel = mode === "create" ? "Create Event" : "Save Changes";
+  const sectionCardClassName = "space-y-3 rounded-[1.2rem] border border-slate-200/80 bg-white/96 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur sm:p-3.5";
+  const fieldClassName = "h-10 rounded-xl border-slate-200 bg-white px-3 text-sm shadow-sm shadow-slate-200/35 transition focus:border-primary focus:ring-primary/10";
+  const allDayLabel = form.allDay ? "All-day event" : "Specific start and end time";
 
   const content = (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <span className="text-sm font-medium text-slate-900">Members</span>
+    <div className="space-y-3">
+      <section className={sectionCardClassName}>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-slate-950">
+            <Users className="h-4 w-4 text-primary" />
+            <h4 className="text-lg font-semibold tracking-tight">Members</h4>
+          </div>
+          <p className="text-sm text-slate-500">Add one or more members to this event.</p>
+        </div>
         <MemberSearchAutocomplete
           items={memberIndex}
           onQueryChange={(value) => onChange({ ...form, memberQuery: value })}
@@ -462,14 +480,14 @@ const EventEditor = ({
               ),
             )
           }
-          placeholder="Search members"
+          placeholder="Search members..."
           query={form.memberQuery}
           selectedIds={form.memberIds}
         />
-        <div className="space-y-2">
-          <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Selected</span>
+        <div className="space-y-1.5">
+          <div className="text-sm font-semibold text-slate-500">Selected ({selectedMembers.length})</div>
           {selectedMembers.length ? (
-            <div className="flex flex-wrap gap-1.5 rounded-md border border-border bg-slate-50 p-2">
+            <div className="flex flex-wrap gap-1.5">
               {selectedMembers.map((member) => (
                 <MemberChip
                   key={member.memberId}
@@ -491,68 +509,94 @@ const EventEditor = ({
               ))}
             </div>
           ) : (
-            <div className="rounded-md border border-dashed border-border px-3 py-2 text-sm text-slate-500">
-              No members selected
+            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-500">
+              No members selected yet.
             </div>
           )}
         </div>
-      </div>
+      </section>
 
-      <label className="space-y-1.5">
-        <span className="text-sm font-medium text-slate-900">Calendar</span>
-        <Select
-          onChange={(event) => onChange({ ...form, calendarId: event.target.value })}
-          value={form.calendarId}
-        >
-          <option value="">Choose a calendar</option>
-          {calendars.map((calendar) => (
-            <option key={calendar.calendarId} value={calendar.calendarId}>
-              {calendar.summary}
-            </option>
-          ))}
-        </Select>
-      </label>
+      <section className={sectionCardClassName}>
+        <label className="space-y-1.5">
+          <span className="text-lg font-semibold tracking-tight text-slate-950">Calendar</span>
+          <div className="relative">
+            <CalendarDays className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-primary" />
+            <Select
+              className={`${fieldClassName} pl-10`}
+              onChange={(event) => onChange({ ...form, calendarId: event.target.value })}
+              value={form.calendarId}
+            >
+              <option value="">Choose a calendar</option>
+              {calendars.map((calendar) => (
+                <option key={calendar.calendarId} value={calendar.calendarId}>
+                  {calendar.summary}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </label>
+      </section>
 
-      <label className="space-y-1.5">
-        <span className="text-sm font-medium text-slate-900">Event Title</span>
-        <Input
-          onChange={(event) => onChange({ ...form, summary: event.target.value })}
-          placeholder="Add an event title"
-          value={form.summary}
-        />
-      </label>
-
-      <div className="space-y-3">
-        <span className="text-sm font-medium text-slate-900">Start - End</span>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1.5">
-            <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Start</span>
+      <section className={sectionCardClassName}>
+        <label className="space-y-1.5">
+          <span className="text-lg font-semibold tracking-tight text-slate-950">Event Title</span>
+          <div className="relative">
+            <FileText className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
-              onChange={(event) => onChange({
-                ...form,
-                start: form.allDay ? event.target.value : snapDateTimeInputToQuarterHour(event.target.value),
-              })}
-              step={form.allDay ? undefined : 900}
-              type={form.allDay ? "date" : "datetime-local"}
-              value={form.start}
+              className={`${fieldClassName} pl-10`}
+              onChange={(event) => onChange({ ...form, summary: event.target.value })}
+              placeholder="Add an event title"
+              value={form.summary}
             />
+          </div>
+        </label>
+      </section>
+
+      <section className={sectionCardClassName}>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-slate-950">
+            <Clock3 className="h-4 w-4 text-primary" />
+            <h4 className="text-lg font-semibold tracking-tight">Start &amp; End</h4>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2.5">
+          <label className="space-y-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm shadow-slate-200/35">
+            <span className="text-sm font-medium text-slate-500">Start</span>
+            <div className="relative">
+              <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
+                onChange={(event) => onChange({
+                  ...form,
+                  start: form.allDay ? event.target.value : snapDateTimeInputToQuarterHour(event.target.value),
+                })}
+                step={form.allDay ? undefined : 900}
+                type={form.allDay ? "date" : "datetime-local"}
+                value={form.start}
+              />
+            </div>
           </label>
-          <label className="space-y-1.5">
-            <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">End</span>
-            <Input
-              onChange={(event) => onChange({
-                ...form,
-                end: form.allDay ? event.target.value : snapDateTimeInputToQuarterHour(event.target.value),
-              })}
-              step={form.allDay ? undefined : 900}
-              type={form.allDay ? "date" : "datetime-local"}
-              value={form.end}
-            />
+          <label className="space-y-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm shadow-slate-200/35">
+            <span className="text-sm font-medium text-slate-500">End</span>
+            <div className="relative">
+              <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
+                onChange={(event) => onChange({
+                  ...form,
+                  end: form.allDay ? event.target.value : snapDateTimeInputToQuarterHour(event.target.value),
+                })}
+                step={form.allDay ? undefined : 900}
+                type={form.allDay ? "date" : "datetime-local"}
+                value={form.end}
+              />
+            </div>
           </label>
         </div>
-        <label className="flex items-center gap-2 text-sm font-medium text-slate-900">
+        <label className="flex items-center gap-2.5 text-sm font-medium text-slate-900">
           <Checkbox
             checked={form.allDay}
+            className="h-5 w-5 rounded-[0.45rem] border-slate-300"
             onChange={(event) => {
               const nextAllDay = event.target.checked;
               const nextStart = nextAllDay
@@ -572,61 +616,79 @@ const EventEditor = ({
           />
           <span>All Day</span>
         </label>
-      </div>
+      </section>
 
-      <div className="h-px bg-border" />
-
-      <div className="space-y-3">
+      <section className="rounded-[1.2rem] border border-slate-200/80 bg-white/96 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur">
         <button
-          className="flex w-full items-center justify-between text-left"
+          className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left sm:px-3.5"
           onClick={() => setDetailsOpen((current) => !current)}
           type="button"
         >
-          <span className="text-sm font-medium text-slate-900">Additional Details</span>
-          <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${detailsOpen ? "rotate-180" : ""}`} />
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+              <AlignLeft className="h-4.5 w-4.5" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-lg font-semibold tracking-tight text-slate-950">Additional Details</div>
+              <div className="text-[13px] text-slate-500">Add location, notes or more information.</div>
+            </div>
+          </div>
+          <ChevronDown className={`h-5 w-5 shrink-0 text-slate-500 transition-transform ${detailsOpen ? "rotate-180" : ""}`} />
         </button>
         {detailsOpen ? (
-          <div className="space-y-3">
+          <div className="space-y-2.5 border-t border-slate-200/80 px-3 pb-3 pt-3 sm:px-3.5 sm:pb-3.5">
             <label className="space-y-1.5">
               <span className="text-sm font-medium text-slate-900">Location</span>
-              <Input onChange={(event) => onChange({ ...form, location: event.target.value })} value={form.location} />
+              <div className="relative">
+                <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  className={`${fieldClassName} pl-10`}
+                  onChange={(event) => onChange({ ...form, location: event.target.value })}
+                  value={form.location}
+                />
+              </div>
             </label>
             <label className="space-y-1.5">
               <span className="text-sm font-medium text-slate-900">Attendees</span>
-              <Input
-                onChange={(event) => onChange({ ...form, attendeesText: event.target.value })}
-                placeholder="name@example.com, person@example.com"
-                value={form.attendeesText}
-              />
+              <div className="relative">
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  className={`${fieldClassName} pl-10`}
+                  onChange={(event) => onChange({ ...form, attendeesText: event.target.value })}
+                  placeholder="name@example.com, person@example.com"
+                  value={form.attendeesText}
+                />
+              </div>
             </label>
             <label className="space-y-1.5">
               <span className="text-sm font-medium text-slate-900">Description</span>
-              <Textarea onChange={(event) => onChange({ ...form, description: event.target.value })} value={form.description} />
+              <Textarea
+                className="min-h-20 rounded-xl border-slate-200 bg-white px-3 py-2.5 text-sm shadow-sm shadow-slate-200/35 focus:border-primary focus:ring-primary/10"
+                onChange={(event) => onChange({ ...form, description: event.target.value })}
+                value={form.description}
+              />
             </label>
           </div>
         ) : null}
-      </div>
-
-      <div className="h-px bg-border" />
+      </section>
     </div>
   );
 
   const footer = (
-    <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <div>
+    <div className="space-y-2.5">
+      <Button className="h-11 w-full rounded-xl text-sm font-semibold shadow-[0_14px_26px_rgba(37,99,235,0.24)]" disabled={busy} onClick={onSave} type="button">
+        <CalendarDays className="h-4 w-4" />
+        {busy ? "Saving..." : primaryActionLabel}
+      </Button>
+      <Button className="h-11 w-full rounded-xl text-sm font-semibold" onClick={onClose} type="button" variant="outline">
+        Cancel
+      </Button>
+      <div className="min-h-8">
         {canDelete ? (
-          <Button className="bg-rose-600 hover:bg-rose-700" onClick={onDelete} type="button">
+          <Button className="h-10 rounded-xl bg-rose-600 px-4 text-sm hover:bg-rose-700" onClick={onDelete} type="button">
             Delete Event
           </Button>
         ) : null}
-      </div>
-      <div className="flex flex-col-reverse gap-2 sm:flex-row">
-        <Button onClick={onClose} type="button" variant="outline">
-          Cancel
-        </Button>
-        <Button disabled={busy} onClick={onSave} type="button">
-          {busy ? "Saving..." : mode === "create" ? "Create Event" : "Save Changes"}
-        </Button>
       </div>
     </div>
   );
@@ -644,10 +706,23 @@ const EventEditor = ({
 
   return (
     <RightSideDrawer
+      contentClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3 sm:py-3"
       footer={footer}
+      footerClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3"
+      headerClassName="border-b border-slate-200/80 bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3"
+      headerLeading={(
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1rem] bg-[linear-gradient(180deg,#eef4ff_0%,#f6f9ff_100%)] text-primary shadow-inner">
+          <CalendarDays className="h-6 w-6" />
+        </div>
+      )}
       onClose={onClose}
       open={open}
-      title={mode === "create" ? "New Event" : "Edit Event"}
+      panelClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)]"
+      description={editorDescription}
+      descriptionClassName="text-xs text-slate-500 sm:text-sm"
+      title={editorTitle}
+      titleClassName="text-2xl font-semibold tracking-tight text-slate-950"
+      width="lg"
     >
       {content}
     </RightSideDrawer>
