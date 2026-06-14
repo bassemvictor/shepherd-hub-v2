@@ -47,6 +47,133 @@ Frontend auth lives in [src/lib/auth.tsx](/Users/sallysamuel/workspace/amplify-r
 6. Lambda reads tenant/user/group information from JWT claims.
 7. Lambda reads or writes DynamoDB and returns JSON back to the React page.
 
+## Calendar sync sequence diagrams
+
+### 1. Schedule page load
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant UI as Schedule Page
+    participant API as API Gateway
+    participant L as Lambda
+    participant DDB as DynamoDB
+    participant G as Google Calendar
+
+    U->>UI: Open /calendar/schedule
+    UI->>API: GET /schedule/overview
+    API->>L: Route request
+    L->>DDB: Read Google connection
+    L->>DDB: Read calendar records
+    L->>DDB: Read schedule settings
+    DDB-->>L: Overview data
+    L-->>API: ScheduleOverviewResponse
+    API-->>UI: Overview JSON
+
+    UI->>API: GET /members/index
+    API->>L: Route request
+    L->>DDB: Read member index
+    DDB-->>L: Member records
+    L-->>API: Member index JSON
+    API-->>UI: Member index
+
+    Note over UI: When the visible date range is known,<br/>the page starts a cache-first event load.
+
+    par Cached response
+        UI->>API: GET /schedule/events?timeMin&timeMax&calendarIds&cacheOnly=true
+        API->>L: Route request
+        L->>DDB: Read selected calendar configs
+        loop Per selected calendar
+            L->>DDB: Query cached events by calendarId + time range
+            L->>DDB: Update sync metadata source=CACHE
+        end
+        DDB-->>L: Cached events
+        L-->>API: ScheduleEventsResponse
+        API-->>UI: Cached events first
+    and Refresh-backed response
+        UI->>API: GET /schedule/events?timeMin&timeMax&calendarIds
+        API->>L: Route request
+        L->>DDB: Read Google connection
+        L->>DDB: Read selected calendar configs
+        loop Per selected calendar
+            alt Calendar is fresh
+                L->>DDB: Query cached events by calendarId + time range
+            else Calendar is stale or ALWAYS_GOOGLE
+                L->>G: GET /calendars/{calendarId}/events
+                G-->>L: Google events or delta
+                L->>DDB: Upsert cached events
+                L->>DDB: Delete cancelled or missing cached events
+                L->>DDB: Update calendar sync state
+            end
+        end
+        L-->>API: ScheduleEventsResponse
+        API-->>UI: Final merged events
+    end
+
+    UI->>UI: Replace cached view with refreshed view if newer response arrives
+```
+
+### 2. Single calendar stale-refresh cycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Schedule Page
+    participant API as API Gateway
+    participant L as Lambda
+    participant DDB as DynamoDB
+    participant G as Google Calendar
+
+    UI->>API: GET /schedule/events?timeMin&timeMax&calendarIds
+    API->>L: Route request
+    L->>DDB: Read calendar record for calendarId
+    L->>DDB: Read Google connection
+    L->>L: Evaluate shouldRefreshCalendar(calendar)
+
+    alt Cache expired, requiresFullSync, never synced, forceSync, or ALWAYS_GOOGLE
+        L->>L: Decide Google refresh is required
+        L->>L: Refresh Google access token if near expiry
+
+        alt Incremental sync token is present
+            L->>G: GET /calendars/{calendarId}/events?syncToken=...
+            G-->>L: Changed events + nextSyncToken
+        else Full sync required
+            L->>DDB: Read all cached events for calendarId
+            L->>G: GET /calendars/{calendarId}/events?timeMin&timeMax...
+            G-->>L: Full event window + nextSyncToken
+        end
+
+        loop For each returned Google event
+            alt Event is cancelled
+                L->>DDB: Delete cached event
+                L->>DDB: Delete event-member assignments
+                L->>DDB: Delete visitation records
+            else Event is active
+                L->>DDB: Upsert cached event item
+                L->>DDB: Sync member assignments and visitation links
+            end
+        end
+
+        alt Full sync
+            L->>DDB: Delete cached events missing from Google result set
+        end
+
+        L->>DDB: Update calendar sync fields
+        Note over L,DDB: lastSyncedAt, lastSyncStatus, lastSyncSource,<br/>requiresFullSync=false, syncToken
+        L->>DDB: Query refreshed cached events for requested time range
+        DDB-->>L: Refreshed events
+        L-->>API: ScheduleEventsResponse for this calendar
+        API-->>UI: Refreshed calendar events
+    else Cache still fresh
+        L->>DDB: Query cached events for requested time range
+        L->>DDB: Update calendar sync metadata source=CACHE
+        DDB-->>L: Cached events
+        L-->>API: ScheduleEventsResponse for this calendar
+        API-->>UI: Cached calendar events
+    end
+```
+
 ## Backend structure
 
 Backend infrastructure is defined in [amplify/backend.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/backend.ts:1).
