@@ -911,6 +911,11 @@ const normalizePageNumber = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const normalizeNonNegativeNumber = (value: string | undefined, fallback: number) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 const normalizeReportSortBy = (value: string | undefined): ReportsSortBy =>
   value === "member_name" || value === "visit_count" || value === "last_visit_date"
     ? value
@@ -985,7 +990,7 @@ const parseVisitationReportFilters = (event: APIGatewayProxyEventV2WithJWTAuthor
     to: sinceBeginning ? undefined : to,
     sinceBeginning,
     visitCountMode,
-    visitCountThreshold: Math.max(0, normalizePageNumber(params.visitCountThreshold, 1)),
+    visitCountThreshold: normalizeNonNegativeNumber(params.visitCountThreshold, 1),
     visitorMode,
     visitorUserId,
     memberScope: normalizeReportMemberScope(params.memberScope),

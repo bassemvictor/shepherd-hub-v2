@@ -1691,6 +1691,40 @@ test("visitation reports default to all visitors and support only-my-visits filt
   assert.equal(myBody.rows.length, 2);
   assert.equal(myBody.rows.find((row) => row.memberId === "member-1")?.visitCountInRange, 1);
   assert.equal(myBody.rows.find((row) => row.memberId === "member-2")?.visitCountInRange, 0);
+
+  const visitedResponse = await handler(
+    createEvent({
+      rawPath: "/reports/visitations",
+      queryStringParameters: {
+        sinceBeginning: "true",
+        visitCountMode: "gt",
+        visitCountThreshold: "0",
+      },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "viewer@example.com",
+              name: "Viewer A",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(visitedResponse.statusCode, 200);
+  const visitedBody = JSON.parse(String(visitedResponse.body)) as VisitationReportResponse;
+  assert.equal(visitedBody.rows.length, 2);
+  assert.equal(visitedBody.rows.find((row) => row.memberId === "member-1")?.visitCountInRange, 1);
+  assert.equal(visitedBody.rows.find((row) => row.memberId === "member-2")?.visitCountInRange, 1);
 });
 
 test("manual visitation creation preserves the selected visitor while keeping the actor as creator", async () => {
