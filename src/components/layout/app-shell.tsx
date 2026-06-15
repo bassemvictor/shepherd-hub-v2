@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { formatGroupLabel, useAuth } from "../../lib/auth";
+import { APP_DISPLAY_NAME, APP_SHORT_DISPLAY_NAME } from "../../lib/app-metadata";
 import { getBreadcrumbs, getPageTitle } from "../../lib/route-metadata";
 import { cn } from "../../lib/utils";
 import { SideMenu } from "./side-menu";
@@ -43,7 +44,7 @@ export const AppShell = () => {
                     {user?.tenantId ?? "No Tenant Assigned"}
                   </p>
                   <h1 className="mt-1 truncate text-[1.25rem] font-semibold leading-none tracking-tight text-white sm:text-[1.45rem]">
-                    Shepherd Hub v0.2
+                    {APP_SHORT_DISPLAY_NAME}
                   </h1>
                 </div>
               </div>
@@ -59,7 +60,7 @@ export const AppShell = () => {
             <SideMenu onNavigate={() => setSidebarOpen(false)} user={user} />
 
             <div className="rounded-md border border-white/10 bg-white/6 p-3">
-              <p className="text-sm font-medium text-white">Shepherd Hub v0.2.15</p>
+              <p className="text-sm font-medium text-white">{APP_DISPLAY_NAME}</p>
               <p className="mt-1 text-xs text-blue-100/70">
                 Coordinate tenant {user?.tenantId ?? "unassigned"} events and member visitations.  
               </p>

@@ -1,4 +1,4 @@
-import { Download, Search } from "lucide-react";
+import { Download, Play, Search } from "lucide-react";
 
 import type { ReportVisitorOption } from "../../../shared/types";
 import { Button } from "../ui/button";
@@ -35,6 +35,8 @@ export const CompactFilterBar = ({
   visitors,
   showFilter,
   onShowFilterChange,
+  onRunReport,
+  runDisabled,
   onExport,
   scope,
 }: {
@@ -51,11 +53,13 @@ export const CompactFilterBar = ({
   visitors: ReportVisitorOption[];
   showFilter: ReportShowFilter;
   onShowFilterChange: (value: ReportShowFilter) => void;
+  onRunReport: () => void;
+  runDisabled?: boolean;
   onExport: () => void;
   scope: ReportScope;
 }) => (
   <>
-    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_170px_170px_170px_auto]">
+    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_170px_170px_170px_150px_120px]">
       {onSearchChange ? (
         <FilterField label="Search">
           <label className="relative block">
@@ -101,6 +105,13 @@ export const CompactFilterBar = ({
             </option>
           ))}
         </Select>
+      </FilterField>
+
+      <FilterField label="Run Report">
+        <Button className="w-full" disabled={runDisabled} onClick={onRunReport} type="button">
+          <Play className="h-3.5 w-3.5" />
+          Run Report
+        </Button>
       </FilterField>
 
       <FilterField label="Export">

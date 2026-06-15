@@ -11,6 +11,15 @@ const routeTitleMap: Record<string, string> = {
   "/auth": "Sign In",
 };
 
+const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
+  "/calendar": [{ label: "Configurations" }, { label: "Connect & Configure" }],
+  "/calendar/schedule": [{ label: "Calendar" }, { label: "Schedule" }],
+  "/members": [{ label: "Congregation" }],
+  "/reports/dashboard": [{ label: "Reports" }, { label: "Reports Dashboard" }],
+  "/reports/member-visitation": [{ label: "Reports" }, { label: "Member Visitation" }],
+  "/auth": [{ label: "Sign In" }],
+};
+
 const isMemberDetailPath = (pathname: string) => /^\/members\/[^/]+$/.test(pathname);
 
 export const getPageTitle = (pathname: string) =>
@@ -21,6 +30,15 @@ export const getPageTitle = (pathname: string) =>
   formatTitle(pathname.split("/").filter(Boolean).slice(-1)[0] ?? "Members");
 
 export const getBreadcrumbs = (pathname: string): Array<{ label: string; href?: string }> => {
+  const mappedBreadcrumbs = breadcrumbMap[pathname];
+
+  if (mappedBreadcrumbs) {
+    return mappedBreadcrumbs.map((crumb, index) => ({
+      ...crumb,
+      href: index === mappedBreadcrumbs.length - 1 ? undefined : crumb.href,
+    }));
+  }
+
   const segments = pathname.split("/").filter(Boolean);
 
   if (!segments.length) {

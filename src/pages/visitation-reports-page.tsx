@@ -36,6 +36,8 @@ const buildSearchState = (params: URLSearchParams) => ({
   page: Math.max(1, Number(params.get("page") || 1)),
 });
 
+type SearchState = ReturnType<typeof buildSearchState>;
+
 const buildParams = (state: ReturnType<typeof buildSearchState>) => {
   const params = new URLSearchParams();
   params.set("period", state.period);
@@ -144,11 +146,16 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const searchState = useMemo(() => buildSearchState(searchParams), [searchParams]);
+  const [draftState, setDraftState] = useState<SearchState>(searchState);
   const [report, setReport] = useState<VisitationReportResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const setState = useCallback((patch: Partial<ReturnType<typeof buildSearchState>>) => {
+  useEffect(() => {
+    setDraftState(searchState);
+  }, [searchState]);
+
+  const setState = useCallback((patch: Partial<SearchState>) => {
     const shouldResetPage = patch.search !== undefined
       || patch.show !== undefined
       || patch.period !== undefined
@@ -162,6 +169,25 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       page: patch.page ?? (shouldResetPage ? 1 : searchState.page),
     }));
   }, [searchState, setSearchParams]);
+
+  const hasPendingChanges = draftState.period !== searchState.period
+    || draftState.selectedVisitorUserId !== searchState.selectedVisitorUserId
+    || draftState.show !== searchState.show
+    || draftState.search !== searchState.search
+    || draftState.customFrom !== searchState.customFrom
+    || draftState.customTo !== searchState.customTo;
+
+  const runReport = useCallback(() => {
+    setState({
+      period: draftState.period,
+      selectedVisitorUserId: draftState.selectedVisitorUserId,
+      show: draftState.show,
+      search: draftState.search,
+      customFrom: draftState.customFrom,
+      customTo: draftState.customTo,
+      page: 1,
+    });
+  }, [draftState, setState]);
 
   const loadReport = useCallback(async () => {
     setLoading(true);
@@ -204,8 +230,6 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     void loadReport();
   }, [loadReport]);
 
-  const activeSearch = reportView === "members" ? searchState.search : "";
-
   const applyDashboardFilter = useCallback((filter: { view: "members"; show?: ReportShowFilter; period?: ReportPeriod }) => {
     const nextState = {
       ...searchState,
@@ -236,20 +260,22 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       controls={(
         <div className="space-y-2">
           <CompactFilterBar
-            customFrom={searchState.customFrom}
-            customTo={searchState.customTo}
-            onCustomFromChange={(customFrom) => setState({ customFrom })}
-            onCustomToChange={(customTo) => setState({ customTo })}
+            customFrom={draftState.customFrom}
+            customTo={draftState.customTo}
+            onCustomFromChange={(customFrom) => setDraftState((current) => ({ ...current, customFrom }))}
+            onCustomToChange={(customTo) => setDraftState((current) => ({ ...current, customTo }))}
             onExport={exportCsv}
-            onPeriodChange={(period) => setState({ period })}
-            onSearchChange={reportView === "members" ? (search) => setState({ search }) : undefined}
-            onShowFilterChange={(show) => setState({ show })}
-            onVisitorChange={(selectedVisitorUserId) => setState({ selectedVisitorUserId })}
-            period={searchState.period}
+            onPeriodChange={(period) => setDraftState((current) => ({ ...current, period }))}
+            onRunReport={runReport}
+            runDisabled={loading || !hasPendingChanges}
+            onSearchChange={reportView === "members" ? (search) => setDraftState((current) => ({ ...current, search })) : undefined}
+            onShowFilterChange={(show) => setDraftState((current) => ({ ...current, show }))}
+            onVisitorChange={(selectedVisitorUserId) => setDraftState((current) => ({ ...current, selectedVisitorUserId }))}
+            period={draftState.period}
             scope={REPORT_SCOPE}
-            search={activeSearch}
-            selectedVisitorUserId={searchState.selectedVisitorUserId}
-            showFilter={searchState.show}
+            search={reportView === "members" ? draftState.search : ""}
+            selectedVisitorUserId={draftState.selectedVisitorUserId}
+            showFilter={draftState.show}
             visitors={report?.visitors ?? []}
           />
           <div className="text-xs text-muted-foreground">

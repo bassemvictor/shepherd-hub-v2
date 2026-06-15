@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, ChevronDown, ClipboardList, Users } from "lucide-react";
+import { BarChart3, CalendarDays, ChevronDown, ClipboardList, Settings2, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
@@ -23,10 +23,7 @@ type NavigationSection = {
 const baseNavigation: NavigationSection[] = [
   {
     label: "Calendar",
-    items: [
-      { label: "Connect & Configure", href: "/calendar", icon: CalendarDays },
-      { label: "Schedule", href: "/calendar/schedule", icon: CalendarDays },
-    ],
+    items: [{ label: "Schedule", href: "/calendar/schedule", icon: CalendarDays }],
   },
   {
     label: "Congregation",
@@ -44,6 +41,10 @@ const baseNavigation: NavigationSection[] = [
         ],
       },
     ],
+  },
+  {
+    label: "Configurations",
+    items: [{ label: "Connect & Configure", href: "/calendar", icon: Settings2 }],
   },
 ];
 
