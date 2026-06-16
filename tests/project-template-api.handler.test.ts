@@ -412,6 +412,92 @@ test("member responses ignore legacy role and status fields from stored items", 
   assert.doesNotMatch(String(response.body), /Legacy Role|Legacy Status|profession|accountStatus/);
 });
 
+test("members index returns only lightweight list fields for the tenant", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "QueryCommand") {
+          return {
+            Items: [
+              {
+                PK: "TENANT#tenant-abc",
+                SK: "MEMBER#member-1",
+                GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                GSI1SK: "NAME#adel abraham#MEMBER#member-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-08T12:00:00.000Z",
+                entityType: "MEMBER",
+                tenantId: "tenant-abc",
+                memberId: "member-1",
+                unityId: "17317",
+                source: "UNITY",
+                isUnityMember: true,
+                householdName: "Abraham Household",
+                fullName: "Adel Abraham",
+                initials: "AA",
+                phone: "(613) 606-4114",
+                email: "adel@example.com",
+                address: "123 Main St",
+                notes: "Long member note",
+                normalizedSearchText: "adel abraham 6136064114 adel@example.com 17317",
+              },
+            ],
+          };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-09T12:00:00.000Z",
+    uuid: () => "unused",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/members/index",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(JSON.parse(String(response.body)), {
+    items: [
+      {
+        memberId: "member-1",
+        fullName: "Adel Abraham",
+        initials: "AA",
+        phone: "(613) 606-4114",
+        email: "adel@example.com",
+        householdName: "Abraham Household",
+        unityId: "17317",
+        isUnityImported: true,
+        source: "UNITY",
+        normalizedSearchText: "adel abraham 6136064114 adel@example.com 17317",
+        updatedAt: "2026-06-08T12:00:00.000Z",
+      },
+    ],
+    generatedAt: "2026-06-09T12:00:00.000Z",
+  });
+  assert.doesNotMatch(String(response.body), /address|notes/);
+});
+
 test("stores visitation member links with VISITATION type", async () => {
   process.env.PROJECT_TEMPLATE_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];

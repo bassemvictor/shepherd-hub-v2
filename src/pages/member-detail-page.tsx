@@ -22,7 +22,6 @@ import type {
   MemberActivity,
   MemberDetailResponse,
   MemberIndexItem,
-  MemberIndexResponse,
   MemberVisitation,
   ReportVisitorOption,
   UpdateManualVisitationInput,
@@ -47,6 +46,7 @@ import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
+import { useMembersIndex } from "../lib/members-index";
 
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
@@ -172,9 +172,13 @@ export const MemberDetailPage = () => {
   const [member, setMember] = useState<Member | null>(null);
   const [activity, setActivity] = useState<MemberActivity[]>([]);
   const [visitations, setVisitations] = useState<MemberVisitation[]>([]);
-  const [memberIndex, setMemberIndex] = useState<MemberIndexItem[]>([]);
-  const [memberIndexLoaded, setMemberIndexLoaded] = useState(false);
-  const [memberIndexLoading, setMemberIndexLoading] = useState(false);
+  const {
+    items: memberIndex,
+    isPending: memberIndexPending,
+    isFetching: memberIndexFetching,
+    refresh: refreshMemberIndex,
+    tenantId,
+  } = useMembersIndex();
   const [activeTab, setActiveTab] = useState<"details" | "visitations" | "activity">("details");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -258,22 +262,22 @@ export const MemberDetailPage = () => {
     ].filter((item) => item.href);
   }, [member]);
 
+  const memberPreview = useMemo(
+    () => memberIndex.find((item) => item.memberId === memberId),
+    [memberId, memberIndex],
+  );
+
   const ensureMemberIndexLoaded = useCallback(async () => {
-    if (memberIndexLoaded || memberIndexLoading) {
+    if (memberIndex.length) {
       return;
     }
 
-    setMemberIndexLoading(true);
     try {
-      const memberIndexResponse = await api.get<MemberIndexResponse>("/members/index");
-      setMemberIndex(memberIndexResponse.items);
-      setMemberIndexLoaded(true);
+      await refreshMemberIndex();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load members for visitation selection.");
-    } finally {
-      setMemberIndexLoading(false);
     }
-  }, [memberIndexLoaded, memberIndexLoading]);
+  }, [memberIndex.length, refreshMemberIndex]);
 
   const handleSave = useCallback(async (value: Partial<Member>) => {
     setSaving(true);
@@ -281,21 +285,23 @@ export const MemberDetailPage = () => {
       await api.put(`/members/${memberId}`, value);
       setEditing(false);
       await loadMember();
+      await refreshMemberIndex();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to update member.");
     } finally {
       setSaving(false);
     }
-  }, [loadMember, memberId]);
+  }, [loadMember, memberId, refreshMemberIndex]);
 
   const handleDelete = useCallback(async () => {
     try {
       await api.delete(`/members/${memberId}`);
+      await refreshMemberIndex();
       navigate("/members");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to delete member.");
     }
-  }, [memberId, navigate]);
+  }, [memberId, navigate, refreshMemberIndex]);
 
   const openCreateManualVisitation = useCallback(() => {
     setManualEditorMode("create");
@@ -391,6 +397,48 @@ export const MemberDetailPage = () => {
       setManualDeleting(false);
     }
   }, [loadMember, memberId, selectedManualVisitation]);
+
+  if (loading && memberPreview) {
+    return (
+      <div className="space-y-3">
+        <section className="rounded-lg border border-border bg-white p-3 panel-shadow">
+          <div className="flex items-start justify-between">
+            <button className="flex items-center gap-2 text-sm font-semibold text-slate-900" onClick={() => navigate("/members")} type="button">
+              <ArrowLeft className="h-4 w-4" />
+              Back
+            </button>
+            <div className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">
+              Loading details...
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-col items-center text-center">
+            <MemberAvatar fullName={memberPreview.fullName} initials={memberPreview.initials} size="lg" />
+            <div className="mt-2.5 flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{memberPreview.fullName}</h1>
+              <UnityBadge source={memberPreview.source} unityId={memberPreview.unityId} />
+            </div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {memberPreview.email || memberPreview.phone || memberPreview.householdName || "Loading profile..."}
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <MemberDetailsTabs activeTab={activeTab} onChange={setActiveTab} />
+          </div>
+
+          <div className="mt-2.5 grid gap-2">
+            {[0, 1, 2, 3].map((item) => (
+              <div className="animate-pulse rounded-md border border-border bg-background/60 px-3 py-3" key={item}>
+                <div className="h-2.5 w-20 rounded bg-slate-200" />
+                <div className="mt-2 h-4 w-full rounded bg-slate-200" />
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   if (loading) {
     return <LoadingState description="Loading member profile." title="Preparing member" />;
@@ -623,7 +671,7 @@ export const MemberDetailPage = () => {
 
           return (
             <div className="space-y-3">
-              {memberIndexLoading ? (
+              {memberIndexPending || memberIndexFetching ? (
                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-muted-foreground shadow-sm shadow-slate-200/30">
                   Loading members for selection...
                 </div>

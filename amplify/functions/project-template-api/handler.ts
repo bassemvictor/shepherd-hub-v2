@@ -701,10 +701,12 @@ const toMemberIndexItem = (item: MemberItem): MemberIndexItem => ({
   initials: item.initials,
   phone: item.phone,
   email: item.email,
-  address: item.address,
+  householdName: item.householdName,
   unityId: item.unityId,
+  isUnityImported: item.source === "UNITY",
   source: item.source,
   normalizedSearchText: item.normalizedSearchText,
+  updatedAt: item.updatedAt,
 });
 
 const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({

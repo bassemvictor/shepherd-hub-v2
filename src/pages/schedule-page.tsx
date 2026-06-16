@@ -61,6 +61,7 @@ import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import { api, isApiConfigured } from "../lib/api";
+import { useMembersIndex } from "../lib/members-index";
 import {
   CalendarSourceBadge,
   formatDateTime,
@@ -473,10 +474,7 @@ const applyMemberSelectionToForm = (
       !currentForm.description.trim() || isVisitationDescription(currentForm.description)
         ? buildVisitationDescription(nextMemberIds, memberIndex)
         : currentForm.description,
-    location:
-      previousFirstMember?.memberId !== nextFirstMember?.memberId
-        ? nextFirstMember?.address ?? ""
-        : currentForm.location,
+    location: currentForm.location,
     attendeesText:
       previousFirstMember?.memberId !== nextFirstMember?.memberId
         ? nextFirstMember?.email ?? ""
@@ -1328,7 +1326,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
   const [searchParams, setSearchParams] = useSearchParams();
   const useBetaMobileExperience = isMobile && variant === "beta";
   const [overview, setOverview] = useState<ScheduleOverviewResponse | null>(null);
-  const [memberIndex, setMemberIndex] = useState<MemberIndexItem[]>([]);
+  const { items: memberIndex } = useMembersIndex();
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -1390,19 +1388,9 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     }
   }, []);
 
-  const loadMemberIndex = useCallback(async () => {
-    try {
-      const response = await api.get<{ items: MemberIndexItem[] }>("/members/index");
-      setMemberIndex(response.items);
-    } catch {
-      setMemberIndex([]);
-    }
-  }, []);
-
   useEffect(() => {
     void loadOverview();
-    void loadMemberIndex();
-  }, [loadMemberIndex, loadOverview]);
+  }, [loadOverview]);
 
   const calendars = useMemo(
     () => (overview?.calendars ?? []).filter((calendar) => calendar.selected),

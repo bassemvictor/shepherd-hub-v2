@@ -1,14 +1,17 @@
-import { ArrowUpDown, Download, Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowUpDown, Download, Plus, RefreshCcw } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 
-import type { CreateMemberInput, Member, MemberDirectoryResponse, MemberImportResult } from "../../shared/types";
+import type { CreateMemberInput, MemberImportResult } from "../../shared/types";
 import { MemberAvatar, MemberFormDialog, MemberImportDialog, UnityBadge } from "../components/members/member-ui";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
 import { PageHeader } from "../components/common/page-header";
 import { Button } from "../components/ui/button";
 import { api, isApiConfigured } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { refreshMembersIndexCache, useMembersIndex } from "../lib/members-index";
 
 type SortMode = "az" | "recent";
 const PAGE_SIZE = 25;
@@ -26,8 +29,9 @@ const fileToBase64 = (file: File) =>
 
 export const MembersPage = () => {
   const navigate = useNavigate();
-  const [members, setMembers] = useState<Member[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const { items: members, isPending, isFetching, error: membersError, refresh } = useMembersIndex();
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
@@ -37,23 +41,6 @@ export const MembersPage = () => {
   const [savingMember, setSavingMember] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<MemberImportResult | null>(null);
-
-  const loadMembers = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.get<MemberDirectoryResponse>("/members");
-      setMembers(response.items);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load members.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadMembers();
-  }, [loadMembers]);
 
   const filteredMembers = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -77,20 +64,22 @@ export const MembersPage = () => {
 
   const handleCreateMember = useCallback(async (value: CreateMemberInput) => {
     setSavingMember(true);
+    setError(null);
     try {
       await api.post("/members", value);
       setCreateOpen(false);
-      await loadMembers();
+      await refreshMembersIndexCache(queryClient, user?.tenantId);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to create member.");
     } finally {
       setSavingMember(false);
     }
-  }, [loadMembers]);
+  }, [queryClient, user?.tenantId]);
 
   const handleImport = useCallback(async (file: File) => {
     setImporting(true);
     setImportResult(null);
+    setError(null);
     try {
       const workbookBase64 = await fileToBase64(file);
       const result = await api.post<MemberImportResult>("/members/import", {
@@ -98,24 +87,24 @@ export const MembersPage = () => {
         workbookBase64,
       });
       setImportResult(result);
-      await loadMembers();
+      await refreshMembersIndexCache(queryClient, user?.tenantId);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to import members.");
     } finally {
       setImporting(false);
     }
-  }, [loadMembers]);
+  }, [queryClient, user?.tenantId]);
 
   if (!isApiConfigured) {
     return <ErrorState description="Set `VITE_API_BASE_URL` or regenerate `amplify_outputs.json` before using member APIs." title="API not configured" />;
   }
 
-  if (loading) {
+  if (isPending && !members.length) {
     return <LoadingState description="Loading congregation directory." title="Preparing members" />;
   }
 
-  if (error && !members.length) {
-    return <ErrorState description={error} title="Unable to load members" />;
+  if (membersError && !members.length) {
+    return <ErrorState description={membersError instanceof Error ? membersError.message : "Unable to load members."} title="Unable to load members" />;
   }
 
   return (
@@ -140,7 +129,7 @@ export const MembersPage = () => {
               {filteredMembers.length} members
             </span>
           </label>
-          <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center">
+          <div className="grid grid-cols-4 gap-2 sm:flex sm:items-center">
             <Button
               aria-label={sortMode === "az" ? "Sort A to Z" : "Sort by recent"}
               className="w-full sm:w-auto"
@@ -167,6 +156,18 @@ export const MembersPage = () => {
               <span className="sr-only sm:not-sr-only">Import Excel</span>
             </Button>
             <Button
+              aria-label="Refresh members"
+              className="w-full sm:w-auto"
+              disabled={isFetching}
+              onClick={() => void refresh()}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <RefreshCcw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+              <span className="sr-only sm:not-sr-only">Refresh</span>
+            </Button>
+            <Button
               aria-label="Add Member"
               className="w-full sm:w-auto"
               onClick={() => setCreateOpen(true)}
@@ -181,6 +182,12 @@ export const MembersPage = () => {
       </PageHeader>
 
       {error ? <ErrorState description={error} title="Member action failed" /> : null}
+      {!error && membersError ? (
+        <ErrorState
+          description={membersError instanceof Error ? membersError.message : "Unable to refresh members."}
+          title="Using cached member list"
+        />
+      ) : null}
 
       <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-white px-3 py-2 text-sm">
         <div className="text-muted-foreground">
@@ -189,6 +196,7 @@ export const MembersPage = () => {
           {Math.min(currentPage * PAGE_SIZE, filteredMembers.length)} of {filteredMembers.length}
         </div>
         <div className="flex items-center gap-2">
+          {isFetching ? <div className="text-xs text-muted-foreground">Refreshing members...</div> : null}
           <Button
             disabled={currentPage <= 1}
             onClick={() => setPage((value) => Math.max(1, value - 1))}
@@ -226,7 +234,7 @@ export const MembersPage = () => {
                 <UnityBadge className="shrink-0" source={member.source} unityId={member.unityId} />
               </div>
               <div className="truncate text-xs text-muted-foreground">
-                {member.email || member.phone || "Manual member"}
+                {member.email || member.phone || member.householdName || "Manual member"}
               </div>
             </div>
           </button>

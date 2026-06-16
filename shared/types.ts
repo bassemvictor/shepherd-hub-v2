@@ -167,10 +167,12 @@ export type MemberIndexItem = {
   initials: string;
   phone?: string;
   email?: string;
-  address?: string;
+  householdName?: string;
   unityId?: string;
+  isUnityImported: boolean;
   source: MemberSource;
   normalizedSearchText: string;
+  updatedAt: string;
 };
 
 export type Member = EntityEnvelope & {
