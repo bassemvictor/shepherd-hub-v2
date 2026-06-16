@@ -23,7 +23,10 @@ type NavigationSection = {
 const baseNavigation: NavigationSection[] = [
   {
     label: "Calendar",
-    items: [{ label: "Schedule", href: "/calendar/schedule", icon: CalendarDays }],
+    items: [
+      { label: "Schedule", href: "/calendar/schedule", icon: CalendarDays },
+      { label: "Schedule Beta", href: "/calendar/schedule-beta", icon: CalendarDays },
+    ],
   },
   {
     label: "Congregation",

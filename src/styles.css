@@ -460,3 +460,145 @@ a {
 .cm-equation-editor .cm-equation-variable-unknown {
   color: #b91c1c;
 }
+
+.schedule-beta-mobile-shell {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.schedule-beta-week-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  padding: 0 0.95rem;
+  border: 1px solid rgba(219, 228, 240, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  font-size: 0.94rem;
+  font-weight: 600;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.06);
+}
+
+.schedule-beta-day-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.schedule-beta-day-pill {
+  display: grid;
+  justify-items: center;
+  gap: 0.15rem;
+  padding: 0.7rem 0.35rem 0.55rem;
+  border: 1px solid rgba(219, 228, 240, 0.95);
+  border-radius: 1.1rem;
+  background: rgba(255, 255, 255, 0.86);
+  color: #334155;
+}
+
+.schedule-beta-day-pill-selected {
+  border-color: #2563eb;
+  background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+  color: #eff6ff;
+  box-shadow: 0 16px 30px rgba(37, 99, 235, 0.24);
+}
+
+.schedule-beta-day-pill-indicator {
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.schedule-beta-day-pill-indicator-active {
+  background: currentColor;
+}
+
+.schedule-beta-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  padding: 0 0.8rem;
+  border: 1px solid rgba(219, 228, 240, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #475569;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.schedule-beta-tab-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.schedule-beta-event-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 1rem;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+}
+
+.schedule-beta-slot-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.35rem;
+  padding: 0 0.9rem;
+  border: 1px solid rgba(191, 219, 254, 0.95);
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.schedule-beta-action-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  width: 100%;
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.schedule-beta-month-day {
+  min-height: 2.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.9rem;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.schedule-beta-month-day-muted {
+  color: #94a3b8;
+}
+
+.schedule-beta-month-day-today {
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.schedule-beta-month-day-selected {
+  background: #2563eb;
+  color: #eff6ff;
+}
+
+.schedule-beta-day-calendar .fc .fc-timegrid-axis,
+.schedule-beta-day-calendar .fc .fc-timegrid-slot {
+  height: 3rem;
+}

@@ -21,6 +21,7 @@ import {
   ChevronRight,
   Clock3,
   FileText,
+  List,
   Mail,
   MapPin,
   Plus,
@@ -29,6 +30,7 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
+import type { JSX, MutableRefObject, TouchEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -68,6 +70,8 @@ import {
 } from "./calendar-shared";
 
 type EditorMode = "create" | "edit";
+type SchedulePageVariant = "default" | "beta";
+type MobileBetaTab = "list" | "day";
 
 type EventFormState = {
   calendarId: string;
@@ -87,6 +91,10 @@ const fullCalendarPlugins = [dayGridPlugin, timeGridPlugin, listPlugin, interact
 const FALLBACK_EVENT_COLOR = "#2563eb";
 const VISITATION_TITLE_PREFIX = "Visitation: ";
 const QUARTER_HOUR_MINUTES = 15;
+const MOBILE_BETA_SLOT_MINUTES = 30;
+const MOBILE_BETA_DAY_START_HOUR = 6;
+const MOBILE_BETA_DAY_END_HOUR = 24;
+const MOBILE_BETA_TAB_STORAGE_KEY = "schedule-beta-mobile-tab";
 
 const normalizeHexColor = (value?: string | null) => {
   const color = value?.trim();
@@ -136,10 +144,40 @@ const shiftDateOnlyValue = (value: string, days: number) => {
   return toDateOnlyValue(date);
 };
 
+const addDays = (date: Date, days: number) => {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+};
+
+const startOfLocalDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const startOfWeekMonday = (date: Date) => {
+  const start = startOfLocalDay(date);
+  const offset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - offset);
+  return start;
+};
+
+const getWeekForDate = (date: Date) => {
+  const start = startOfWeekMonday(date);
+  const days = Array.from({ length: 7 }, (_, index) => addDays(start, index));
+  const end = days[6]!;
+  const endExclusive = addDays(end, 1);
+
+  return { start, end, endExclusive, days };
+};
+
 const isSameLocalDay = (left: Date, right: Date) =>
   left.getFullYear() === right.getFullYear()
   && left.getMonth() === right.getMonth()
   && left.getDate() === right.getDate();
+
+const isDateWithinDay = (value: Date, date: Date) => {
+  const dayStart = startOfLocalDay(date);
+  const dayEnd = addDays(dayStart, 1);
+  return value >= dayStart && value < dayEnd;
+};
 
 const getCurrentScrollTime = () => {
   const now = new Date();
@@ -147,6 +185,128 @@ const getCurrentScrollTime = () => {
   const minutes = String(now.getMinutes()).padStart(2, "0");
   return `${hours}:${minutes}:00`;
 };
+
+const formatWeekRange = (start: Date, end: Date) => {
+  const monthFormatter = new Intl.DateTimeFormat(undefined, { month: "short" });
+  const dayFormatter = new Intl.DateTimeFormat(undefined, { day: "numeric" });
+  const startMonth = monthFormatter.format(start);
+  const endMonth = monthFormatter.format(end);
+
+  if (startMonth === endMonth) {
+    return `${startMonth} ${dayFormatter.format(start)} - ${dayFormatter.format(end)}`;
+  }
+
+  return `${startMonth} ${dayFormatter.format(start)} - ${endMonth} ${dayFormatter.format(end)}`;
+};
+
+const formatSelectedDayHeading = (date: Date) =>
+  new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    day: "numeric",
+  }).format(date);
+
+const formatWeekdayShort = (date: Date) =>
+  new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date);
+
+const formatWeekdayNarrow = (date: Date) =>
+  new Intl.DateTimeFormat(undefined, { weekday: "narrow" }).format(date);
+
+const formatEventTimeRange = (event: ScheduleEvent) => {
+  if (event.allDay) {
+    return "All day";
+  }
+
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  return `${formatter.format(new Date(event.start))} - ${formatter.format(new Date(event.end))}`;
+};
+
+const getEventsForDay = (events: ScheduleEvent[], date: Date) => {
+  const dayStart = startOfLocalDay(date);
+  const dayEnd = addDays(dayStart, 1);
+
+  return events.filter((event) => {
+    const eventStart = new Date(event.start);
+    const eventEnd = event.allDay
+      ? parseDateOnlyValue(normalizeAllDayEndValue(event.end))
+      : new Date(event.end);
+
+    return eventStart < dayEnd && eventEnd > dayStart;
+  });
+};
+
+const sortEventsByStartTime = (events: ScheduleEvent[]) =>
+  [...events].sort((left, right) => new Date(left.start).getTime() - new Date(right.start).getTime());
+
+const getAvailableTimeSlots = (
+  events: ScheduleEvent[],
+  date: Date,
+  {
+    dayStartHour = MOBILE_BETA_DAY_START_HOUR,
+    dayEndHour = MOBILE_BETA_DAY_END_HOUR,
+    stepMinutes = MOBILE_BETA_SLOT_MINUTES,
+  }: {
+    dayStartHour?: number;
+    dayEndHour?: number;
+    stepMinutes?: number;
+  } = {},
+) => {
+  const dayStart = startOfLocalDay(date);
+  const firstSlot = new Date(dayStart);
+  firstSlot.setHours(dayStartHour, 0, 0, 0);
+  const lastSlot = new Date(dayStart);
+  lastSlot.setHours(dayEndHour, 0, 0, 0);
+  const now = new Date();
+  const slots: Date[] = [];
+
+  for (let cursor = new Date(firstSlot); cursor < lastSlot; cursor.setMinutes(cursor.getMinutes() + stepMinutes)) {
+    const slotStart = new Date(cursor);
+    const slotEnd = new Date(cursor);
+    slotEnd.setMinutes(slotEnd.getMinutes() + stepMinutes);
+
+    if (isSameLocalDay(slotStart, now) && slotStart < now) {
+      continue;
+    }
+
+    const blocked = events.some((event) => {
+      const eventStart = new Date(event.start);
+      const eventEnd = event.allDay
+        ? parseDateOnlyValue(normalizeAllDayEndValue(event.end))
+        : new Date(event.end);
+
+      return slotStart < eventEnd && slotEnd > eventStart;
+    });
+
+    if (!blocked) {
+      slots.push(slotStart);
+    }
+  }
+
+  return slots;
+};
+
+const formatAvailableSlot = (date: Date) =>
+  new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+
+const getDayFromCalendarClick = (date: Date) => snapDateToQuarterHour(date);
+
+const buildMonthGrid = (month: Date) => {
+  const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
+  const firstGridDate = startOfWeekMonday(monthStart);
+  return Array.from({ length: 42 }, (_, index) => addDays(firstGridDate, index));
+};
+
+const getMonthPickerMonths = (selectedDate: Date, monthsBefore = 4, monthsAfter = 8) =>
+  Array.from({ length: monthsBefore + monthsAfter + 1 }, (_, index) => {
+    const monthOffset = index - monthsBefore;
+    return new Date(selectedDate.getFullYear(), selectedDate.getMonth() + monthOffset, 1);
+  });
 
 const normalizeAllDayStartValue = (value: string) => (isDateOnlyValue(value) ? value : value.slice(0, 10));
 
@@ -776,6 +936,339 @@ const CalendarVisibilityList = ({
   </div>
 );
 
+const MobileMonthPicker = ({
+  open,
+  selectedDate,
+  onClose,
+  onSelectDate,
+}: {
+  open: boolean;
+  selectedDate: Date;
+  onClose: () => void;
+  onSelectDate: (date: Date) => void;
+}) => {
+  const months = useMemo(() => getMonthPickerMonths(selectedDate), [selectedDate]);
+  const selectedMonthKey = `${selectedDate.getFullYear()}-${selectedDate.getMonth()}`;
+  const today = new Date();
+
+  return (
+    <Dialog onClose={onClose} open={open} size="lg" title="Choose a day">
+      <div className="space-y-5">
+        {months.map((month) => {
+          const monthKey = `${month.getFullYear()}-${month.getMonth()}`;
+          const days = buildMonthGrid(month);
+
+          return (
+            <section key={monthKey}>
+              <div className="mb-2 text-sm font-semibold text-slate-900">
+                {month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+              </div>
+              <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">
+                {Array.from({ length: 7 }, (_, index) => formatWeekdayNarrow(addDays(startOfWeekMonday(month), index))).map((label, index) => (
+                  <div key={`${monthKey}-${index}`}>{label}</div>
+                ))}
+              </div>
+              <div className="mt-2 grid grid-cols-7 gap-1">
+                {days.map((day) => {
+                  const isCurrentMonth = day.getMonth() === month.getMonth();
+                  const isToday = isSameLocalDay(day, today);
+                  const isSelected = isSameLocalDay(day, selectedDate);
+
+                  return (
+                    <button
+                      className={`schedule-beta-month-day ${isSelected ? "schedule-beta-month-day-selected" : ""} ${isToday ? "schedule-beta-month-day-today" : ""} ${isCurrentMonth ? "" : "schedule-beta-month-day-muted"}`}
+                      key={`${monthKey}-${toDateOnlyValue(day)}`}
+                      onClick={() => onSelectDate(day)}
+                      type="button"
+                    >
+                      {day.getDate()}
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedMonthKey === monthKey ? <div className="mt-2 text-xs text-slate-400">Selected week updates after you choose a day.</div> : null}
+            </section>
+          );
+        })}
+      </div>
+    </Dialog>
+  );
+};
+
+const ScheduleBetaMobileView = ({
+  activeCalendarIds,
+  calendarEvents,
+  calendarRef,
+  currentTab,
+  dayEvents,
+  defaultCalendarId,
+  onChangeTab,
+  onDateClick,
+  onOpenEvent,
+  onNewEvent,
+  onOpenAvailableTimes,
+  onOpenMonthPicker,
+  onSelectDay,
+  onSelectSlot,
+  onSwipeDay,
+  onToggleCalendars,
+  onForceSyncVisible,
+  renderCalendarEvent,
+  scheduleLoading,
+  selectedDate,
+  weekDays,
+}: {
+  activeCalendarIds: string[];
+  calendarEvents: EventInput[];
+  calendarRef: MutableRefObject<FullCalendar | null>;
+  currentTab: MobileBetaTab;
+  dayEvents: ScheduleEvent[];
+  defaultCalendarId: string;
+  onChangeTab: (tab: MobileBetaTab) => void;
+  onDateClick: (info: DateClickArg) => void;
+  onOpenEvent: (event: ScheduleEvent) => void;
+  onNewEvent: () => void;
+  onOpenAvailableTimes: () => void;
+  onOpenMonthPicker: () => void;
+  onSelectDay: (value: string) => void;
+  onSelectSlot: (date: Date) => void;
+  onSwipeDay: (direction: "prev" | "next") => void;
+  onToggleCalendars: () => void;
+  onForceSyncVisible: () => void;
+  renderCalendarEvent: (info: EventContentArg) => JSX.Element;
+  scheduleLoading: boolean;
+  selectedDate: Date;
+  weekDays: Date[];
+}) => {
+  const availableSlots = useMemo(() => getAvailableTimeSlots(dayEvents, selectedDate), [dayEvents, selectedDate]);
+  const selectedDateValue = toDateOnlyValue(selectedDate);
+  const weekLabel = formatWeekRange(weekDays[0]!, weekDays[6]!);
+  const today = new Date();
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    touchStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+  };
+
+  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const start = touchStartRef.current;
+    const touch = event.changedTouches[0];
+    touchStartRef.current = null;
+
+    if (!start || !touch) {
+      return;
+    }
+
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+
+    if (Math.abs(deltaX) < 60 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) {
+      return;
+    }
+
+    onSwipeDay(deltaX < 0 ? "next" : "prev");
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="schedule-beta-mobile-shell">
+        <div className="flex items-center justify-between gap-2">
+          <Button onClick={() => onSwipeDay("prev")} size="icon" type="button" variant="outline">
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <button className="schedule-beta-week-trigger" onClick={onOpenMonthPicker} type="button">
+            <span>{weekLabel}</span>
+            <ChevronDown className="h-4 w-4" />
+          </button>
+          <Button onClick={() => onSwipeDay("next")} size="icon" type="button" variant="outline">
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="schedule-beta-day-strip">
+          {weekDays.map((day) => {
+            const value = toDateOnlyValue(day);
+            const isSelected = value === selectedDateValue;
+            const isToday = isSameLocalDay(day, today);
+
+            return (
+              <button
+                className={`schedule-beta-day-pill ${isSelected ? "schedule-beta-day-pill-selected" : ""}`}
+                key={value}
+                onClick={() => onSelectDay(value)}
+                type="button"
+              >
+                <span className="text-xs font-medium">{formatWeekdayShort(day)}</span>
+                <span className="text-base font-semibold">{day.getDate()}</span>
+                <span className={`schedule-beta-day-pill-indicator ${isToday ? "schedule-beta-day-pill-indicator-active" : ""}`} />
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-2">
+          <button
+            className={`schedule-beta-tab ${currentTab === "list" ? "schedule-beta-tab-active" : ""}`}
+            onClick={() => onChangeTab("list")}
+            type="button"
+          >
+            <List className="h-4 w-4" />
+            List
+          </button>
+          <button
+            className={`schedule-beta-tab ${currentTab === "day" ? "schedule-beta-tab-active" : ""}`}
+            onClick={() => onChangeTab("day")}
+            type="button"
+          >
+            <CalendarDays className="h-4 w-4" />
+            Day Calendar
+          </button>
+          <Button
+            aria-label={scheduleLoading ? "Loading schedule" : "Force sync visible calendars"}
+            className="h-10 w-10"
+            disabled={scheduleLoading || !activeCalendarIds.length}
+            onClick={onForceSyncVisible}
+            size="icon"
+            type="button"
+            variant="outline"
+          >
+            <RefreshCcw className={`h-4 w-4 ${scheduleLoading ? "animate-spin" : ""}`} />
+          </Button>
+          <Button
+            aria-label="Choose visible calendars"
+            className="h-10 w-10"
+            onClick={onToggleCalendars}
+            size="icon"
+            type="button"
+            variant="outline"
+          >
+            <CalendarDays className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      <div onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart}>
+        {currentTab === "list" ? (
+          <div className="space-y-4">
+            <Card className="border-slate-200/80 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+              <CardContent className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-950">{formatSelectedDayHeading(selectedDate)}</div>
+                    <div className="text-sm text-slate-500">
+                      {isDateWithinDay(selectedDate, today) ? "Today’s events and openings" : "Scheduled events and openings"}
+                    </div>
+                  </div>
+                  <Button className="rounded-full px-4" onClick={onNewEvent} type="button">
+                    <Plus className="h-4 w-4" />
+                    New Event
+                  </Button>
+                </div>
+
+                <div className="space-y-2.5">
+                  {dayEvents.length ? dayEvents.map((event) => (
+                    <button
+                      className="schedule-beta-event-card"
+                      key={event.eventId}
+                      onClick={() => onOpenEvent(event)}
+                      type="button"
+                    >
+                      <span
+                        className="mt-1 h-3 w-3 shrink-0 rounded-full"
+                        style={{ backgroundColor: normalizeHexColor(event.calendarColor) }}
+                      />
+                      <div className="min-w-0 flex-1 text-left">
+                        <div className="truncate text-sm font-semibold text-slate-950">{event.summary}</div>
+                        <div className="text-sm text-slate-500">{formatEventTimeRange(event)}</div>
+                      </div>
+                    </button>
+                  )) : (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                      No events scheduled for this day.
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-3 border-t border-slate-200 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">Available Times</div>
+                      <div className="text-sm text-slate-500">Tap a slot to prefill a new event.</div>
+                    </div>
+                    <Button onClick={onOpenAvailableTimes} size="sm" type="button" variant="outline">
+                      View All
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {availableSlots.length ? availableSlots.slice(0, 8).map((slot) => (
+                      <button
+                        className="schedule-beta-slot-pill"
+                        key={slot.toISOString()}
+                        onClick={() => onSelectSlot(slot)}
+                        type="button"
+                      >
+                        {formatAvailableSlot(slot)}
+                      </button>
+                    )) : (
+                      <div className="text-sm text-slate-500">No open slots within the current working window.</div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : (
+          <Card className="overflow-hidden border-slate-200/80 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+            <CardContent className="space-y-3 p-2.5">
+              <div className="px-1 pt-1 text-sm text-slate-500">
+                Tap any empty time to create an event. Existing events remain editable.
+              </div>
+              <div className="schedule-calendar-shell schedule-beta-day-calendar">
+                <FullCalendar
+                  key={`beta-day-${selectedDateValue}`}
+                  ref={calendarRef}
+                  allDaySlot
+                  dateClick={onDateClick}
+                  editable={false}
+                  eventClick={(info) => onOpenEvent(info.event.extendedProps.scheduleEvent as ScheduleEvent)}
+                  eventContent={renderCalendarEvent}
+                  eventDurationEditable={false}
+                  eventMinHeight={40}
+                  eventResizableFromStart={false}
+                  eventShortHeight={40}
+                  eventStartEditable={false}
+                  events={calendarEvents}
+                  headerToolbar={false}
+                  height="auto"
+                  initialDate={selectedDateValue}
+                  initialView="timeGridDay"
+                  nowIndicator
+                  plugins={fullCalendarPlugins}
+                  scrollTime="06:00:00"
+                  select={(info) => onSelectSlot(getDayFromCalendarClick(info.start))}
+                  selectable
+                  slotDuration="00:15:00"
+                  slotMaxTime="24:00:00"
+                  slotMinTime="06:00:00"
+                  weekends
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {defaultCalendarId ? null : (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          No visible calendar is selected yet. Choose a calendar before creating new events.
+        </div>
+      )}
+    </div>
+  );
+};
+
 const toFullCalendarEventRange = (event: ScheduleEvent) => {
   if (!event.allDay) {
     return {
@@ -825,7 +1318,7 @@ const mergeOverviewWithSyncMetadata = (
   };
 };
 
-export const SchedulePage = () => {
+const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) => {
   const calendarRef = useRef<FullCalendar | null>(null);
   const requestSequenceRef = useRef(0);
   const mobileScrollFrameRef = useRef<number | null>(null);
@@ -833,6 +1326,7 @@ export const SchedulePage = () => {
   const deepLinkedEventRef = useRef<string | null>(null);
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
+  const useBetaMobileExperience = isMobile && variant === "beta";
   const [overview, setOverview] = useState<ScheduleOverviewResponse | null>(null);
   const [memberIndex, setMemberIndex] = useState<MemberIndexItem[]>([]);
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -856,6 +1350,18 @@ export const SchedulePage = () => {
   const [currentView, setCurrentView] = useState("dayGridMonth");
   const [viewTitle, setViewTitle] = useState("");
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
+  const [selectedDateValue, setSelectedDateValue] = useState(() => searchParams.get("date") ?? toDateOnlyValue(new Date()));
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [newEventDialogOpen, setNewEventDialogOpen] = useState(false);
+  const [availableTimesDialogOpen, setAvailableTimesDialogOpen] = useState(false);
+  const [mobileBetaTab, setMobileBetaTab] = useState<MobileBetaTab>(() => {
+    if (typeof window === "undefined") {
+      return "list";
+    }
+
+    const stored = window.localStorage.getItem(MOBILE_BETA_TAB_STORAGE_KEY);
+    return stored === "day" ? "day" : "list";
+  });
 
   const pushToast = useCallback((tone: ToastItem["tone"], message: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -902,6 +1408,12 @@ export const SchedulePage = () => {
     () => (overview?.calendars ?? []).filter((calendar) => calendar.selected),
     [overview?.calendars],
   );
+  const selectedDate = useMemo(() => parseDateOnlyValue(selectedDateValue), [selectedDateValue]);
+  const selectedWeek = useMemo(() => getWeekForDate(selectedDate), [selectedDate]);
+  const selectedDayEvents = useMemo(
+    () => sortEventsByStartTime(getEventsForDay(rawEvents, selectedDate)),
+    [rawEvents, selectedDate],
+  );
 
   const activeCalendarIds = useMemo(() => {
     const allowedIds = new Set(calendars.map((calendar) => calendar.calendarId));
@@ -927,6 +1439,27 @@ export const SchedulePage = () => {
     () => new Map(syncMetadata.map((item) => [item.calendarId, item])),
     [syncMetadata],
   );
+
+  useEffect(() => {
+    if (!useBetaMobileExperience || typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(MOBILE_BETA_TAB_STORAGE_KEY, mobileBetaTab);
+  }, [mobileBetaTab, useBetaMobileExperience]);
+
+  useEffect(() => {
+    if (!useBetaMobileExperience) {
+      return;
+    }
+
+    setVisibleRange({
+      timeMin: selectedWeek.start.toISOString(),
+      timeMax: selectedWeek.endExclusive.toISOString(),
+    });
+    setCurrentView(mobileBetaTab === "day" ? "timeGridDay" : "betaList");
+    setViewTitle(formatWeekRange(selectedWeek.start, selectedWeek.end));
+  }, [mobileBetaTab, selectedWeek, useBetaMobileExperience]);
 
   const toggleCalendarVisibility = useCallback((calendarId: string, checked: boolean) => {
     setVisibleCalendarIds((current) =>
@@ -1043,6 +1576,8 @@ export const SchedulePage = () => {
     setEditorMode("create");
     setEditingEvent(null);
     setForm(nextForm ?? emptyEventForm(defaultCalendarId));
+    setNewEventDialogOpen(false);
+    setAvailableTimesDialogOpen(false);
     setEditorOpen(true);
   }, [defaultCalendarId]);
 
@@ -1050,6 +1585,8 @@ export const SchedulePage = () => {
     setEditorMode("edit");
     setEditingEvent(event);
     setForm(eventToFormState(event));
+    setNewEventDialogOpen(false);
+    setAvailableTimesDialogOpen(false);
     setEditorOpen(true);
   }, []);
 
@@ -1069,7 +1606,19 @@ export const SchedulePage = () => {
     }
   }, [searchParams, setSearchParams]);
 
+  const openCreateEditorForDate = useCallback((date: Date, durationMinutes = 60) => {
+    const start = getDayFromCalendarClick(date);
+    const end = new Date(start);
+    end.setMinutes(end.getMinutes() + durationMinutes);
+    openCreateEditor(createFormFromSelection(start, end, false, defaultCalendarId));
+  }, [defaultCalendarId, openCreateEditor]);
+
   const handleDateClick = useCallback((info: DateClickArg) => {
+    if (useBetaMobileExperience) {
+      openCreateEditorForDate(info.date);
+      return;
+    }
+
     const end = new Date(info.date);
     if (info.allDay) {
       end.setDate(end.getDate() + 1);
@@ -1078,11 +1627,16 @@ export const SchedulePage = () => {
     }
 
     openCreateEditor(createFormFromSelection(info.date, end, info.allDay, defaultCalendarId));
-  }, [defaultCalendarId, openCreateEditor]);
+  }, [defaultCalendarId, openCreateEditor, openCreateEditorForDate, useBetaMobileExperience]);
 
   const handleSelect = useCallback((info: DateSelectArg) => {
+    if (useBetaMobileExperience) {
+      openCreateEditorForDate(info.start);
+      return;
+    }
+
     openCreateEditor(createFormFromSelection(info.start, info.end, info.allDay, defaultCalendarId));
-  }, [defaultCalendarId, openCreateEditor]);
+  }, [defaultCalendarId, openCreateEditor, openCreateEditorForDate, useBetaMobileExperience]);
 
   const handleEventClick = useCallback((info: EventClickArg) => {
     openEditEditor(info.event.extendedProps.scheduleEvent as ScheduleEvent);
@@ -1224,7 +1778,17 @@ export const SchedulePage = () => {
     const eventId = searchParams.get("eventId");
     const calendarApi = calendarRef.current?.getApi();
 
-    if (!eventDate || !eventId || !calendarApi || deepLinkedDateRef.current === `${eventId}:${eventDate}`) {
+    if (!eventDate || !eventId || deepLinkedDateRef.current === `${eventId}:${eventDate}`) {
+      return;
+    }
+
+    if (useBetaMobileExperience) {
+      setSelectedDateValue(eventDate);
+      deepLinkedDateRef.current = `${eventId}:${eventDate}`;
+      return;
+    }
+
+    if (!calendarApi) {
       return;
     }
 
@@ -1233,7 +1797,7 @@ export const SchedulePage = () => {
       calendarApi.changeView("timeGridDay", eventDate);
     }
     deepLinkedDateRef.current = `${eventId}:${eventDate}`;
-  }, [isMobile, searchParams]);
+  }, [isMobile, searchParams, useBetaMobileExperience]);
 
   useEffect(() => {
     const eventId = searchParams.get("eventId");
@@ -1447,6 +2011,7 @@ export const SchedulePage = () => {
   }
 
   const scheduleLoading = syncingVisible || fetchingEvents;
+  const pageTitle = variant === "beta" ? "Schedule Beta" : "Schedule";
 
   return (
     <div className="space-y-4">
@@ -1457,7 +2022,7 @@ export const SchedulePage = () => {
           className="p-3"
           description="View, search, create, edit, drag, and resize events for the calendars you’ve chosen to display."
           descriptionClassName="text-xs sm:text-sm"
-          title="Schedule"
+          title={pageTitle}
           titleClassName="text-xl"
         >
           <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto] lg:items-center">
@@ -1491,143 +2056,171 @@ export const SchedulePage = () => {
 
       {error ? <ErrorState description={error} title="Schedule action failed" /> : null}
 
-      <div>
-        <Card className="overflow-hidden">
-          <CardContent className="space-y-3 p-2.5 sm:p-3">
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-              <div className="-mx-1 flex flex-nowrap items-center gap-2 overflow-x-auto px-1 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 lg:pb-0">
-                <Button onClick={() => navigateCalendar("today")} size="sm" type="button" variant="outline">Today</Button>
-                <Button onClick={() => navigateCalendar("prev")} size="sm" type="button" variant="outline"><ChevronLeft className="h-4 w-4" /></Button>
-                <Button onClick={() => navigateCalendar("next")} size="sm" type="button" variant="outline"><ChevronRight className="h-4 w-4" /></Button>
-                <div className="ml-1 whitespace-nowrap text-sm font-medium text-slate-900">{viewTitle || "Schedule"}</div>
-              </div>
-              <div className="-mx-1 flex flex-nowrap gap-2 overflow-x-auto px-1 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 lg:pb-0">
-                {[
-                  ["dayGridMonth", "Month"],
-                  ["timeGridWeek", "Week"],
-                  ["timeGridDay", "Day"],
-                  ["listWeek", "List"],
-                ].map(([viewId, label]) => (
-                  <Button
-                    key={viewId}
-                    onClick={() => changeView(viewId)}
-                    size="sm"
-                    type="button"
-                    variant={currentView === viewId ? "default" : "outline"}
-                    >
-                      {label}
-                    </Button>
-                ))}
-                {isMobile ? (
-                  <>
-                    <Button
-                      aria-label={scheduleLoading ? "Loading schedule" : "Force sync visible calendars"}
-                      className="h-7 w-7 shrink-0"
-                      disabled={scheduleLoading || !activeCalendarIds.length}
-                      onClick={() => void handleForceSyncVisible()}
-                      size="icon"
-                      type="button"
-                    >
-                      <RefreshCcw className={`h-4 w-4 ${scheduleLoading ? "animate-spin" : ""}`} />
-                    </Button>
-                    <Button
-                      aria-label="Choose visible calendars"
-                      className="h-7 w-7 shrink-0"
-                      onClick={() => setFiltersOpen(true)}
-                      size="icon"
-                      type="button"
-                      variant="outline"
-                    >
+      {useBetaMobileExperience ? (
+        <ScheduleBetaMobileView
+          activeCalendarIds={activeCalendarIds}
+          calendarEvents={calendarEvents}
+          calendarRef={calendarRef}
+          currentTab={mobileBetaTab}
+          dayEvents={selectedDayEvents}
+          defaultCalendarId={defaultCalendarId}
+          onChangeTab={setMobileBetaTab}
+          onDateClick={handleDateClick}
+          onOpenEvent={openEditEditor}
+          onForceSyncVisible={() => void handleForceSyncVisible()}
+          onNewEvent={() => setNewEventDialogOpen(true)}
+          onOpenAvailableTimes={() => setAvailableTimesDialogOpen(true)}
+          onOpenMonthPicker={() => setMonthPickerOpen(true)}
+          onSelectDay={setSelectedDateValue}
+          onSelectSlot={openCreateEditorForDate}
+          onSwipeDay={(direction) => setSelectedDateValue((current) => shiftDateOnlyValue(current, direction === "next" ? 1 : -1))}
+          onToggleCalendars={() => setFiltersOpen(true)}
+          renderCalendarEvent={renderCalendarEvent}
+          scheduleLoading={scheduleLoading}
+          selectedDate={selectedDate}
+          weekDays={selectedWeek.days}
+        />
+      ) : (
+        <>
+          <div>
+            <Card className="overflow-hidden">
+              <CardContent className="space-y-3 p-2.5 sm:p-3">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="-mx-1 flex flex-nowrap items-center gap-2 overflow-x-auto px-1 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 lg:pb-0">
+                    <Button onClick={() => navigateCalendar("today")} size="sm" type="button" variant="outline">Today</Button>
+                    <Button onClick={() => navigateCalendar("prev")} size="sm" type="button" variant="outline"><ChevronLeft className="h-4 w-4" /></Button>
+                    <Button onClick={() => navigateCalendar("next")} size="sm" type="button" variant="outline"><ChevronRight className="h-4 w-4" /></Button>
+                    <div className="ml-1 whitespace-nowrap text-sm font-medium text-slate-900">{viewTitle || pageTitle}</div>
+                  </div>
+                  <div className="-mx-1 flex flex-nowrap gap-2 overflow-x-auto px-1 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 lg:pb-0">
+                    {[
+                      ["dayGridMonth", "Month"],
+                      ["timeGridWeek", "Week"],
+                      ["timeGridDay", "Day"],
+                      ["listWeek", "List"],
+                    ].map(([viewId, label]) => (
+                      <Button
+                        key={viewId}
+                        onClick={() => changeView(viewId)}
+                        size="sm"
+                        type="button"
+                        variant={currentView === viewId ? "default" : "outline"}
+                        >
+                          {label}
+                        </Button>
+                    ))}
+                    {isMobile ? (
+                      <>
+                        <Button
+                          aria-label={scheduleLoading ? "Loading schedule" : "Force sync visible calendars"}
+                          className="h-7 w-7 shrink-0"
+                          disabled={scheduleLoading || !activeCalendarIds.length}
+                          onClick={() => void handleForceSyncVisible()}
+                          size="icon"
+                          type="button"
+                        >
+                          <RefreshCcw className={`h-4 w-4 ${scheduleLoading ? "animate-spin" : ""}`} />
+                        </Button>
+                        <Button
+                          aria-label="Choose visible calendars"
+                          className="h-7 w-7 shrink-0"
+                          onClick={() => setFiltersOpen(true)}
+                          size="icon"
+                          type="button"
+                          variant="outline"
+                        >
+                          <CalendarDays className="h-4 w-4" />
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="schedule-calendar-shell">
+                  <FullCalendar
+                    key={isMobile ? "mobile-calendar" : "desktop-calendar"}
+                    ref={calendarRef}
+                    allDaySlot
+                    dayMaxEventRows={3}
+                    editable
+                    eventDurationEditable
+                    eventClick={handleEventClick}
+                    eventContent={renderCalendarEvent}
+                    eventDrop={handleEventDrop}
+                    eventMinHeight={isMobile ? 36 : 40}
+                    eventResizableFromStart
+                    eventShortHeight={isMobile ? 36 : 40}
+                    eventStartEditable
+                    eventResize={handleEventResize}
+                    events={calendarEvents}
+                    headerToolbar={false}
+                    height="auto"
+                    initialView={isMobile ? "timeGridDay" : "dayGridMonth"}
+                    nowIndicator
+                    plugins={fullCalendarPlugins}
+                    slotDuration="00:15:00"
+                    scrollTime="06:00:00"
+                    selectable
+                    select={handleSelect}
+                    snapDuration="00:15:00"
+                    slotMaxTime="24:00:00"
+                    slotMinTime="06:00:00"
+                    weekends
+                    dateClick={handleDateClick}
+                    viewDidMount={(info) => {
+                      setCurrentView(info.view.type);
+                      setViewTitle(info.view.title);
+                      scrollMobileDayViewToCurrentTime(info.view.type, info.view.currentStart);
+                    }}
+                    datesSet={(info) => {
+                      setCurrentView(info.view.type);
+                      setViewTitle(info.view.title);
+                      setVisibleRange({
+                        timeMin: info.view.activeStart.toISOString(),
+                        timeMax: info.view.activeEnd.toISOString(),
+                      });
+                      scrollMobileDayViewToCurrentTime(info.view.type, info.view.currentStart);
+                    }}
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2">
+                  <div className="flex items-center gap-2 text-sm text-slate-700">
+                    {scheduleLoading ? (
+                      <RefreshCcw className="h-4 w-4 animate-spin text-primary" />
+                    ) : (
                       <CalendarDays className="h-4 w-4" />
+                    )}
+                    <span>
+                      {syncingVisible
+                        ? "Syncing visible calendars with Google..."
+                        : fetchingEvents
+                          ? "Refreshing current view..."
+                          : "Events load only for the visible date range and visible calendars."}
+                    </span>
+                  </div>
+                  {!isMobile ? (
+                    <Button onClick={() => openCreateEditor(emptyEventForm(defaultCalendarId))} type="button" variant="outline">
+                      <Plus className="h-4 w-4" />
+                      New Event
                     </Button>
-                  </>
-                ) : null}
-              </div>
-            </div>
+                  ) : null}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
-            <div className="schedule-calendar-shell">
-              <FullCalendar
-                key={isMobile ? "mobile-calendar" : "desktop-calendar"}
-                ref={calendarRef}
-                allDaySlot
-                dayMaxEventRows={3}
-                editable
-                eventDurationEditable
-                eventClick={handleEventClick}
-                eventContent={renderCalendarEvent}
-                eventDrop={handleEventDrop}
-                eventMinHeight={isMobile ? 36 : 40}
-                eventResizableFromStart
-                eventShortHeight={isMobile ? 36 : 40}
-                eventStartEditable
-                eventResize={handleEventResize}
-                events={calendarEvents}
-                headerToolbar={false}
-                height="auto"
-                initialView={isMobile ? "timeGridDay" : "dayGridMonth"}
-                nowIndicator
-                plugins={fullCalendarPlugins}
-                slotDuration="00:15:00"
-                scrollTime="06:00:00"
-                selectable
-                select={handleSelect}
-                snapDuration="00:15:00"
-                slotMaxTime="24:00:00"
-                slotMinTime="06:00:00"
-                weekends
-                dateClick={handleDateClick}
-                viewDidMount={(info) => {
-                  setCurrentView(info.view.type);
-                  setViewTitle(info.view.title);
-                  scrollMobileDayViewToCurrentTime(info.view.type, info.view.currentStart);
-                }}
-                datesSet={(info) => {
-                  setCurrentView(info.view.type);
-                  setViewTitle(info.view.title);
-                  setVisibleRange({
-                    timeMin: info.view.activeStart.toISOString(),
-                    timeMax: info.view.activeEnd.toISOString(),
-                  });
-                  scrollMobileDayViewToCurrentTime(info.view.type, info.view.currentStart);
-                }}
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2">
-              <div className="flex items-center gap-2 text-sm text-slate-700">
-                {scheduleLoading ? (
-                  <RefreshCcw className="h-4 w-4 animate-spin text-primary" />
-                ) : (
-                  <CalendarDays className="h-4 w-4" />
-                )}
-                <span>
-                  {syncingVisible
-                    ? "Syncing visible calendars with Google..."
-                    : fetchingEvents
-                      ? "Refreshing current view..."
-                      : "Events load only for the visible date range and visible calendars."}
-                </span>
-              </div>
-              {!isMobile ? (
-                <Button onClick={() => openCreateEditor(emptyEventForm(defaultCalendarId))} type="button" variant="outline">
-                  <Plus className="h-4 w-4" />
-                  New Event
-                </Button>
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {isMobile ? (
-        <button
-          className="fixed bottom-4 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-lg"
-          onClick={() => openCreateEditor(emptyEventForm(defaultCalendarId))}
-          type="button"
-        >
-          <Plus className="h-5 w-5" />
-        </button>
-      ) : null}
+          {isMobile ? (
+            <button
+              className="fixed bottom-4 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-lg"
+              onClick={() => openCreateEditor(emptyEventForm(defaultCalendarId))}
+              type="button"
+            >
+              <Plus className="h-5 w-5" />
+            </button>
+          ) : null}
+        </>
+      )}
 
       <EventEditor
         busy={savingEvent}
@@ -1643,6 +2236,78 @@ export const SchedulePage = () => {
         onSave={() => void handleSaveEvent()}
         open={editorOpen}
       />
+
+      {useBetaMobileExperience ? (
+        <>
+          <MobileMonthPicker
+            onClose={() => setMonthPickerOpen(false)}
+            onSelectDate={(date) => {
+              setSelectedDateValue(toDateOnlyValue(date));
+              setMonthPickerOpen(false);
+            }}
+            open={monthPickerOpen}
+            selectedDate={selectedDate}
+          />
+          <Dialog
+            description="Choose how you want to place the new event."
+            onClose={() => setNewEventDialogOpen(false)}
+            open={newEventDialogOpen}
+            title="Add Event"
+          >
+            <div className="space-y-2">
+              <button
+                className="schedule-beta-action-card"
+                onClick={() => {
+                  setNewEventDialogOpen(false);
+                  setAvailableTimesDialogOpen(true);
+                }}
+                type="button"
+              >
+                <Clock3 className="h-5 w-5 text-primary" />
+                <div className="text-left">
+                  <div className="font-semibold text-slate-950">Available Times</div>
+                  <div className="text-sm text-slate-500">Pick from open slots for the selected day.</div>
+                </div>
+              </button>
+              <button
+                className="schedule-beta-action-card"
+                onClick={() => {
+                  setNewEventDialogOpen(false);
+                  setMobileBetaTab("day");
+                }}
+                type="button"
+              >
+                <CalendarDays className="h-5 w-5 text-primary" />
+                <div className="text-left">
+                  <div className="font-semibold text-slate-950">Day Calendar</div>
+                  <div className="text-sm text-slate-500">Tap an empty time directly on the day timeline.</div>
+                </div>
+              </button>
+            </div>
+          </Dialog>
+          <Dialog
+            description={`Available openings for ${formatSelectedDayHeading(selectedDate)}.`}
+            onClose={() => setAvailableTimesDialogOpen(false)}
+            open={availableTimesDialogOpen}
+            title="Available Times"
+          >
+            <div className="flex flex-wrap gap-2">
+              {getAvailableTimeSlots(selectedDayEvents, selectedDate).length ? getAvailableTimeSlots(selectedDayEvents, selectedDate).map((slot) => (
+                <button
+                  className="schedule-beta-slot-pill"
+                  key={slot.toISOString()}
+                  onClick={() => openCreateEditorForDate(slot)}
+                  type="button"
+                >
+                  {formatAvailableSlot(slot)}
+                </button>
+              )) : (
+                <div className="text-sm text-slate-500">No open slots are available for this day.</div>
+              )}
+            </div>
+          </Dialog>
+        </>
+      ) : null}
 
       {isMobile ? (
         <Dialog
@@ -1687,3 +2352,7 @@ export const SchedulePage = () => {
     </div>
   );
 };
+
+export const SchedulePage = () => <ScheduleExperiencePage variant="default" />;
+
+export const ScheduleBetaPage = () => <ScheduleExperiencePage variant="beta" />;

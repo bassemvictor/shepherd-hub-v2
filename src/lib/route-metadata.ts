@@ -4,6 +4,7 @@ const routeTitleMap: Record<string, string> = {
   "/": "Congregation",
   "/calendar": "Connect & Configure",
   "/calendar/schedule": "Schedule",
+  "/calendar/schedule-beta": "Schedule Beta",
   "/members": "Congregation",
   "/reports/visitations": "Reports Dashboard",
   "/reports/dashboard": "Reports Dashboard",
@@ -14,6 +15,7 @@ const routeTitleMap: Record<string, string> = {
 const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
   "/calendar": [{ label: "Configurations" }, { label: "Connect & Configure" }],
   "/calendar/schedule": [{ label: "Calendar" }, { label: "Schedule" }],
+  "/calendar/schedule-beta": [{ label: "Calendar" }, { label: "Schedule Beta" }],
   "/members": [{ label: "Congregation" }],
   "/reports/dashboard": [{ label: "Reports" }, { label: "Reports Dashboard" }],
   "/reports/member-visitation": [{ label: "Reports" }, { label: "Member Visitation" }],

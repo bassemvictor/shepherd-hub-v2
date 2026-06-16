@@ -7,7 +7,7 @@ import { CalendarSettingsPage } from "../pages/calendar-settings-page";
 import { MemberDetailPage } from "../pages/member-detail-page";
 import { MembersPage } from "../pages/members-page";
 import { NotFoundPage } from "../pages/not-found-page";
-import { SchedulePage } from "../pages/schedule-page";
+import { ScheduleBetaPage, SchedulePage } from "../pages/schedule-page";
 import { VisitationReportsPage } from "../pages/visitation-reports-page";
 
 export const router = createBrowserRouter([
@@ -34,6 +34,10 @@ export const router = createBrowserRouter([
       {
         path: "calendar/schedule",
         element: <SchedulePage />,
+      },
+      {
+        path: "calendar/schedule-beta",
+        element: <ScheduleBetaPage />,
       },
       {
         path: "members",
