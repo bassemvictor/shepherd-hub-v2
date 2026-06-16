@@ -31,7 +31,15 @@ export const MembersPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const { items: members, isPending, isFetching, error: membersError, refresh } = useMembersIndex();
+  const {
+    cacheScope,
+    items: members,
+    isPending,
+    isFetching,
+    error: membersError,
+    refresh,
+    status: authStatus,
+  } = useMembersIndex();
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
@@ -68,7 +76,7 @@ export const MembersPage = () => {
     try {
       await api.post("/members", value);
       setCreateOpen(false);
-      await refreshMembersIndexCache(queryClient, user?.tenantId);
+      await refreshMembersIndexCache(queryClient, cacheScope);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to create member.");
     } finally {
@@ -87,19 +95,19 @@ export const MembersPage = () => {
         workbookBase64,
       });
       setImportResult(result);
-      await refreshMembersIndexCache(queryClient, user?.tenantId);
+      await refreshMembersIndexCache(queryClient, cacheScope);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to import members.");
     } finally {
       setImporting(false);
     }
-  }, [queryClient, user?.tenantId]);
+  }, [cacheScope, queryClient, user?.tenantId]);
 
   if (!isApiConfigured) {
     return <ErrorState description="Set `VITE_API_BASE_URL` or regenerate `amplify_outputs.json` before using member APIs." title="API not configured" />;
   }
 
-  if (isPending && !members.length) {
+  if (authStatus === "loading" || (isPending && !members.length)) {
     return <LoadingState description="Loading congregation directory." title="Preparing members" />;
   }
 

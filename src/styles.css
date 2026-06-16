@@ -463,7 +463,7 @@ a {
 
 .schedule-beta-mobile-shell {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.4rem;
 }
 
 .schedule-beta-week-trigger {
@@ -491,19 +491,53 @@ a {
 .schedule-beta-day-pill {
   display: grid;
   justify-items: center;
-  gap: 0.15rem;
-  padding: 0.7rem 0.35rem 0.55rem;
-  border: 1px solid rgba(219, 228, 240, 0.95);
+  gap: 0.22rem;
+  padding: 0.35rem 0.2rem 0.45rem;
+  border: 0;
   border-radius: 1.1rem;
-  background: rgba(255, 255, 255, 0.86);
+  background: transparent;
   color: #334155;
 }
 
 .schedule-beta-day-pill-selected {
+  color: #2563eb;
+}
+
+.schedule-beta-day-pill-label {
+  color: #94a3b8;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+.schedule-beta-day-pill-selected .schedule-beta-day-pill-label {
+  color: #2563eb;
+}
+
+.schedule-beta-day-pill-circle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  border: 1px solid rgba(219, 228, 240, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #0f172a;
+}
+
+.schedule-beta-day-pill-selected .schedule-beta-day-pill-circle {
   border-color: #2563eb;
-  background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+  background: #2563eb;
   color: #eff6ff;
-  box-shadow: 0 16px 30px rgba(37, 99, 235, 0.24);
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
+}
+
+.schedule-beta-day-pill-date {
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .schedule-beta-day-pill-indicator {
@@ -514,7 +548,7 @@ a {
 }
 
 .schedule-beta-day-pill-indicator-active {
-  background: currentColor;
+  background: #2563eb;
 }
 
 .schedule-beta-tab {
@@ -554,14 +588,16 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.35rem;
-  padding: 0 0.9rem;
+  min-height: 1.9rem;
+  padding: 0 0.7rem;
   border: 1px solid rgba(191, 219, 254, 0.95);
   border-radius: 999px;
   background: #eff6ff;
   color: #1d4ed8;
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .schedule-beta-action-card {

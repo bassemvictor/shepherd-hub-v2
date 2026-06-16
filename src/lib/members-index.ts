@@ -14,13 +14,13 @@ import { api } from "./api";
 
 const MEMBERS_INDEX_STALE_TIME = 20 * 60 * 1000;
 
-export const membersIndexQueryKey = (tenantId: string) => ["members-index", tenantId] as const;
+export const membersIndexQueryKey = (cacheScope: string) => ["members-index", cacheScope] as const;
 
-export const membersIndexQueryOptions = (tenantId: string) => ({
-  enabled: Boolean(tenantId),
+export const membersIndexQueryOptions = (cacheScope: string, enabled: boolean) => ({
+  enabled,
   gcTime: 24 * 60 * 60 * 1000,
   queryFn: () => api.get<MemberIndexResponse>("/members/index"),
-  queryKey: membersIndexQueryKey(tenantId),
+  queryKey: membersIndexQueryKey(cacheScope),
   refetchOnMount: "always" as const,
   refetchOnReconnect: "always" as const,
   staleTime: MEMBERS_INDEX_STALE_TIME,
@@ -43,26 +43,26 @@ export const toCachedMemberIndexItem = (member: Pick<
   updatedAt: member.updatedAt,
 });
 
-export const refreshMembersIndexCache = async (queryClient: QueryClient, tenantId: string | null | undefined) => {
-  if (!tenantId) {
+export const refreshMembersIndexCache = async (queryClient: QueryClient, cacheScope: string | null | undefined) => {
+  if (!cacheScope) {
     return;
   }
 
-  await queryClient.invalidateQueries({ queryKey: membersIndexQueryKey(tenantId) });
-  await queryClient.fetchQuery(membersIndexQueryOptions(tenantId));
+  await queryClient.invalidateQueries({ queryKey: membersIndexQueryKey(cacheScope) });
+  await queryClient.fetchQuery(membersIndexQueryOptions(cacheScope, true));
 };
 
 export const removeMemberFromMembersIndexCache = (
   queryClient: QueryClient,
-  tenantId: string | null | undefined,
+  cacheScope: string | null | undefined,
   memberId: string,
 ) => {
-  if (!tenantId) {
+  if (!cacheScope) {
     return;
   }
 
   queryClient.setQueryData<MemberIndexResponse | undefined>(
-    membersIndexQueryKey(tenantId),
+    membersIndexQueryKey(cacheScope),
     (current) =>
       current
         ? {
@@ -74,15 +74,18 @@ export const removeMemberFromMembersIndexCache = (
 };
 
 export const useMembersIndex = () => {
-  const { user } = useAuth();
-  const tenantId = user?.tenantId ?? "";
+  const { user, status } = useAuth();
+  const tenantId = user?.tenantId ?? null;
+  const cacheScope = tenantId ?? (user?.id ? `user:${user.id}` : "anonymous");
   const queryClient = useQueryClient();
-  const query = useQuery(membersIndexQueryOptions(tenantId));
+  const query = useQuery(membersIndexQueryOptions(cacheScope, status === "authenticated"));
 
   return {
     ...query,
+    cacheScope,
     items: query.data?.items ?? [],
-    refresh: async () => refreshMembersIndexCache(queryClient, tenantId),
+    refresh: async () => refreshMembersIndexCache(queryClient, cacheScope),
+    status,
     tenantId,
   };
 };

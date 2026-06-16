@@ -207,7 +207,7 @@ const formatSelectedDayHeading = (date: Date) =>
   }).format(date);
 
 const formatWeekdayShort = (date: Date) =>
-  new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date);
+  new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date).replace(".", "").toUpperCase();
 
 const formatWeekdayNarrow = (date: Date) =>
   new Intl.DateTimeFormat(undefined, { weekday: "narrow" }).format(date);
@@ -225,22 +225,28 @@ const formatEventTimeRange = (event: ScheduleEvent) => {
   return `${formatter.format(new Date(event.start))} - ${formatter.format(new Date(event.end))}`;
 };
 
+const getEventDateRange = (event: ScheduleEvent) => ({
+  start: event.allDay
+    ? parseDateOnlyValue(normalizeAllDayStartValue(event.start))
+    : new Date(event.start),
+  end: event.allDay
+    ? parseDateOnlyValue(normalizeAllDayEndValue(event.end))
+    : new Date(event.end),
+});
+
 const getEventsForDay = (events: ScheduleEvent[], date: Date) => {
   const dayStart = startOfLocalDay(date);
   const dayEnd = addDays(dayStart, 1);
 
   return events.filter((event) => {
-    const eventStart = new Date(event.start);
-    const eventEnd = event.allDay
-      ? parseDateOnlyValue(normalizeAllDayEndValue(event.end))
-      : new Date(event.end);
+    const { start: eventStart, end: eventEnd } = getEventDateRange(event);
 
     return eventStart < dayEnd && eventEnd > dayStart;
   });
 };
 
 const sortEventsByStartTime = (events: ScheduleEvent[]) =>
-  [...events].sort((left, right) => new Date(left.start).getTime() - new Date(right.start).getTime());
+  [...events].sort((left, right) => getEventDateRange(left).start.getTime() - getEventDateRange(right).start.getTime());
 
 const getAvailableTimeSlots = (
   events: ScheduleEvent[],
@@ -273,10 +279,7 @@ const getAvailableTimeSlots = (
     }
 
     const blocked = events.some((event) => {
-      const eventStart = new Date(event.start);
-      const eventEnd = event.allDay
-        ? parseDateOnlyValue(normalizeAllDayEndValue(event.end))
-        : new Date(event.end);
+      const { start: eventStart, end: eventEnd } = getEventDateRange(event);
 
       return slotStart < eventEnd && slotEnd > eventStart;
     });
@@ -293,6 +296,7 @@ const formatAvailableSlot = (date: Date) =>
   new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
+    hour12: true,
   }).format(date);
 
 const getDayFromCalendarClick = (date: Date) => snapDateToQuarterHour(date);
@@ -1097,8 +1101,10 @@ const ScheduleBetaMobileView = ({
                 onClick={() => onSelectDay(value)}
                 type="button"
               >
-                <span className="text-xs font-medium">{formatWeekdayShort(day)}</span>
-                <span className="text-base font-semibold">{day.getDate()}</span>
+                <span className="schedule-beta-day-pill-label">{formatWeekdayShort(day)}</span>
+                <span className="schedule-beta-day-pill-circle">
+                  <span className="schedule-beta-day-pill-date">{day.getDate()}</span>
+                </span>
                 <span className={`schedule-beta-day-pill-indicator ${isToday ? "schedule-beta-day-pill-indicator-active" : ""}`} />
               </button>
             );
@@ -1120,7 +1126,7 @@ const ScheduleBetaMobileView = ({
             type="button"
           >
             <CalendarDays className="h-4 w-4" />
-            Day Calendar
+            Calendar
           </button>
           <Button
             aria-label={scheduleLoading ? "Loading schedule" : "Force sync visible calendars"}
@@ -1158,9 +1164,9 @@ const ScheduleBetaMobileView = ({
                       {isDateWithinDay(selectedDate, today) ? "Today’s events and openings" : "Scheduled events and openings"}
                     </div>
                   </div>
-                  <Button className="rounded-full px-4" onClick={onNewEvent} type="button">
+                  <Button className="h-9 rounded-full px-3 text-sm" onClick={onNewEvent} type="button">
                     <Plus className="h-4 w-4" />
-                    New Event
+                    Event
                   </Button>
                 </div>
 
@@ -1199,7 +1205,7 @@ const ScheduleBetaMobileView = ({
                     </Button>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1.5">
                     {availableSlots.length ? availableSlots.slice(0, 8).map((slot) => (
                       <button
                         className="schedule-beta-slot-pill"
@@ -2267,7 +2273,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
               >
                 <CalendarDays className="h-5 w-5 text-primary" />
                 <div className="text-left">
-                  <div className="font-semibold text-slate-950">Day Calendar</div>
+                  <div className="font-semibold text-slate-950">Calendar</div>
                   <div className="text-sm text-slate-500">Tap an empty time directly on the day timeline.</div>
                 </div>
               </button>
@@ -2279,7 +2285,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
             open={availableTimesDialogOpen}
             title="Available Times"
           >
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-1.5">
               {getAvailableTimeSlots(selectedDayEvents, selectedDate).length ? getAvailableTimeSlots(selectedDayEvents, selectedDate).map((slot) => (
                 <button
                   className="schedule-beta-slot-pill"
