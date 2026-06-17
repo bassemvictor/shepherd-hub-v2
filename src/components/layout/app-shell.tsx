@@ -1,8 +1,9 @@
-import { Bell, ChevronRight, LogOut, Menu, Search, Shield } from "lucide-react";
+import { Bell, ChevronRight, LogOut, Menu, Moon, Search, Shield, SunMedium } from "lucide-react";
 import { useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { formatGroupLabel, useAuth } from "../../lib/auth";
+import { useTheme } from "../../lib/theme";
 import { APP_DISPLAY_NAME, APP_SHORT_DISPLAY_NAME } from "../../lib/app-metadata";
 import { getBreadcrumbs, getPageTitle } from "../../lib/route-metadata";
 import { cn } from "../../lib/utils";
@@ -12,6 +13,7 @@ import { Button } from "../ui/button";
 export const AppShell = () => {
   const { pathname } = useLocation();
   const { user, signOutUser } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const breadcrumbs = useMemo(() => getBreadcrumbs(pathname), [pathname]);
   const title = useMemo(() => getPageTitle(pathname), [pathname]);
@@ -64,6 +66,15 @@ export const AppShell = () => {
               <p className="mt-1 text-xs text-blue-100/70">
                 Coordinate tenant {user?.tenantId ?? "unassigned"} events and member visitations.  
               </p>
+              <Button
+                className="mt-3 w-full justify-center border-white/15 bg-white/8 text-sidebar-foreground hover:bg-white/14 sm:hidden"
+                onClick={toggleTheme}
+                type="button"
+                variant="outline"
+              >
+                {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                {theme === "dark" ? "Light mode" : "Dark mode"}
+              </Button>
             </div>
           </div>
         </aside>
@@ -78,11 +89,11 @@ export const AppShell = () => {
         ) : null}
 
         <div className="flex min-w-0 flex-1 flex-col lg:pl-72">
-          <header className="sticky top-0 z-20 border-b border-border/90 bg-white/90 backdrop-blur">
+          <header className="sticky top-0 z-20 border-b border-border/90 bg-background/85 backdrop-blur">
             <div className="flex items-center justify-between gap-3 px-3 py-3 sm:px-4 lg:px-6">
               <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
                 <button
-                  className="rounded-md border border-border bg-white p-2 text-slate-600 lg:hidden"
+                  className="rounded-md border border-border bg-card p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
                   onClick={() => setSidebarOpen(true)}
                   type="button"
                 >
@@ -97,17 +108,27 @@ export const AppShell = () => {
                       </div>
                     ))}
                   </div>
-                  <h2 className="text-xl font-semibold leading-tight text-slate-900">{title}</h2>
+                  <h2 className="text-xl font-semibold leading-tight text-foreground">{title}</h2>
                 </div>
               </div>
 
               <div className="flex shrink-0 items-center gap-2 sm:gap-3 lg:justify-end">
-                <div className="hidden items-center gap-2 rounded-md border border-border bg-slate-50 px-2.5 py-1.5 text-xs text-muted-foreground md:flex">
+                <div className="hidden items-center gap-2 rounded-md border border-border bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground md:flex">
                   <Search className="h-3.5 w-3.5" />
                   Search records, pages, or actions
                 </div>
+                <Button
+                  aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                  className="hidden sm:flex"
+                  onClick={toggleTheme}
+                  size="icon"
+                  type="button"
+                  variant="outline"
+                >
+                  {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                </Button>
                 <button
-                  className="hidden h-9 w-9 items-center justify-center rounded-md border border-border bg-white text-slate-600 sm:flex"
+                  className="hidden h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
                   type="button"
                 >
                   <Bell className="h-4 w-4" />
@@ -117,7 +138,7 @@ export const AppShell = () => {
                     {initials}
                   </div>
                   <div className="hidden min-w-0 text-left lg:block xl:block">
-                    <p className="truncate text-sm font-medium text-slate-900">{user?.name || user?.email || "Project User"}</p>
+                    <p className="truncate text-sm font-medium text-foreground">{user?.name || user?.email || "Project User"}</p>
                     <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                       <Shield className="h-3 w-3" />
                       <span className="truncate">{primaryGroup}</span>
@@ -127,7 +148,7 @@ export const AppShell = () => {
                     </div>
                   </div>
                   <Button
-                    className="rounded-md p-0 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                    className="rounded-md p-0"
                     onClick={() => void signOutUser()}
                     size="icon"
                     type="button"

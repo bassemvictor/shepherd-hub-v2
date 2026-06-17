@@ -616,19 +616,19 @@ const EventEditor = ({
   const editorTitle = mode === "create" ? "New Event" : "Edit Event";
   const editorDescription = mode === "create" ? "Create a new calendar event." : "Update the calendar event details.";
   const primaryActionLabel = mode === "create" ? "Create Event" : "Save Changes";
-  const sectionCardClassName = "space-y-3 rounded-[1.2rem] border border-slate-200/80 bg-white/96 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur sm:p-3.5";
-  const fieldClassName = "h-10 rounded-xl border-slate-200 bg-white px-3 text-sm shadow-sm shadow-slate-200/35 transition focus:border-primary focus:ring-primary/10";
+  const sectionCardClassName = "space-y-3 rounded-[1.2rem] border border-border/80 bg-card/96 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur dark:shadow-[0_14px_32px_rgba(0,0,0,0.24)] sm:p-3.5";
+  const fieldClassName = "h-10 rounded-xl border-border bg-card px-3 text-sm shadow-sm shadow-slate-200/35 transition focus:border-primary focus:ring-primary/10 dark:shadow-black/20";
   const allDayLabel = form.allDay ? "All-day event" : "Specific start and end time";
 
   const content = (
     <div className="space-y-3">
       <section className={sectionCardClassName}>
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-slate-950">
+          <div className="flex items-center gap-2 text-foreground">
             <Users className="h-4 w-4 text-primary" />
             <h4 className="text-lg font-semibold tracking-tight">Members</h4>
           </div>
-          <p className="text-sm text-slate-500">Add one or more members to this event.</p>
+          <p className="text-sm text-muted-foreground">Add one or more members to this event.</p>
         </div>
         <MemberSearchAutocomplete
           items={memberIndex}
@@ -647,7 +647,7 @@ const EventEditor = ({
           selectedIds={form.memberIds}
         />
         <div className="space-y-1.5">
-          <div className="text-sm font-semibold text-slate-500">Selected ({selectedMembers.length})</div>
+          <div className="text-sm font-semibold text-muted-foreground">Selected ({selectedMembers.length})</div>
           {selectedMembers.length ? (
             <div className="flex flex-wrap gap-1.5">
               {selectedMembers.map((member) => (
@@ -671,7 +671,7 @@ const EventEditor = ({
               ))}
             </div>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-500">
+            <div className="rounded-xl border border-dashed border-border bg-muted/35 px-3 py-2.5 text-sm text-muted-foreground">
               No members selected yet.
             </div>
           )}
@@ -680,7 +680,7 @@ const EventEditor = ({
 
       <section className={sectionCardClassName}>
         <label className="space-y-1.5">
-          <span className="text-lg font-semibold tracking-tight text-slate-950">Calendar</span>
+          <span className="text-lg font-semibold tracking-tight text-foreground">Calendar</span>
           <div className="relative">
             <CalendarDays className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-primary" />
             <Select
@@ -701,9 +701,9 @@ const EventEditor = ({
 
       <section className={sectionCardClassName}>
         <label className="space-y-1.5">
-          <span className="text-lg font-semibold tracking-tight text-slate-950">Event Title</span>
+          <span className="text-lg font-semibold tracking-tight text-foreground">Event Title</span>
           <div className="relative">
-            <FileText className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <FileText className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               className={`${fieldClassName} pl-10`}
               onChange={(event) => onChange({ ...form, summary: event.target.value })}
@@ -716,16 +716,16 @@ const EventEditor = ({
 
       <section className={sectionCardClassName}>
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-slate-950">
+          <div className="flex items-center gap-2 text-foreground">
             <Clock3 className="h-4 w-4 text-primary" />
             <h4 className="text-lg font-semibold tracking-tight">Start &amp; End</h4>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2.5">
-          <label className="space-y-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm shadow-slate-200/35">
-            <span className="text-sm font-medium text-slate-500">Start</span>
+          <label className="space-y-1.5 rounded-xl border border-border bg-card px-3 py-2.5 shadow-sm shadow-slate-200/35 dark:shadow-black/20">
+            <span className="text-sm font-medium text-muted-foreground">Start</span>
             <div className="relative">
-              <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
                 onChange={(event) => onChange({
@@ -738,10 +738,10 @@ const EventEditor = ({
               />
             </div>
           </label>
-          <label className="space-y-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm shadow-slate-200/35">
-            <span className="text-sm font-medium text-slate-500">End</span>
+          <label className="space-y-1.5 rounded-xl border border-border bg-card px-3 py-2.5 shadow-sm shadow-slate-200/35 dark:shadow-black/20">
+            <span className="text-sm font-medium text-muted-foreground">End</span>
             <div className="relative">
-              <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
                 onChange={(event) => onChange({
@@ -755,7 +755,7 @@ const EventEditor = ({
             </div>
           </label>
         </div>
-        <label className="flex items-center gap-2.5 text-sm font-medium text-slate-900">
+        <label className="flex items-center gap-2.5 text-sm font-medium text-foreground">
           <Checkbox
             checked={form.allDay}
             className="h-5 w-5 rounded-[0.45rem] border-slate-300"
@@ -780,29 +780,29 @@ const EventEditor = ({
         </label>
       </section>
 
-      <section className="rounded-[1.2rem] border border-slate-200/80 bg-white/96 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur">
+      <section className="rounded-[1.2rem] border border-border/80 bg-card/96 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur dark:shadow-[0_14px_32px_rgba(0,0,0,0.24)]">
         <button
           className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left sm:px-3.5"
           onClick={() => setDetailsOpen((current) => !current)}
           type="button"
         >
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted/55 text-muted-foreground">
               <AlignLeft className="h-4.5 w-4.5" />
             </div>
             <div className="min-w-0">
-              <div className="text-lg font-semibold tracking-tight text-slate-950">Additional Details</div>
-              <div className="text-[13px] text-slate-500">Add location, notes or more information.</div>
+              <div className="text-lg font-semibold tracking-tight text-foreground">Additional Details</div>
+              <div className="text-[13px] text-muted-foreground">Add location, notes or more information.</div>
             </div>
           </div>
-          <ChevronDown className={`h-5 w-5 shrink-0 text-slate-500 transition-transform ${detailsOpen ? "rotate-180" : ""}`} />
+          <ChevronDown className={`h-5 w-5 shrink-0 text-muted-foreground transition-transform ${detailsOpen ? "rotate-180" : ""}`} />
         </button>
         {detailsOpen ? (
-          <div className="space-y-2.5 border-t border-slate-200/80 px-3 pb-3 pt-3 sm:px-3.5 sm:pb-3.5">
+          <div className="space-y-2.5 border-t border-border/80 px-3 pb-3 pt-3 sm:px-3.5 sm:pb-3.5">
             <label className="space-y-1.5">
-              <span className="text-sm font-medium text-slate-900">Location</span>
+              <span className="text-sm font-medium text-foreground">Location</span>
               <div className="relative">
-                <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   className={`${fieldClassName} pl-10`}
                   onChange={(event) => onChange({ ...form, location: event.target.value })}
@@ -811,9 +811,9 @@ const EventEditor = ({
               </div>
             </label>
             <label className="space-y-1.5">
-              <span className="text-sm font-medium text-slate-900">Attendees</span>
+              <span className="text-sm font-medium text-foreground">Attendees</span>
               <div className="relative">
-                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   className={`${fieldClassName} pl-10`}
                   onChange={(event) => onChange({ ...form, attendeesText: event.target.value })}
@@ -823,9 +823,9 @@ const EventEditor = ({
               </div>
             </label>
             <label className="space-y-1.5">
-              <span className="text-sm font-medium text-slate-900">Description</span>
+              <span className="text-sm font-medium text-foreground">Description</span>
               <Textarea
-                className="min-h-20 rounded-xl border-slate-200 bg-white px-3 py-2.5 text-sm shadow-sm shadow-slate-200/35 focus:border-primary focus:ring-primary/10"
+                className="min-h-20 rounded-xl border-border bg-card px-3 py-2.5 text-sm shadow-sm shadow-slate-200/35 focus:border-primary focus:ring-primary/10 dark:shadow-black/20"
                 onChange={(event) => onChange({ ...form, description: event.target.value })}
                 value={form.description}
               />
@@ -868,10 +868,10 @@ const EventEditor = ({
 
   return (
     <RightSideDrawer
-      contentClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3 sm:py-3"
+      contentClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)] px-2 py-2.5 sm:px-3 sm:py-3"
       footer={footer}
-      footerClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3"
-      headerClassName="border-b border-slate-200/80 bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3"
+      footerClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)] px-2 py-2.5 sm:px-3"
+      headerClassName="border-b border-slate-200/80 bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:border-border/80 dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)] px-2 py-2.5 sm:px-3"
       headerLeading={(
         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1rem] bg-[linear-gradient(180deg,#eef4ff_0%,#f6f9ff_100%)] text-primary shadow-inner">
           <CalendarDays className="h-6 w-6" />
@@ -879,11 +879,11 @@ const EventEditor = ({
       )}
       onClose={onClose}
       open={open}
-      panelClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)]"
+      panelClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)]"
       description={editorDescription}
-      descriptionClassName="text-xs text-slate-500 sm:text-sm"
+      descriptionClassName="text-xs text-muted-foreground sm:text-sm"
       title={editorTitle}
-      titleClassName="text-2xl font-semibold tracking-tight text-slate-950"
+      titleClassName="text-2xl font-semibold tracking-tight text-foreground"
       width="lg"
     >
       {content}
@@ -919,7 +919,7 @@ const CalendarVisibilityList = ({
               style={{ backgroundColor: calendar.backgroundColor ?? "#2563eb" }}
             />
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-slate-900">{calendar.summary}</p>
+              <p className="truncate text-sm font-medium text-foreground">{calendar.summary}</p>
               <p className="text-xs text-muted-foreground">
                 Last sync {formatDateTime(sync?.lastSyncedAt ?? calendar.sync.lastSyncedAt)}
               </p>
@@ -962,10 +962,10 @@ const MobileMonthPicker = ({
 
           return (
             <section key={monthKey}>
-              <div className="mb-2 text-sm font-semibold text-slate-900">
+              <div className="mb-2 text-sm font-semibold text-foreground">
                 {month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}
               </div>
-              <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">
+              <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                 {Array.from({ length: 7 }, (_, index) => formatWeekdayNarrow(addDays(startOfWeekMonday(month), index))).map((label, index) => (
                   <div key={`${monthKey}-${index}`}>{label}</div>
                 ))}
@@ -988,7 +988,7 @@ const MobileMonthPicker = ({
                   );
                 })}
               </div>
-              {selectedMonthKey === monthKey ? <div className="mt-2 text-xs text-slate-400">Selected week updates after you choose a day.</div> : null}
+              {selectedMonthKey === monthKey ? <div className="mt-2 text-xs text-muted-foreground">Selected week updates after you choose a day.</div> : null}
             </section>
           );
         })}
@@ -1155,12 +1155,12 @@ const ScheduleBetaMobileView = ({
       <div onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart}>
         {currentTab === "list" ? (
           <div className="space-y-4">
-            <Card className="border-slate-200/80 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+            <Card className="border-border/80 shadow-[0_18px_45px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
               <CardContent className="space-y-4 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-lg font-semibold text-slate-950">{formatSelectedDayHeading(selectedDate)}</div>
-                    <div className="text-sm text-slate-500">
+                    <div className="text-lg font-semibold text-foreground">{formatSelectedDayHeading(selectedDate)}</div>
+                    <div className="text-sm text-muted-foreground">
                       {isDateWithinDay(selectedDate, today) ? "Today’s events and openings" : "Scheduled events and openings"}
                     </div>
                   </div>
@@ -1183,22 +1183,22 @@ const ScheduleBetaMobileView = ({
                         style={{ backgroundColor: normalizeHexColor(event.calendarColor) }}
                       />
                       <div className="min-w-0 flex-1 text-left">
-                        <div className="truncate text-sm font-semibold text-slate-950">{event.summary}</div>
-                        <div className="text-sm text-slate-500">{formatEventTimeRange(event)}</div>
+                        <div className="truncate text-sm font-semibold text-foreground">{event.summary}</div>
+                        <div className="text-sm text-muted-foreground">{formatEventTimeRange(event)}</div>
                       </div>
                     </button>
                   )) : (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                    <div className="rounded-2xl border border-dashed border-border bg-muted/35 px-4 py-5 text-sm text-muted-foreground">
                       No events scheduled for this day.
                     </div>
                   )}
                 </div>
 
-                <div className="space-y-3 border-t border-slate-200 pt-4">
+                <div className="space-y-3 border-t border-border pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">Available Times</div>
-                      <div className="text-sm text-slate-500">Tap a slot to prefill a new event.</div>
+                      <div className="text-sm font-semibold text-foreground">Available Times</div>
+                      <div className="text-sm text-muted-foreground">Tap a slot to prefill a new event.</div>
                     </div>
                     <Button onClick={onOpenAvailableTimes} size="sm" type="button" variant="outline">
                       View All
@@ -1216,7 +1216,7 @@ const ScheduleBetaMobileView = ({
                         {formatAvailableSlot(slot)}
                       </button>
                     )) : (
-                      <div className="text-sm text-slate-500">No open slots within the current working window.</div>
+                      <div className="text-sm text-muted-foreground">No open slots within the current working window.</div>
                     )}
                   </div>
                 </div>
@@ -1224,9 +1224,9 @@ const ScheduleBetaMobileView = ({
             </Card>
           </div>
         ) : (
-          <Card className="overflow-hidden border-slate-200/80 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+          <Card className="overflow-hidden border-border/80 shadow-[0_18px_45px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
             <CardContent className="space-y-3 p-2.5">
-              <div className="px-1 pt-1 text-sm text-slate-500">
+              <div className="px-1 pt-1 text-sm text-muted-foreground">
                 Tap any empty time to create an event. Existing events remain editable.
               </div>
               <div className="schedule-calendar-shell schedule-beta-day-calendar">
@@ -2259,8 +2259,8 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
               >
                 <Clock3 className="h-5 w-5 text-primary" />
                 <div className="text-left">
-                  <div className="font-semibold text-slate-950">Available Times</div>
-                  <div className="text-sm text-slate-500">Pick from open slots for the selected day.</div>
+                  <div className="font-semibold text-foreground">Available Times</div>
+                  <div className="text-sm text-muted-foreground">Pick from open slots for the selected day.</div>
                 </div>
               </button>
               <button
@@ -2273,8 +2273,8 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
               >
                 <CalendarDays className="h-5 w-5 text-primary" />
                 <div className="text-left">
-                  <div className="font-semibold text-slate-950">Calendar</div>
-                  <div className="text-sm text-slate-500">Tap an empty time directly on the day timeline.</div>
+                  <div className="font-semibold text-foreground">Calendar</div>
+                  <div className="text-sm text-muted-foreground">Tap an empty time directly on the day timeline.</div>
                 </div>
               </button>
             </div>
@@ -2296,7 +2296,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
                   {formatAvailableSlot(slot)}
                 </button>
               )) : (
-                <div className="text-sm text-slate-500">No open slots are available for this day.</div>
+                <div className="text-sm text-muted-foreground">No open slots are available for this day.</div>
               )}
             </div>
           </Dialog>

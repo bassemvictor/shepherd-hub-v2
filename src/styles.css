@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 @theme {
   --font-sans: "Avenir Next", "Segoe UI", sans-serif;
   --color-background: #f4f7fb;
@@ -26,10 +28,36 @@
 }
 
 :root {
+  color-scheme: light;
   color: var(--color-foreground);
   background:
     radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 28%),
     linear-gradient(180deg, #f8fbff 0%, #f3f7fc 100%);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-background: #08111f;
+  --color-foreground: #e6eefb;
+  --color-sidebar: #050c18;
+  --color-sidebar-foreground: #d9e5f7;
+  --color-card: #101a2a;
+  --color-card-foreground: #e6eefb;
+  --color-primary: #60a5fa;
+  --color-primary-foreground: #08111f;
+  --color-muted: #172337;
+  --color-muted-foreground: #9eb0cb;
+  --color-border: #243247;
+  --color-accent: #18263b;
+  --color-accent-foreground: #dbe8ff;
+  --color-success: #34d399;
+  --color-warning: #f59e0b;
+  --shadow-panel: 0 18px 40px rgba(0, 0, 0, 0.38);
+  color: var(--color-foreground);
+  background:
+    radial-gradient(circle at top left, rgba(96, 165, 250, 0.14), transparent 25%),
+    radial-gradient(circle at top right, rgba(15, 23, 42, 0.9), transparent 32%),
+    linear-gradient(180deg, #09111f 0%, #060d19 100%);
 }
 
 * {
@@ -40,6 +68,10 @@ html,
 body,
 #root {
   min-height: 100%;
+}
+
+html {
+  background-color: var(--color-background);
 }
 
 body {
@@ -76,6 +108,76 @@ a {
 @layer utilities {
   .panel-shadow {
     box-shadow: var(--shadow-panel);
+  }
+}
+
+@layer base {
+  [data-theme="dark"] .bg-white {
+    background-color: color-mix(in srgb, var(--color-card) 96%, white 4%) !important;
+  }
+
+  [data-theme="dark"] .bg-white\/90,
+  [data-theme="dark"] .bg-white\/96 {
+    background-color: color-mix(in srgb, var(--color-card) 90%, transparent) !important;
+  }
+
+  [data-theme="dark"] .bg-slate-50,
+  [data-theme="dark"] .bg-slate-50\/80,
+  [data-theme="dark"] .bg-slate-50\/90 {
+    background-color: color-mix(in srgb, var(--color-muted) 72%, transparent) !important;
+  }
+
+  [data-theme="dark"] .bg-slate-100,
+  [data-theme="dark"] .bg-slate-100\/90 {
+    background-color: color-mix(in srgb, var(--color-muted) 88%, transparent) !important;
+  }
+
+  [data-theme="dark"] .text-slate-900 {
+    color: var(--color-foreground) !important;
+  }
+
+  [data-theme="dark"] .text-slate-700,
+  [data-theme="dark"] .text-slate-600,
+  [data-theme="dark"] .text-slate-500 {
+    color: var(--color-muted-foreground) !important;
+  }
+
+  [data-theme="dark"] .border-slate-200,
+  [data-theme="dark"] .border-slate-200\/80,
+  [data-theme="dark"] .border-slate-300 {
+    border-color: color-mix(in srgb, var(--color-border) 92%, transparent) !important;
+  }
+
+  [data-theme="dark"] .bg-amber-50 {
+    background-color: rgba(245, 158, 11, 0.14) !important;
+  }
+
+  [data-theme="dark"] .border-amber-200 {
+    border-color: rgba(245, 158, 11, 0.32) !important;
+  }
+
+  [data-theme="dark"] .text-amber-800 {
+    color: #fcd34d !important;
+  }
+
+  [data-theme="dark"] .bg-rose-50 {
+    background-color: rgba(244, 63, 94, 0.14) !important;
+  }
+
+  [data-theme="dark"] .border-rose-200 {
+    border-color: rgba(244, 63, 94, 0.28) !important;
+  }
+
+  [data-theme="dark"] .text-rose-700 {
+    color: #fda4af !important;
+  }
+
+  [data-theme="dark"] .bg-emerald-50 {
+    background-color: rgba(16, 185, 129, 0.14) !important;
+  }
+
+  [data-theme="dark"] .text-emerald-700 {
+    color: #6ee7b7 !important;
   }
 }
 
@@ -324,6 +426,46 @@ a {
   border-width: 5px;
 }
 
+[data-theme="dark"] .schedule-calendar-shell .fc {
+  --fc-border-color: rgba(52, 66, 89, 0.95);
+  --fc-neutral-bg-color: rgba(23, 35, 55, 0.88);
+  --fc-button-bg-color: #101a2a;
+  --fc-button-border-color: rgba(52, 66, 89, 0.95);
+  --fc-button-hover-bg-color: #18263b;
+  --fc-button-hover-border-color: rgba(96, 165, 250, 0.5);
+  --fc-button-active-bg-color: #60a5fa;
+  --fc-button-active-border-color: #60a5fa;
+  --fc-today-bg-color: rgba(96, 165, 250, 0.12);
+}
+
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-scrollgrid,
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-list,
+[data-theme="dark"] .schedule-calendar-shell .fc th,
+[data-theme="dark"] .schedule-calendar-shell .fc td {
+  border-color: rgba(52, 66, 89, 0.95);
+}
+
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-more-popover,
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-more-popover .fc-popover-header,
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-more-popover .fc-popover-body {
+  background: #101a2a;
+  border-color: rgba(52, 66, 89, 0.95);
+}
+
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-more-popover .fc-popover-title,
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-more-popover .fc-popover-close,
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-daygrid-more-link {
+  color: var(--color-foreground);
+}
+
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-daygrid-more-link {
+  background: rgba(16, 26, 42, 0.96);
+}
+
+[data-theme="dark"] .schedule-calendar-shell .fc .fc-daygrid-more-link:hover {
+  background: #18263b;
+}
+
 @media (max-width: 1023px) {
   .schedule-calendar-shell {
     padding: 0.35rem;
@@ -480,6 +622,7 @@ a {
   font-size: 0.94rem;
   font-weight: 600;
   box-shadow: 0 14px 32px rgba(15, 23, 42, 0.06);
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
 }
 
 .schedule-beta-day-strip {
@@ -564,6 +707,7 @@ a {
   color: #475569;
   font-size: 0.85rem;
   font-weight: 600;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
 }
 
 .schedule-beta-tab-active {
@@ -582,6 +726,7 @@ a {
   border-radius: 1rem;
   background: #fff;
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .schedule-beta-slot-grid {
@@ -607,6 +752,7 @@ a {
   font-variant-numeric: tabular-nums;
   text-align: center;
   white-space: nowrap;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
 @media (min-width: 420px) {
@@ -624,6 +770,7 @@ a {
   border: 1px solid rgba(226, 232, 240, 0.95);
   border-radius: 1rem;
   background: #fff;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .schedule-beta-month-day {
@@ -633,6 +780,7 @@ a {
   background: #f8fafc;
   color: #0f172a;
   font-size: 0.9rem;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
 .schedule-beta-month-day-muted {
@@ -652,4 +800,90 @@ a {
 .schedule-beta-day-calendar .fc .fc-timegrid-axis,
 .schedule-beta-day-calendar .fc .fc-timegrid-slot {
   height: 3rem;
+}
+
+[data-theme="dark"] .schedule-beta-week-trigger {
+  border-color: rgba(52, 66, 89, 0.95);
+  background: rgba(16, 26, 42, 0.94);
+  color: var(--color-foreground);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+}
+
+[data-theme="dark"] .schedule-beta-day-pill {
+  color: var(--color-muted-foreground);
+}
+
+[data-theme="dark"] .schedule-beta-day-pill-label {
+  color: var(--color-muted-foreground);
+}
+
+[data-theme="dark"] .schedule-beta-day-pill-selected {
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .schedule-beta-day-pill-selected .schedule-beta-day-pill-label {
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .schedule-beta-day-pill-circle {
+  border-color: rgba(52, 66, 89, 0.95);
+  background: rgba(16, 26, 42, 0.96);
+  color: var(--color-foreground);
+}
+
+[data-theme="dark"] .schedule-beta-day-pill-selected .schedule-beta-day-pill-circle {
+  border-color: #3b82f6;
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  color: #eff6ff;
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.34);
+}
+
+[data-theme="dark"] .schedule-beta-tab {
+  border-color: rgba(52, 66, 89, 0.95);
+  background: rgba(16, 26, 42, 0.94);
+  color: var(--color-muted-foreground);
+}
+
+[data-theme="dark"] .schedule-beta-tab-active {
+  border-color: rgba(96, 165, 250, 0.5);
+  background: rgba(37, 99, 235, 0.18);
+  color: #93c5fd;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.16);
+}
+
+[data-theme="dark"] .schedule-beta-event-card {
+  border-color: rgba(52, 66, 89, 0.95);
+  background: linear-gradient(180deg, rgba(16, 26, 42, 0.98) 0%, rgba(19, 31, 49, 0.98) 100%);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.24);
+}
+
+[data-theme="dark"] .schedule-beta-slot-pill {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(37, 99, 235, 0.14);
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .schedule-beta-action-card {
+  border-color: rgba(52, 66, 89, 0.95);
+  background: linear-gradient(180deg, rgba(16, 26, 42, 0.98) 0%, rgba(19, 31, 49, 0.98) 100%);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.24);
+}
+
+[data-theme="dark"] .schedule-beta-month-day {
+  background: rgba(23, 35, 55, 0.82);
+  color: var(--color-foreground);
+}
+
+[data-theme="dark"] .schedule-beta-month-day-muted {
+  color: rgba(158, 176, 203, 0.62);
+}
+
+[data-theme="dark"] .schedule-beta-month-day-today {
+  border-color: rgba(96, 165, 250, 0.42);
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .schedule-beta-month-day-selected {
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  color: #eff6ff;
 }

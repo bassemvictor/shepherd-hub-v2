@@ -28,12 +28,12 @@ export const Dialog = ({
       <button aria-label="Close dialog overlay" className="absolute inset-0" onClick={onClose} type="button" />
       <div
         className={cn(
-          "relative z-10 flex max-h-screen w-full flex-col rounded-none border border-border bg-white panel-shadow sm:max-h-[calc(100vh-3rem)] sm:rounded-md",
+          "relative z-10 flex max-h-screen w-full flex-col rounded-none border border-border bg-card text-card-foreground panel-shadow sm:max-h-[calc(100vh-3rem)] sm:rounded-md",
           size === "lg" ? "sm:max-w-lg" : "sm:max-w-md",
         )}
       >
-        <div className="sticky top-0 z-[1] border-b border-border bg-white px-3 py-3 sm:px-4">
-          <h3 className="text-sm font-semibold text-slate-900 sm:text-base">{title}</h3>
+        <div className="sticky top-0 z-[1] border-b border-border bg-card px-3 py-3 sm:px-4">
+          <h3 className="text-sm font-semibold text-foreground sm:text-base">{title}</h3>
           {description ? <p className="mt-1 text-xs text-muted-foreground sm:text-sm">{description}</p> : null}
         </div>
         <div className="overflow-y-auto px-3 py-3 sm:px-4 sm:py-4">{children}</div>

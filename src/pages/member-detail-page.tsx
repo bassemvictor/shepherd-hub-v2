@@ -626,9 +626,9 @@ export const MemberDetailPage = () => {
       />
 
       <RightSideDrawer
-        contentClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3 sm:py-3"
+        contentClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)] px-2 py-2.5 sm:px-3 sm:py-3"
         description={manualEditorMode === "create" ? "Add a visit record without creating a Google Calendar event." : "Update this manual visit record."}
-        descriptionClassName="text-xs text-slate-500 sm:text-sm"
+        descriptionClassName="text-xs text-muted-foreground sm:text-sm"
         footer={(
           <div className="space-y-2.5">
             <Button className="h-11 w-full rounded-xl text-sm font-semibold shadow-[0_14px_26px_rgba(37,99,235,0.24)]" disabled={manualSaving} onClick={() => void handleManualSubmit()} type="button">
@@ -648,8 +648,8 @@ export const MemberDetailPage = () => {
             </Button>
           </div>
         )}
-        footerClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3"
-        headerClassName="border-b border-slate-200/80 bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] px-2 py-2.5 sm:px-3"
+        footerClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)] px-2 py-2.5 sm:px-3"
+        headerClassName="border-b border-slate-200/80 bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:border-border/80 dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)] px-2 py-2.5 sm:px-3"
         headerLeading={(
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1rem] bg-[linear-gradient(180deg,#eef4ff_0%,#f6f9ff_100%)] text-primary shadow-inner">
             <CalendarDays className="h-6 w-6" />
@@ -660,30 +660,30 @@ export const MemberDetailPage = () => {
           setEditingManualVisitation(null);
         }}
         open={manualEditorOpen}
-        panelClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)]"
+        panelClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)]"
         title={manualEditorMode === "create" ? "Record Visit" : "Edit Manual Visit"}
-        titleClassName="text-2xl font-semibold tracking-tight text-slate-950"
+        titleClassName="text-2xl font-semibold tracking-tight text-foreground"
         width="lg"
       >
         {(() => {
-          const sectionCardClassName = "space-y-3 rounded-[1.2rem] border border-slate-200/80 bg-white/96 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur sm:p-3.5";
-          const fieldClassName = "h-10 rounded-xl border-slate-200 bg-white px-3 text-sm shadow-sm shadow-slate-200/35 transition focus:border-primary focus:ring-primary/10";
+          const sectionCardClassName = "space-y-3 rounded-[1.2rem] border border-border/80 bg-card/96 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur dark:shadow-[0_14px_32px_rgba(0,0,0,0.24)] sm:p-3.5";
+          const fieldClassName = "h-10 rounded-xl border-border bg-card px-3 text-sm shadow-sm shadow-slate-200/35 transition focus:border-primary focus:ring-primary/10 dark:shadow-black/20";
 
           return (
             <div className="space-y-3">
               {memberIndexPending || memberIndexFetching ? (
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-muted-foreground shadow-sm shadow-slate-200/30">
+                <div className="rounded-xl border border-border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm shadow-slate-200/30 dark:shadow-black/20">
                   Loading members for selection...
                 </div>
               ) : null}
 
               <section className={sectionCardClassName}>
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-slate-950">
+                  <div className="flex items-center gap-2 text-foreground">
                     <Users className="h-4 w-4 text-primary" />
                     <h4 className="text-lg font-semibold tracking-tight">Members</h4>
                   </div>
-                  <p className="text-sm text-slate-500">Add one or more members to this visitation.</p>
+                  <p className="text-sm text-muted-foreground">Add one or more members to this visitation.</p>
                 </div>
                 <MemberSearchAutocomplete
                   items={memberIndex}
@@ -704,7 +704,7 @@ export const MemberDetailPage = () => {
                   selectedIds={manualForm.memberIds}
                 />
                 <div className="space-y-1.5">
-                  <div className="text-sm font-semibold text-slate-500">Selected ({manualForm.memberIds.length})</div>
+                  <div className="text-sm font-semibold text-muted-foreground">Selected ({manualForm.memberIds.length})</div>
                   {manualForm.memberIds.length ? (
                     <div className="flex flex-wrap gap-1.5">
                       {emptyMemberSelection(memberIndex, manualForm.memberIds).map((selectedMember) => (
@@ -728,7 +728,7 @@ export const MemberDetailPage = () => {
                       ))}
                     </div>
                   ) : (
-                    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-500">
+                    <div className="rounded-xl border border-dashed border-border bg-muted/35 px-3 py-2.5 text-sm text-muted-foreground">
                       No members selected yet.
                     </div>
                   )}
@@ -738,9 +738,9 @@ export const MemberDetailPage = () => {
 
               <section className={sectionCardClassName}>
                 <label className="space-y-1.5">
-                  <span className="text-lg font-semibold tracking-tight text-slate-950">Visit Title</span>
+                  <span className="text-lg font-semibold tracking-tight text-foreground">Visit Title</span>
                   <div className="relative">
-                    <FileText className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <FileText className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       className={`${fieldClassName} pl-10`}
                       onChange={(event) => setManualForm((current) => ({ ...current, title: event.target.value }))}
@@ -754,17 +754,17 @@ export const MemberDetailPage = () => {
 
               <section className={sectionCardClassName}>
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-slate-950">
+                  <div className="flex items-center gap-2 text-foreground">
                     <Clock3 className="h-4 w-4 text-primary" />
                     <h4 className="text-lg font-semibold tracking-tight">Visit Details</h4>
                   </div>
-                  <p className="text-[13px] text-slate-500">Set the date, visitor, and current status.</p>
+                  <p className="text-[13px] text-muted-foreground">Set the date, visitor, and current status.</p>
                 </div>
                 <div className="grid gap-2.5 sm:grid-cols-2">
                   <label className="space-y-1.5">
-                    <span className="text-sm font-medium text-slate-900">Visit Date/Time</span>
+                    <span className="text-sm font-medium text-foreground">Visit Date/Time</span>
                     <div className="relative">
-                      <Clock3 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <Clock3 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         className={`${fieldClassName} pl-10`}
                         onChange={(event) => setManualForm((current) => ({ ...current, visitDate: event.target.value }))}
@@ -776,9 +776,9 @@ export const MemberDetailPage = () => {
                   </label>
 
                   <label className="space-y-1.5">
-                    <span className="text-sm font-medium text-slate-900">Visitor</span>
+                    <span className="text-sm font-medium text-foreground">Visitor</span>
                     <div className="relative">
-                      <UserRound className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <UserRound className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Select
                         className={`${fieldClassName} pl-10`}
                         onChange={(event) => {
@@ -803,9 +803,9 @@ export const MemberDetailPage = () => {
                   </label>
 
                   <label className="space-y-1.5">
-                    <span className="text-sm font-medium text-slate-900">Visit Status</span>
+                    <span className="text-sm font-medium text-foreground">Visit Status</span>
                     <div className="relative">
-                      <CheckCheck className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <CheckCheck className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Select
                         className={`${fieldClassName} pl-10`}
                         onChange={(event) => setManualForm((current) => ({ ...current, visitStatus: event.target.value }))}
@@ -820,9 +820,9 @@ export const MemberDetailPage = () => {
                   </label>
 
                   <label className="space-y-1.5">
-                    <span className="text-sm font-medium text-slate-900">Location</span>
+                    <span className="text-sm font-medium text-foreground">Location</span>
                     <div className="relative">
-                      <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         className={`${fieldClassName} pl-10`}
                         onChange={(event) => setManualForm((current) => ({ ...current, location: event.target.value }))}
@@ -834,19 +834,19 @@ export const MemberDetailPage = () => {
                 </div>
               </section>
 
-              <section className="rounded-[1.2rem] border border-slate-200/80 bg-white/96 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur">
+              <section className="rounded-[1.2rem] border border-border/80 bg-card/96 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur dark:shadow-[0_14px_32px_rgba(0,0,0,0.24)]">
                 <div className="flex items-center gap-3 px-3 py-3 sm:px-3.5">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted/55 text-muted-foreground">
                     <AlignLeft className="h-4.5 w-4.5" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-lg font-semibold tracking-tight text-slate-950">Notes</div>
-                    <div className="text-[13px] text-slate-500">Capture anything worth remembering from the visit.</div>
+                    <div className="text-lg font-semibold tracking-tight text-foreground">Notes</div>
+                    <div className="text-[13px] text-muted-foreground">Capture anything worth remembering from the visit.</div>
                   </div>
                 </div>
-                <div className="border-t border-slate-200/80 px-3 pb-3 pt-3 sm:px-3.5 sm:pb-3.5">
+                <div className="border-t border-border/80 px-3 pb-3 pt-3 sm:px-3.5 sm:pb-3.5">
                   <Textarea
-                    className="min-h-20 rounded-xl border-slate-200 bg-white px-3 py-2.5 text-sm shadow-sm shadow-slate-200/35 focus:border-primary focus:ring-primary/10"
+                    className="min-h-20 rounded-xl border-border bg-card px-3 py-2.5 text-sm shadow-sm shadow-slate-200/35 focus:border-primary focus:ring-primary/10 dark:shadow-black/20"
                     onChange={(event) => setManualForm((current) => ({ ...current, notes: event.target.value }))}
                     placeholder="Optional notes"
                     value={manualForm.notes}

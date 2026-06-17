@@ -38,7 +38,7 @@ export const DataGrid = <T,>({
           const actionColumns = columns.filter((column) => column.mobileVariant === "actions");
 
           return (
-            <div className="rounded-md border border-border/70 bg-white p-3 shadow-sm" key={getRowKey(row)}>
+            <div className="rounded-md border border-border/70 bg-card p-3 shadow-sm" key={getRowKey(row)}>
               <div className="space-y-2">
                 {defaultColumns.map((column, index) => (
                   <div
@@ -50,7 +50,7 @@ export const DataGrid = <T,>({
                         {column.header}
                       </span>
                     )}
-                    <div className="text-sm text-slate-700">{column.cell(row)}</div>
+                    <div className="text-sm text-foreground">{column.cell(row)}</div>
                   </div>
                 ))}
                 {actionColumns.length ? (
@@ -84,7 +84,7 @@ export const DataGrid = <T,>({
           </TableHeader>
           <TableBody>
             {rows.map((row) => (
-              <TableRow className="bg-white" key={getRowKey(row)}>
+              <TableRow className="bg-card" key={getRowKey(row)}>
                 {columns.map((column) => (
                   <TableCell className={column.className} key={column.key}>
                     {column.cell(row)}

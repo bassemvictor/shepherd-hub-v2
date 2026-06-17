@@ -25,10 +25,10 @@ export const PageHeader = ({
   action,
   children,
 }: PageHeaderProps) => (
-  <div className={cn("flex flex-col gap-3 rounded-md border border-border/80 bg-white p-3 panel-shadow", className)}>
+  <div className={cn("flex flex-col gap-3 rounded-md border border-border/80 bg-card p-3 panel-shadow", className)}>
     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
       <div className="space-y-1">
-        {title ? <h1 className={cn("text-xl font-semibold text-slate-900", titleClassName)}>{title}</h1> : null}
+        {title ? <h1 className={cn("text-xl font-semibold text-foreground", titleClassName)}>{title}</h1> : null}
         {description ? <p className={cn("max-w-3xl text-sm text-muted-foreground", descriptionClassName)}>{description}</p> : null}
       </div>
       {action ? (
