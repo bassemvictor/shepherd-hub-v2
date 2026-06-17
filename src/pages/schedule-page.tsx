@@ -1205,7 +1205,7 @@ const ScheduleBetaMobileView = ({
                     </Button>
                   </div>
 
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="schedule-beta-slot-grid">
                     {availableSlots.length ? availableSlots.slice(0, 8).map((slot) => (
                       <button
                         className="schedule-beta-slot-pill"
@@ -2285,7 +2285,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
             open={availableTimesDialogOpen}
             title="Available Times"
           >
-            <div className="flex flex-wrap gap-1.5">
+            <div className="schedule-beta-slot-grid">
               {getAvailableTimeSlots(selectedDayEvents, selectedDate).length ? getAvailableTimeSlots(selectedDayEvents, selectedDate).map((slot) => (
                 <button
                   className="schedule-beta-slot-pill"
