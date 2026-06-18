@@ -2,7 +2,7 @@ import { BarChart3, CalendarDays, ChevronDown, ClipboardList, Settings2, Users }
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
-import type { AppAuthUser } from "../../lib/auth";
+import { isAdminUser, type AppAuthUser } from "../../lib/auth";
 import { cn } from "../../lib/utils";
 
 type NavigationItem = {
@@ -20,7 +20,7 @@ type NavigationSection = {
   items: NavigationItem[];
 };
 
-const baseNavigation: NavigationSection[] = [
+const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
   {
     label: "Calendar",
     items: [
@@ -49,6 +49,17 @@ const baseNavigation: NavigationSection[] = [
     label: "Configurations",
     items: [{ label: "Connect & Configure", href: "/calendar", icon: Settings2 }],
   },
+  ...(user && isAdminUser(user.groups)
+    ? [
+        {
+          label: "Admin",
+          items: [
+            { label: "User Groups", href: "/admin/user-groups", icon: Users },
+            { label: "Tenant Reset", href: "/admin/tenant-reset", icon: Settings2 },
+          ],
+        } satisfies NavigationSection,
+      ]
+    : []),
 ];
 
 type SideMenuProps = {
@@ -56,9 +67,10 @@ type SideMenuProps = {
   user: AppAuthUser | null;
 };
 
-export const SideMenu = ({ onNavigate }: SideMenuProps) => {
+export const SideMenu = ({ onNavigate, user }: SideMenuProps) => {
   const { pathname } = useLocation();
   const [reportsOpen, setReportsOpen] = useState(() => pathname.startsWith("/reports"));
+  const navigation = buildNavigation(user ?? null);
 
   useEffect(() => {
     if (pathname.startsWith("/reports")) {
@@ -68,7 +80,7 @@ export const SideMenu = ({ onNavigate }: SideMenuProps) => {
 
   return (
     <nav className="flex-1 space-y-4">
-      {baseNavigation.map((section) => (
+      {navigation.map((section) => (
         <div key={section.label}>
           <p className="mb-2 text-[11px] uppercase tracking-[0.14em] text-blue-200/60">
             {section.label}

@@ -1,13 +1,23 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
+import {
+  AdminAddUserToGroupCommand,
+  AdminGetUserCommand,
+  AdminListGroupsForUserCommand,
+  AdminRemoveUserFromGroupCommand,
+  CognitoIdentityProviderClient,
+  ListUsersCommand,
+} from "@aws-sdk/client-cognito-identity-provider";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   BatchGetCommand,
+  BatchWriteCommand,
   DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
@@ -15,6 +25,9 @@ import * as XLSX from "xlsx";
 
 import type {
   AppCognitoGroup,
+  AdminManagedGroup,
+  AdminResetAction,
+  AdminResetSummary,
   CalendarSyncConfig,
   CalendarSyncSnapshot,
   CreateMemberInput,
@@ -57,7 +70,11 @@ import type {
   UpdateMemberInput,
   UpdateScheduleEventInput,
   UpdateCalendarSettingsInput,
+  UpdateTenantUserGroupsInput,
+  UpdateTenantUserGroupsResponse,
   CurrentUserVisitationActivity,
+  TenantUserSummary,
+  TenantUsersResponse,
   VisitationDistributionBucket,
   VisitationOverviewRow,
   VisitationReportFilters,
@@ -200,6 +217,20 @@ type MemberActivityItem = BaseItem & {
   metadata?: Record<string, unknown>;
 };
 
+type AuditLogItem = BaseItem & {
+  tenantId: string;
+  auditId: string;
+  actionType: string;
+  actorUserId: string;
+  actorEmail: string;
+  actorDisplayName: string;
+  targetUserId?: string;
+  targetUsername?: string;
+  resultStatus: "success" | "failed";
+  deletionCounts?: Record<string, number>;
+  metadata?: Record<string, unknown>;
+};
+
 type OAuthStateItem = BaseItem & {
   state: string;
   userId: string;
@@ -224,6 +255,7 @@ type RequestContext = {
 };
 
 type HandlerDependencies = {
+  cognitoClient: Pick<CognitoIdentityProviderClient, "send">;
   documentClient: Pick<DynamoDBDocumentClient, "send">;
   now: () => string;
   uuid: () => string;
@@ -262,6 +294,7 @@ type GoogleTokenResponse = {
 };
 
 const defaultDependencies: HandlerDependencies = {
+  cognitoClient: new CognitoIdentityProviderClient({}),
   documentClient: DynamoDBDocumentClient.from(new DynamoDBClient({}), {
     marshallOptions: {
       removeUndefinedValues: true,
@@ -279,7 +312,11 @@ const allGroups: AppCognitoGroup[] = [
   "pricing_engineer",
   "admin",
   "super_user",
+  "priest",
+  "servant",
 ];
+
+const adminManagedGroups: AdminManagedGroup[] = ["admin", "priest", "servant"];
 
 const GOOGLE_SCOPES = [
   "openid",
@@ -339,15 +376,43 @@ const parseBody = <T>(raw: string | undefined | null): T => {
   return JSON.parse(raw) as T;
 };
 
-const normalizeGroups = (rawGroups: unknown): AppCognitoGroup[] => {
-  if (!Array.isArray(rawGroups)) {
+const normalizeGroupEntries = (rawGroups: unknown): string[] => {
+  if (Array.isArray(rawGroups)) {
+    return rawGroups.flatMap((group) => normalizeGroupEntries(group));
+  }
+
+  if (typeof rawGroups !== "string") {
     return [];
   }
 
-  return rawGroups
-    .map((group) => String(group))
-    .filter((group): group is AppCognitoGroup => allGroups.includes(group as AppCognitoGroup));
+  const trimmed = rawGroups.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? normalizeGroupEntries(parsed) : [];
+    } catch {
+      const unwrapped = trimmed.slice(1, -1).trim();
+      return unwrapped
+        .split(",")
+        .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
+        .filter(Boolean);
+    }
+  }
+
+  return trimmed
+    .split(",")
+    .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
+    .filter(Boolean);
 };
+
+const normalizeGroups = (rawGroups: unknown): AppCognitoGroup[] =>
+  [...new Set(normalizeGroupEntries(rawGroups).filter((group): group is AppCognitoGroup =>
+    allGroups.includes(group as AppCognitoGroup),
+  ))];
 
 const getContext = (event: APIGatewayProxyEventV2WithJWTAuthorizer): RequestContext => {
   const claims = event.requestContext.authorizer?.jwt.claims ?? {};
@@ -366,8 +431,7 @@ const getContext = (event: APIGatewayProxyEventV2WithJWTAuthorizer): RequestCont
     actorSub;
 
   const rawGroups = claims["cognito:groups"];
-  const actorGroups =
-    typeof rawGroups === "string" ? normalizeGroups([rawGroups]) : normalizeGroups(rawGroups);
+  const actorGroups = normalizeGroups(rawGroups);
 
   return {
     actorEmail,
@@ -401,6 +465,7 @@ const tenantEventAssignmentGsiPk = (tenantId: string) => `TENANT#${tenantId}#EVE
 const tenantEventAssignmentGsiSk = (eventStartDateTime: string, memberId: string, eventId: string) =>
   `EVENT#${eventStartDateTime}#MEMBER#${memberId}#EVENT#${eventId}`;
 const memberActivitySk = (createdAt: string, activityId: string) => `ACTIVITY#${createdAt}#${activityId}`;
+const auditLogSk = (createdAt: string, auditId: string) => `AUDIT#${createdAt}#${auditId}`;
 const visitationMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const tenantVisitationGsiSk = (visitDate: string, visitorUserId: string, memberId: string, visitationId: string) =>
   `VISIT#${visitDate}#VISITOR#${visitorUserId}#MEMBER#${memberId}#VISITATION#${visitationId}`;
@@ -409,6 +474,7 @@ const eventVisitationId = (calendarId: string, eventId: string) => `CALENDAR#${c
 const oauthStatePk = (state: string) => `OAUTH_STATE#${state}`;
 const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
+const isAdminGroup = (group: AppCognitoGroup) => group === "admin";
 
 const defaultCalendarListRefreshThresholdMinutes = 30;
 
@@ -1088,8 +1154,232 @@ const queryAll = async (
   return items;
 };
 
+const scanAll = async (
+  documentClient: Pick<DynamoDBDocumentClient, "send">,
+  input: ConstructorParameters<typeof ScanCommand>[0],
+) => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const response = await documentClient.send(
+      new ScanCommand({
+        ...input,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(response.Items ?? []));
+    exclusiveStartKey = response.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return items;
+};
+
 const hasMatchingTenant = (context: RequestContext, item?: { tenantId?: string } | null) =>
   item?.tenantId === context.tenantId;
+
+const getUserPoolId = () => {
+  const userPoolId = process.env.COGNITO_USER_POOL_ID?.trim();
+  if (!userPoolId) {
+    throw new Error("Missing COGNITO_USER_POOL_ID environment variable.");
+  }
+
+  return userPoolId;
+};
+
+const listAttributeMap = (attributes: Array<{ Name?: string; Value?: string }> | undefined) =>
+  new Map((attributes ?? []).map((attribute) => [attribute.Name ?? "", attribute.Value ?? ""]));
+
+const logAuditEvent = async (
+  context: RequestContext,
+  actionType: string,
+  resultStatus: AuditLogItem["resultStatus"],
+  deps: HandlerDependencies,
+  options: {
+    deletionCounts?: Record<string, number>;
+    metadata?: Record<string, unknown>;
+    targetUserId?: string;
+    targetUsername?: string;
+  } = {},
+) => {
+  const createdAt = deps.now();
+  const auditId = deps.uuid();
+  const item: AuditLogItem = {
+    PK: tenantPk(context.tenantId),
+    SK: auditLogSk(createdAt, auditId),
+    createdAt,
+    updatedAt: createdAt,
+    entityType: "AUDIT_LOG",
+    tenantId: context.tenantId,
+    auditId,
+    actionType,
+    actorUserId: context.actorSub,
+    actorEmail: context.actorEmail,
+    actorDisplayName: context.actorName,
+    targetUserId: options.targetUserId,
+    targetUsername: options.targetUsername,
+    resultStatus,
+    deletionCounts: options.deletionCounts,
+    metadata: options.metadata,
+  };
+
+  await deps.documentClient.send(
+    new PutCommand({
+      Item: item,
+      TableName: context.tableName,
+    }),
+  );
+};
+
+const requireAdminContext = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+  actionType: string,
+) => {
+  if (context.actorGroups.some(isAdminGroup)) {
+    return;
+  }
+
+  await logAuditEvent(context, actionType, "failed", deps, {
+    metadata: {
+      reason: "forbidden",
+      actorGroups: context.actorGroups,
+    },
+  });
+  throw new HttpError(403, "Admin access is required.");
+};
+
+const toTenantUserSummary = (
+  username: string,
+  attributes: Array<{ Name?: string; Value?: string }> | undefined,
+  groups: AppCognitoGroup[],
+  enabled = true,
+  status?: string,
+): TenantUserSummary => {
+  const attributeMap = listAttributeMap(attributes);
+  const email = attributeMap.get("email")?.trim() || username;
+  const name = attributeMap.get("name")?.trim() || email;
+  const tenantId = attributeMap.get("custom:tenantId")?.trim() || attributeMap.get("custom:tenant_id")?.trim() || "";
+  const sub = attributeMap.get("sub")?.trim() || username;
+
+  return {
+    username,
+    sub,
+    email,
+    name,
+    tenantId,
+    enabled,
+    status,
+    groups,
+  };
+};
+
+const getTenantUser = async (context: RequestContext, username: string, deps: HandlerDependencies) => {
+  const response = await deps.cognitoClient.send(
+    new AdminGetUserCommand({
+      UserPoolId: getUserPoolId(),
+      Username: username,
+    }),
+  );
+  const groupsResponse = await deps.cognitoClient.send(
+    new AdminListGroupsForUserCommand({
+      UserPoolId: getUserPoolId(),
+      Username: username,
+    }),
+  );
+  const user = toTenantUserSummary(
+    response.Username ?? username,
+    response.UserAttributes,
+    normalizeGroups((groupsResponse.Groups ?? []).map((group) => group.GroupName ?? "")),
+    true,
+    response.UserStatus,
+  );
+
+  if (user.tenantId !== context.tenantId) {
+    throw new HttpError(404, "User not found in this tenant.");
+  }
+
+  return user;
+};
+
+const listTenantUsers = async (context: RequestContext, deps: HandlerDependencies) => {
+  const users: TenantUserSummary[] = [];
+  let paginationToken: string | undefined;
+
+  do {
+    const response = await deps.cognitoClient.send(
+      new ListUsersCommand({
+        UserPoolId: getUserPoolId(),
+        PaginationToken: paginationToken,
+      }),
+    );
+
+    for (const entry of response.Users ?? []) {
+      const username = entry.Username ?? "";
+      if (!username) {
+        continue;
+      }
+      const groupResponse = await deps.cognitoClient.send(
+        new AdminListGroupsForUserCommand({
+          UserPoolId: getUserPoolId(),
+          Username: username,
+        }),
+      );
+      users.push(
+        toTenantUserSummary(
+          username,
+          entry.Attributes,
+          normalizeGroups((groupResponse.Groups ?? []).map((group) => group.GroupName ?? "")),
+          Boolean(entry.Enabled),
+          entry.UserStatus,
+        ),
+      );
+    }
+
+    paginationToken = response.PaginationToken;
+  } while (paginationToken);
+
+  return users
+    .filter((user) => user.tenantId === context.tenantId)
+    .sort((left, right) => left.name.localeCompare(right.name) || left.email.localeCompare(right.email));
+};
+
+const deleteItemsInBatches = async (
+  context: RequestContext,
+  keys: Array<{ PK: string; SK: string }>,
+  deps: HandlerDependencies,
+) => {
+  let deleted = 0;
+  for (let index = 0; index < keys.length; index += 25) {
+    let pendingKeys = keys.slice(index, index + 25);
+    if (!pendingKeys.length) {
+      continue;
+    }
+
+    do {
+      const response = await deps.documentClient.send(
+        new BatchWriteCommand({
+          RequestItems: {
+            [context.tableName]: pendingKeys.map((key) => ({
+              DeleteRequest: {
+                Key: key,
+              },
+            })),
+          },
+        }),
+      );
+
+      const unprocessed = (response.UnprocessedItems?.[context.tableName] ?? [])
+        .map((request) => request.DeleteRequest?.Key)
+        .filter(Boolean) as Array<{ PK: string; SK: string }>;
+      deleted += pendingKeys.length - unprocessed.length;
+      pendingKeys = unprocessed;
+    } while (pendingKeys.length);
+  }
+
+  return deleted;
+};
 
 const getGoogleConnection = async (context: RequestContext, deps: HandlerDependencies) => {
   const response = await deps.documentClient.send(
@@ -1319,11 +1609,17 @@ const persistEventWithMemberAssignments = async (
   return persistedEvent;
 };
 
-const deleteEvent = async (context: RequestContext, calendarId: string, eventId: string, deps: HandlerDependencies) => {
+const deleteEvent = async (
+  context: RequestContext,
+  userId: string,
+  calendarId: string,
+  eventId: string,
+  deps: HandlerDependencies,
+) => {
   await deps.documentClient.send(
     new DeleteCommand({
       Key: {
-        PK: userPk(context.actorSub),
+        PK: userPk(userId),
         SK: eventSk(calendarId, eventId),
       },
       TableName: context.tableName,
@@ -1997,7 +2293,7 @@ const persistManualVisitationGroup = async (
 };
 
 const deleteCachedEventOnly = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
-  await deleteEvent(context, event.calendarId, event.eventId, deps);
+  await deleteEvent(context, event.userId, event.calendarId, event.eventId, deps);
 };
 
 const deleteEventMemberAssignmentsForEvent = async (
@@ -2034,6 +2330,205 @@ const deleteStoredEvent = async (context: RequestContext, event: EventItem, deps
       }),
     );
   }
+};
+
+const listAuditLogs = async (context: RequestContext, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantPk(context.tenantId),
+      ":auditPrefix": "AUDIT#",
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :auditPrefix)",
+    TableName: context.tableName,
+  });
+
+  return items as AuditLogItem[];
+};
+
+const scanTenantItemsByEntityTypes = async (
+  context: RequestContext,
+  entityTypes: string[],
+  deps: HandlerDependencies,
+) => {
+  if (!entityTypes.length) {
+    return [] as BaseItem[];
+  }
+
+  const names: Record<string, string> = {
+    "#tenantId": "tenantId",
+    "#entityType": "entityType",
+  };
+  const values: Record<string, unknown> = {
+    ":tenantId": context.tenantId,
+  };
+  const entityClauses = entityTypes.map((entityType, index) => {
+    const key = `:entityType${index}`;
+    values[key] = entityType;
+    return `#entityType = ${key}`;
+  });
+
+  const items = await scanAll(deps.documentClient, {
+    ExpressionAttributeNames: names,
+    ExpressionAttributeValues: values,
+    FilterExpression: `#tenantId = :tenantId AND (${entityClauses.join(" OR ")})`,
+    TableName: context.tableName,
+  });
+
+  return items as BaseItem[];
+};
+
+const toDeleteKeys = (items: Array<Pick<BaseItem, "PK" | "SK">>) => items.map((item) => ({ PK: item.PK, SK: item.SK }));
+
+const countEntityTypes = (items: BaseItem[]) =>
+  items.reduce<Record<string, number>>((accumulator, item) => {
+    accumulator[item.entityType] = (accumulator[item.entityType] ?? 0) + 1;
+    return accumulator;
+  }, {});
+
+const buildResetSummary = (
+  action: AdminResetAction,
+  affectedEntities: Record<string, number>,
+): AdminResetSummary => ({
+  action,
+  recordsDeleted: Object.values(affectedEntities).reduce((total, value) => total + value, 0),
+  affectedEntities: Object.entries(affectedEntities)
+    .filter(([, deleted]) => deleted > 0)
+    .map(([entityType, deleted]) => ({ entityType, deleted }))
+    .sort((left, right) => left.entityType.localeCompare(right.entityType)),
+  status: "success",
+});
+
+const resetGoogleCachedEvents = async (context: RequestContext, deps: HandlerDependencies) => {
+  const records = await scanTenantItemsByEntityTypes(context, ["schedule_event", "EVENT_MEMBER", "VISITATION"], deps);
+  const eventRecords = records.filter((item): item is EventItem => item.entityType === "schedule_event");
+  const assignmentRecords = records.filter((item): item is EventMemberItem => item.entityType === "EVENT_MEMBER");
+  const visitationRecords = records.filter(
+    (item): item is VisitationItem => item.entityType === "VISITATION" && (item as VisitationItem).source === "calendar",
+  );
+
+  await deleteItemsInBatches(
+    context,
+    [...toDeleteKeys(eventRecords), ...toDeleteKeys(assignmentRecords), ...toDeleteKeys(visitationRecords)],
+    deps,
+  );
+
+  return buildResetSummary("google_cached_events", {
+    schedule_event: eventRecords.length,
+    EVENT_MEMBER: assignmentRecords.length,
+    VISITATION: visitationRecords.length,
+  });
+};
+
+const resetGoogleConnections = async (context: RequestContext, deps: HandlerDependencies) => {
+  const records = await scanTenantItemsByEntityTypes(
+    context,
+    [
+      "schedule_event",
+      "EVENT_MEMBER",
+      "VISITATION",
+      "google_connection",
+      "schedule_calendar",
+      "schedule_settings",
+      "oauth_state",
+    ],
+    deps,
+  );
+  const eventRecords = records.filter((item): item is EventItem => item.entityType === "schedule_event");
+  const assignmentRecords = records.filter((item): item is EventMemberItem => item.entityType === "EVENT_MEMBER");
+  const visitationRecords = records.filter(
+    (item): item is VisitationItem => item.entityType === "VISITATION" && (item as VisitationItem).source === "calendar",
+  );
+  const connectionRecords = records.filter((item) =>
+    item.entityType === "google_connection" ||
+    item.entityType === "schedule_calendar" ||
+    item.entityType === "schedule_settings" ||
+    item.entityType === "oauth_state"
+  );
+  const groupedCounts = countEntityTypes([
+    ...eventRecords,
+    ...assignmentRecords,
+    ...visitationRecords,
+    ...connectionRecords,
+  ]);
+
+  await deleteItemsInBatches(
+    context,
+    [
+      ...toDeleteKeys(eventRecords),
+      ...toDeleteKeys(assignmentRecords),
+      ...toDeleteKeys(visitationRecords),
+      ...toDeleteKeys(connectionRecords),
+    ],
+    deps,
+  );
+
+  return buildResetSummary("google_connections", groupedCounts);
+};
+
+const resetVisitations = async (context: RequestContext, deps: HandlerDependencies) => {
+  const visitations = await listTenantVisitations(context, deps);
+  await deleteItemsInBatches(
+    context,
+    toDeleteKeys(visitations),
+    deps,
+  );
+
+  return buildResetSummary("visitations", { VISITATION: visitations.length });
+};
+
+const resetMembers = async (context: RequestContext, deps: HandlerDependencies) => {
+  const records = await scanTenantItemsByEntityTypes(context, ["MEMBER", "MEMBER_ACTIVITY"], deps);
+  const members = records.filter((item): item is MemberItem => item.entityType === "MEMBER");
+  const memberActivities = records.filter((item): item is MemberActivityItem => item.entityType === "MEMBER_ACTIVITY");
+  await deleteItemsInBatches(context, [...toDeleteKeys(members), ...toDeleteKeys(memberActivities)], deps);
+
+  return buildResetSummary("members", {
+    MEMBER: members.length,
+    MEMBER_ACTIVITY: memberActivities.length,
+  });
+};
+
+const resetAuditLogs = async (context: RequestContext, deps: HandlerDependencies) => {
+  const auditLogs = await listAuditLogs(context, deps);
+  await deleteItemsInBatches(
+    context,
+    toDeleteKeys(auditLogs),
+    deps,
+  );
+
+  return buildResetSummary("audit_logs", {
+    AUDIT_LOG: auditLogs.length,
+  });
+};
+
+const resetEntireTenant = async (context: RequestContext, deps: HandlerDependencies) => {
+  const records = await scanAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#tenantId": "tenantId",
+    },
+    ExpressionAttributeValues: {
+      ":tenantId": context.tenantId,
+    },
+    FilterExpression: "#tenantId = :tenantId",
+    TableName: context.tableName,
+  });
+
+  const groupedCounts = (records as BaseItem[]).reduce<Record<string, number>>((accumulator, item) => {
+    accumulator[item.entityType] = (accumulator[item.entityType] ?? 0) + 1;
+    return accumulator;
+  }, {});
+
+  await deleteItemsInBatches(
+    context,
+    toDeleteKeys(records as BaseItem[]),
+    deps,
+  );
+
+  return buildResetSummary("tenant_all", groupedCounts);
 };
 
 const deleteOAuthState = async (state: string, tableName: string, deps: HandlerDependencies) => {
@@ -3842,7 +4337,7 @@ const buildGoogleEventBody = (
     summary: input.summary.trim(),
     ...(description ? { description } : {}),
     ...(location ? { location } : {}),
-    ...(attendees.length ? { attendees } : {}),
+    attendees,
     ...(memberIds.length
       ? {
         extendedProperties: {
@@ -4007,6 +4502,124 @@ const deleteScheduleEvent = async (
   return json(200, { deleted: true, eventId, calendarId });
 };
 
+const getAdminUsers = async (context: RequestContext, deps: HandlerDependencies) => {
+  await requireAdminContext(context, deps, "admin.user_groups.list");
+  const items = await listTenantUsers(context, deps);
+  return json(200, { items } satisfies TenantUsersResponse);
+};
+
+const updateAdminUserGroups = async (
+  context: RequestContext,
+  username: string,
+  input: UpdateTenantUserGroupsInput,
+  deps: HandlerDependencies,
+) => {
+  await requireAdminContext(context, deps, "admin.user_groups.update");
+  try {
+    const requestedGroups = [...new Set(normalizeGroups(input.groups).filter((group): group is AdminManagedGroup =>
+      adminManagedGroups.includes(group as AdminManagedGroup),
+    ))];
+    const targetUser = await getTenantUser(context, username, deps);
+    const currentManagedGroups = targetUser.groups.filter((group): group is AdminManagedGroup =>
+      adminManagedGroups.includes(group as AdminManagedGroup),
+    );
+
+    if (targetUser.sub === context.actorSub && currentManagedGroups.includes("admin") && !requestedGroups.includes("admin")) {
+      throw new HttpError(400, "You cannot remove your own admin access from this page.");
+    }
+
+    const currentSet = new Set(currentManagedGroups);
+    const requestedSet = new Set(requestedGroups);
+
+    for (const group of adminManagedGroups) {
+      if (!currentSet.has(group) && requestedSet.has(group)) {
+        await deps.cognitoClient.send(
+          new AdminAddUserToGroupCommand({
+            GroupName: group,
+            UserPoolId: getUserPoolId(),
+            Username: username,
+          }),
+        );
+        await logAuditEvent(context, "admin.user_group_added", "success", deps, {
+          targetUserId: targetUser.sub,
+          targetUsername: targetUser.username,
+          metadata: { group },
+        });
+      }
+
+      if (currentSet.has(group) && !requestedSet.has(group)) {
+        await deps.cognitoClient.send(
+          new AdminRemoveUserFromGroupCommand({
+            GroupName: group,
+            UserPoolId: getUserPoolId(),
+            Username: username,
+          }),
+        );
+        await logAuditEvent(context, "admin.user_group_removed", "success", deps, {
+          targetUserId: targetUser.sub,
+          targetUsername: targetUser.username,
+          metadata: { group },
+        });
+      }
+    }
+
+    const user = await getTenantUser(context, username, deps);
+    return json(200, { user } satisfies UpdateTenantUserGroupsResponse);
+  } catch (error) {
+    await logAuditEvent(context, "admin.user_groups.update", "failed", deps, {
+      targetUsername: username,
+      metadata: {
+        message: error instanceof Error ? error.message : "Unexpected error",
+      },
+    });
+    throw error;
+  }
+};
+
+const runAdminReset = async (
+  context: RequestContext,
+  action: string,
+  deps: HandlerDependencies,
+) => {
+  await requireAdminContext(context, deps, "admin.tenant_reset.run");
+
+  try {
+    let summary: AdminResetSummary;
+    if (action === "tenant_all") {
+      summary = await resetEntireTenant(context, deps);
+    } else if (action === "google_cached_events") {
+      summary = await resetGoogleCachedEvents(context, deps);
+    } else if (action === "google_connections") {
+      summary = await resetGoogleConnections(context, deps);
+    } else if (action === "visitations") {
+      summary = await resetVisitations(context, deps);
+    } else if (action === "members") {
+      summary = await resetMembers(context, deps);
+    } else if (action === "audit_logs") {
+      summary = await resetAuditLogs(context, deps);
+    } else {
+      throw new HttpError(404, "Reset action not found.");
+    }
+
+    await logAuditEvent(context, `admin.reset.${summary.action}`, "success", deps, {
+      deletionCounts: Object.fromEntries(summary.affectedEntities.map((entry) => [entry.entityType, entry.deleted])),
+    });
+    return json(200, summary);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      await logAuditEvent(context, `admin.reset.${action}`, "failed", deps, {
+        metadata: { message: error.message },
+      });
+      throw error;
+    }
+
+    await logAuditEvent(context, `admin.reset.${action}`, "failed", deps, {
+      metadata: { message: error instanceof Error ? error.message : "Unexpected error" },
+    });
+    throw error;
+  }
+};
+
 export const createHandler = (overrides: Partial<HandlerDependencies> = {}): APIGatewayProxyHandlerV2 => {
   const deps: HandlerDependencies = {
     ...defaultDependencies,
@@ -4026,6 +4639,8 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       const context = getContext(typedEvent);
       const calendarId = typedEvent.pathParameters?.calendarId;
       const eventId = typedEvent.pathParameters?.eventId;
+      const username = typedEvent.pathParameters?.username;
+      const resetAction = typedEvent.pathParameters?.action;
 
       if (method === "GET" && path === "/members") {
         return await getMembers(context, deps);
@@ -4203,6 +4818,23 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       if (path === `/schedule/calendars/${calendarId}/cache` && calendarId && method === "DELETE") {
         return await clearCalendarCache(context, calendarId, deps);
+      }
+
+      if (method === "GET" && path === "/admin/users") {
+        return await getAdminUsers(context, deps);
+      }
+
+      if (path === `/admin/users/${username}/groups` && username && method === "PUT") {
+        return await updateAdminUserGroups(
+          context,
+          username,
+          parseBody<UpdateTenantUserGroupsInput>(typedEvent.body),
+          deps,
+        );
+      }
+
+      if (path === `/admin/reset/${resetAction}` && resetAction && method === "POST") {
+        return await runAdminReset(context, resetAction, deps);
       }
 
       return json(404, { message: "Route not found." });

@@ -361,7 +361,15 @@ export const CalendarSettingsPage = () => {
           </div>
           <Badge variant={connected ? "success" : "warning"}>{connected ? "Connected" : "Not Connected"}</Badge>
         </CardHeader>
-        <CardContent className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        <CardContent className="space-y-3">
+          {!overview.oauthConfigured ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              Google OAuth is not configured on the API yet. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+              `GOOGLE_REDIRECT_URI` for the backend, then redeploy Amplify so the Connect Google button becomes available.
+            </div>
+          ) : null}
+
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-md bg-slate-50 p-3">
             <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Connected Account</p>
             <p className="mt-1 text-sm font-medium text-slate-900">
@@ -397,6 +405,7 @@ export const CalendarSettingsPage = () => {
                 Disconnect
               </Button>
             )}
+          </div>
           </div>
         </CardContent>
       </Card>

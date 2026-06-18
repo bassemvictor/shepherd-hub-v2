@@ -2404,3 +2404,548 @@ test("creating a schedule event stores the Google event id as the canonical even
   assert.equal((putEventCommand?.input.Item as { eventId?: string }).eventId, "google-event-1");
   assert.equal((putEventCommand?.input.Item as { SK?: string }).SK, "EVENT#calendar-1#google-event-1");
 });
+
+test("admin routes reject non-admin users and write an audit log", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+        return {};
+      },
+    },
+    now: () => "2026-06-17T12:00:00.000Z",
+    uuid: () => "audit-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/users",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": ["servant"],
+              "custom:tenantId": "tenant-abc",
+              email: "servant@example.com",
+              name: "Servant Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 403);
+  const auditPut = commands.find((command) => command.name === "PutCommand");
+  assert.equal((auditPut?.input.Item as { entityType?: string }).entityType, "AUDIT_LOG");
+  assert.equal((auditPut?.input.Item as { resultStatus?: string }).resultStatus, "failed");
+});
+
+test("admin group updates prevent removing your own admin role", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  const documentCommands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    cognitoClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "AdminGetUserCommand") {
+          return {
+            Username: "owner@example.com",
+            UserStatus: "CONFIRMED",
+            UserAttributes: [
+              { Name: "sub", Value: "user-123" },
+              { Name: "email", Value: "owner@example.com" },
+              { Name: "name", Value: "Owner Example" },
+              { Name: "custom:tenantId", Value: "tenant-abc" },
+            ],
+          };
+        }
+
+        if (command.constructor.name === "AdminListGroupsForUserCommand") {
+          return {
+            Groups: [{ GroupName: "admin" }, { GroupName: "priest" }],
+          };
+        }
+
+        throw new Error(`Unexpected Cognito command: ${command.constructor.name}`);
+      },
+    },
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        documentCommands.push({ name: command.constructor.name, input: command.input });
+        return {};
+      },
+    },
+    now: () => "2026-06-17T12:00:00.000Z",
+    uuid: () => "audit-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/users/owner@example.com/groups",
+      pathParameters: {
+        username: "owner@example.com",
+      },
+      body: JSON.stringify({ groups: ["priest"] }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": ["admin"],
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "PUT",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 400);
+  assert.match(String(response.body), /cannot remove your own admin access/i);
+  const failureAudit = documentCommands.find((command) => command.name === "PutCommand");
+  assert.equal((failureAudit?.input.Item as { resultStatus?: string }).resultStatus, "failed");
+});
+
+test("google cached event reset deletes cached events using the event owner partition", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "ScanCommand") {
+          return {
+            Items: [
+              {
+                PK: "USER#owner-456",
+                SK: "EVENT#calendar-1#event-1",
+                createdAt: "2026-06-11T03:00:46.732Z",
+                updatedAt: "2026-06-12T21:48:21.981Z",
+                entityType: "schedule_event",
+                tenantId: "SGSA_Church",
+                userId: "owner-456",
+                calendarId: "calendar-1",
+                eventId: "event-1",
+                googleEventId: "event-1",
+                calendarName: "Main Calendar",
+                summary: "TEST bwanis",
+                start: "2026-05-10T09:00:00-04:00",
+                end: "2026-05-10T10:00:00-04:00",
+                allDay: false,
+                status: "confirmed",
+                source: "GOOGLE",
+                memberIds: [],
+                memberNames: [],
+              },
+              {
+                PK: "TENANT#SGSA_Church#EVENT#event-1",
+                SK: "MEMBER#member-1",
+                createdAt: "2026-06-11T03:00:46.732Z",
+                updatedAt: "2026-06-12T21:48:21.981Z",
+                entityType: "EVENT_MEMBER",
+                tenantId: "SGSA_Church",
+                calendarId: "calendar-1",
+                eventId: "event-1",
+                calendarOwnerUserId: "owner-456",
+                calendarOwnerName: "Calendar Owner",
+                memberId: "member-1",
+                memberName: "Member One",
+                sourceSnapshot: "MANUAL",
+                eventTitle: "TEST bwanis",
+                eventStart: "2026-05-10T09:00:00-04:00",
+                eventEnd: "2026-05-10T10:00:00-04:00",
+                assignmentStatus: "assigned",
+                visitStatus: "scheduled",
+                createdByUserId: "admin-123",
+                createdByName: "Admin Example",
+              },
+              {
+                PK: "TENANT#SGSA_Church#VISITATION#EVENT#calendar-1#event-1",
+                SK: "MEMBER#member-1",
+                createdAt: "2026-06-11T03:00:46.732Z",
+                updatedAt: "2026-06-12T21:48:21.981Z",
+                entityType: "VISITATION",
+                tenantId: "SGSA_Church",
+                visitationId: "EVENT#calendar-1#event-1",
+                source: "calendar",
+                memberId: "member-1",
+                memberIds: ["member-1"],
+                memberNames: ["Member One"],
+                visitorUserId: "owner-456",
+                visitorDisplayName: "Calendar Owner",
+                createdByUserId: "owner-456",
+                createdByName: "Calendar Owner",
+                visitDate: "2026-05-10T09:00:00-04:00",
+                title: "TEST bwanis",
+                visitStatus: "scheduled",
+                eventId: "event-1",
+                calendarEventId: "event-1",
+                calendarId: "calendar-1",
+                calendarOwnerUserId: "owner-456",
+                calendarOwnerName: "Calendar Owner",
+              },
+            ],
+          };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-17T12:00:00.000Z",
+    uuid: () => "audit-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/reset/google_cached_events",
+      pathParameters: {
+        action: "google_cached_events",
+      },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": ["admin"],
+              "custom:tenantId": "SGSA_Church",
+              email: "admin@example.com",
+              name: "Admin Example",
+              sub: "admin-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(JSON.parse(String(response.body)), {
+    action: "google_cached_events",
+    recordsDeleted: 3,
+    affectedEntities: [
+      { entityType: "EVENT_MEMBER", deleted: 1 },
+      { entityType: "schedule_event", deleted: 1 },
+      { entityType: "VISITATION", deleted: 1 },
+    ],
+    status: "success",
+  });
+  const batchWriteCommand = commands.find((command) => command.name === "BatchWriteCommand");
+  assert.deepEqual(batchWriteCommand?.input.RequestItems, {
+    "records-table": [
+      {
+        DeleteRequest: {
+          Key: {
+            PK: "USER#owner-456",
+            SK: "EVENT#calendar-1#event-1",
+          },
+        },
+      },
+      {
+        DeleteRequest: {
+          Key: {
+            PK: "TENANT#SGSA_Church#EVENT#event-1",
+            SK: "MEMBER#member-1",
+          },
+        },
+      },
+      {
+        DeleteRequest: {
+          Key: {
+            PK: "TENANT#SGSA_Church#VISITATION#EVENT#calendar-1#event-1",
+            SK: "MEMBER#member-1",
+          },
+        },
+      },
+    ],
+  });
+});
+
+test("member reset deletes members and activities in a single batched pass", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "ScanCommand") {
+          return {
+            Items: [
+              {
+                PK: "TENANT#tenant-abc",
+                SK: "MEMBER#member-1",
+                createdAt: "2026-06-11T03:00:46.732Z",
+                updatedAt: "2026-06-12T21:48:21.981Z",
+                entityType: "MEMBER",
+                tenantId: "tenant-abc",
+                memberId: "member-1",
+                fullName: "Member One",
+                initials: "MO",
+                source: "MANUAL",
+                isUnityMember: false,
+                normalizedSearchText: "member one",
+              },
+              {
+                PK: "TENANT#tenant-abc#MEMBER#member-1",
+                SK: "ACTIVITY#activity-1",
+                createdAt: "2026-06-11T03:00:46.732Z",
+                updatedAt: "2026-06-12T21:48:21.981Z",
+                entityType: "MEMBER_ACTIVITY",
+                tenantId: "tenant-abc",
+                activityId: "activity-1",
+                action: "Member Created",
+                message: "Created.",
+                actorUserId: "admin-123",
+                actorDisplayName: "Admin Example",
+              },
+            ],
+          };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-17T12:00:00.000Z",
+    uuid: () => "audit-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/reset/members",
+      pathParameters: {
+        action: "members",
+      },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": ["admin"],
+              "custom:tenantId": "tenant-abc",
+              email: "admin@example.com",
+              name: "Admin Example",
+              sub: "admin-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(commands.filter((command) => command.name === "ScanCommand").length, 1);
+  assert.equal(commands.filter((command) => command.name === "QueryCommand").length, 0);
+  assert.deepEqual(JSON.parse(String(response.body)), {
+    action: "members",
+    recordsDeleted: 2,
+    affectedEntities: [
+      { entityType: "MEMBER", deleted: 1 },
+      { entityType: "MEMBER_ACTIVITY", deleted: 1 },
+    ],
+    status: "success",
+  });
+});
+
+test("admin endpoints accept stringified cognito group claims", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  const handler = createHandler({
+    cognitoClient: {
+      send: async (command: { constructor: { name: string } }) => {
+        if (command.constructor.name === "ListUsersCommand") {
+          return {
+            Users: [],
+          };
+        }
+
+        throw new Error(`Unexpected Cognito command: ${command.constructor.name}`);
+      },
+    },
+    documentClient: {
+      send: async () => ({}),
+    },
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/users",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": "[\"admin\"]",
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+});
+
+test("admin endpoints accept bracketed cognito group claims", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  const handler = createHandler({
+    cognitoClient: {
+      send: async (command: { constructor: { name: string } }) => {
+        if (command.constructor.name === "ListUsersCommand") {
+          return {
+            Users: [],
+          };
+        }
+
+        throw new Error(`Unexpected Cognito command: ${command.constructor.name}`);
+      },
+    },
+    documentClient: {
+      send: async () => ({}),
+    },
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/users",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": "[admin]",
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+});
+
+test("admin user listing filters tenant users locally without a Cognito filter", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  const listUsersInputs: Array<Record<string, unknown>> = [];
+  const handler = createHandler({
+    cognitoClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "ListUsersCommand") {
+          listUsersInputs.push(command.input);
+          return {
+            Users: [
+              {
+                Username: "admin@example.com",
+                Enabled: true,
+                UserStatus: "CONFIRMED",
+                Attributes: [
+                  { Name: "sub", Value: "user-123" },
+                  { Name: "email", Value: "admin@example.com" },
+                  { Name: "name", Value: "Admin Example" },
+                  { Name: "custom:tenantId", Value: "tenant-abc" },
+                ],
+              },
+              {
+                Username: "other@example.com",
+                Enabled: true,
+                UserStatus: "CONFIRMED",
+                Attributes: [
+                  { Name: "sub", Value: "user-456" },
+                  { Name: "email", Value: "other@example.com" },
+                  { Name: "name", Value: "Other Example" },
+                  { Name: "custom:tenantId", Value: "tenant-other" },
+                ],
+              },
+            ],
+          };
+        }
+
+        if (command.constructor.name === "AdminListGroupsForUserCommand") {
+          return {
+            Groups: [{ GroupName: "admin" }],
+          };
+        }
+
+        throw new Error(`Unexpected Cognito command: ${command.constructor.name}`);
+      },
+    },
+    documentClient: {
+      send: async () => ({}),
+    },
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/users",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": ["admin"],
+              "custom:tenantId": "tenant-abc",
+              email: "admin@example.com",
+              name: "Admin Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(listUsersInputs.length, 1);
+  assert.equal(listUsersInputs[0]?.Filter, undefined);
+  assert.match(String(response.body), /admin@example\.com/);
+  assert.doesNotMatch(String(response.body), /other@example\.com/);
+});

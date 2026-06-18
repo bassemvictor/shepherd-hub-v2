@@ -49,28 +49,58 @@ export const ALL_GROUPS: AppCognitoGroup[] = [
   "pricing_engineer",
   "admin",
   "super_user",
+  "priest",
+  "servant",
 ];
 
 const isAppGroup = (value: string): value is AppCognitoGroup =>
   ALL_GROUPS.includes(value as AppCognitoGroup);
 
-const normalizeGroups = (rawGroups: unknown): AppCognitoGroup[] => {
+const normalizeGroupEntries = (rawGroups: unknown): string[] => {
   if (Array.isArray(rawGroups)) {
-    return rawGroups.map((group) => String(group)).filter(isAppGroup);
+    return rawGroups.flatMap((group) => normalizeGroupEntries(group));
   }
 
-  if (typeof rawGroups === "string" && rawGroups.trim()) {
-    return isAppGroup(rawGroups) ? [rawGroups] : [];
+  if (typeof rawGroups !== "string") {
+    return [];
   }
 
-  return [];
+  const trimmed = rawGroups.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? normalizeGroupEntries(parsed) : [];
+    } catch {
+      const unwrapped = trimmed.slice(1, -1).trim();
+      return unwrapped
+        .split(",")
+        .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
+        .filter(Boolean);
+    }
+  }
+
+  return trimmed
+    .split(",")
+    .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
+    .filter(Boolean);
+};
+
+const normalizeGroups = (rawGroups: unknown): AppCognitoGroup[] => {
+  return [...new Set(normalizeGroupEntries(rawGroups).filter(isAppGroup))];
 };
 
 export const hasAnyGroup = (groups: readonly AppCognitoGroup[], allowedGroups: readonly AppCognitoGroup[]) =>
   allowedGroups.some((group) => groups.includes(group));
 
 export const canManageAccess = (groups: readonly AppCognitoGroup[]) =>
-  hasAnyGroup(groups, ["admin", "super_user"]);
+  hasAnyGroup(groups, ["admin"]);
+
+export const isAdminUser = (groups: readonly AppCognitoGroup[]) =>
+  hasAnyGroup(groups, ["admin"]);
 
 const buildUserFromSession = async (): Promise<AppAuthUser | null> => {
   const currentUser = await getCurrentUser();
@@ -190,6 +220,8 @@ export const useAuth = () => {
 
 export const groupLabelMap: Record<string, string> = {
   admin: "Admin",
+  priest: "Priest",
+  servant: "Servant",
   sales_manager: "Sales Manager",
   pricing_engineer: "Pricing Engineer",
   sales_engineer: "Sales Engineer",

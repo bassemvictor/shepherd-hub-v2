@@ -10,7 +10,11 @@ export type AppCognitoGroup =
   | "sales_manager"
   | "pricing_engineer"
   | "admin"
-  | "super_user";
+  | "super_user"
+  | "priest"
+  | "servant";
+
+export type AdminManagedGroup = "admin" | "priest" | "servant";
 
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";
@@ -431,4 +435,45 @@ export type UpdateManualVisitationInput = Partial<CreateManualVisitationInput>;
 export type MemberImportInput = {
   fileName: string;
   workbookBase64: string;
+};
+
+export type TenantUserSummary = {
+  username: string;
+  sub: string;
+  email: string;
+  name: string;
+  tenantId: string;
+  enabled: boolean;
+  status?: string;
+  groups: AppCognitoGroup[];
+};
+
+export type TenantUsersResponse = {
+  items: TenantUserSummary[];
+};
+
+export type UpdateTenantUserGroupsInput = {
+  groups: AdminManagedGroup[];
+};
+
+export type UpdateTenantUserGroupsResponse = {
+  user: TenantUserSummary;
+};
+
+export type AdminResetAction =
+  | "tenant_all"
+  | "google_cached_events"
+  | "google_connections"
+  | "visitations"
+  | "members"
+  | "audit_logs";
+
+export type AdminResetSummary = {
+  action: AdminResetAction;
+  recordsDeleted: number;
+  affectedEntities: Array<{
+    entityType: string;
+    deleted: number;
+  }>;
+  status: "success" | "error";
 };

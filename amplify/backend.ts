@@ -4,6 +4,7 @@ import { CorsHttpMethod, HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
+import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 
 import { auth } from "./auth/resource.js";
 import { projectTemplateApi } from "./functions/project-template-api/resource.js";
@@ -68,6 +69,7 @@ recordsTable.addGlobalSecondaryIndex({
 });
 
 backend.projectTemplateApi.addEnvironment("PROJECT_TEMPLATE_TABLE", recordsTable.tableName);
+backend.projectTemplateApi.addEnvironment("COGNITO_USER_POOL_ID", backend.auth.resources.userPool.userPoolId);
 backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID ?? "");
 backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_SECRET", process.env.GOOGLE_CLIENT_SECRET ?? "");
 backend.projectTemplateApi.addEnvironment("GOOGLE_REDIRECT_URI", process.env.GOOGLE_REDIRECT_URI ?? "");
@@ -76,6 +78,19 @@ backend.projectTemplateApi.addEnvironment(
   process.env.GOOGLE_OAUTH_SUCCESS_REDIRECT_URL ?? "",
 );
 recordsTable.grantReadWriteData(backend.projectTemplateApi.resources.lambda);
+backend.projectTemplateApi.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: [
+      "cognito-idp:AdminAddUserToGroup",
+      "cognito-idp:AdminGetUser",
+      "cognito-idp:AdminListGroupsForUser",
+      "cognito-idp:AdminRemoveUserFromGroup",
+      "cognito-idp:ListUsers",
+    ],
+    resources: [backend.auth.resources.userPool.userPoolArn],
+  }),
+);
 
 const httpApi = new HttpApi(apiStack, "ProjectTemplateHttpApi", {
   apiName: "projectTemplateApi",
@@ -134,6 +149,9 @@ addProtectedRoutes("/schedule/sync", [HttpMethod.POST]);
 addProtectedRoutes("/schedule/cache", [HttpMethod.DELETE]);
 addProtectedRoutes("/schedule/events", [HttpMethod.GET, HttpMethod.POST]);
 addProtectedRoutes("/schedule/events/{eventId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/admin/users", [HttpMethod.GET]);
+addProtectedRoutes("/admin/users/{username}/groups", [HttpMethod.PUT]);
+addProtectedRoutes("/admin/reset/{action}", [HttpMethod.POST]);
 
 httpApi.addRoutes({
   path: "/schedule/google/callback",

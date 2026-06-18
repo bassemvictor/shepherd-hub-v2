@@ -209,6 +209,30 @@ Backend infrastructure is defined in [amplify/backend.ts](/Users/sallysamuel/wor
 - `POST /schedule/events`
 - `PUT /schedule/events/{eventId}`
 - `DELETE /schedule/events/{eventId}`
+- `GET /admin/users`
+- `PUT /admin/users/{username}/groups`
+- `POST /admin/reset/{action}`
+
+## Admin groups and reset tools
+
+- Cognito now supports `admin`, `priest`, and `servant` in addition to the existing legacy groups already present in the template.
+- Admin-only pages live at `/admin/user-groups` and `/admin/tenant-reset`.
+- Frontend visibility is claim-based, but the Lambda also enforces the `admin` group on every `/admin/*` API.
+- Tenant user listing comes from Cognito `ListUsers` filtered by `custom:tenantId`, and group changes use Cognito admin group APIs after re-validating the target user belongs to the same tenant.
+- Tenant reset actions are always scoped by the tenant id found in JWT claims and write `AUDIT_LOG` records for successful and failed admin actions.
+
+## Validation checklist
+
+1. Ensure Cognito users have the `custom:tenantId` attribute populated and assign at least one admin user to the `admin` group.
+2. Visit `/admin/user-groups` as an admin and verify group assignments succeed for another user and that your own `admin` checkbox cannot be removed.
+3. Visit `/admin/tenant-reset` and confirm each action requires typing `RESET` before the API call can run.
+4. Run a non-destructive reset such as `Delete auditing events` in a test tenant and confirm the response includes deleted counts by entity type.
+5. Confirm a non-admin user cannot load either admin page or call `/admin/users` or `/admin/reset/{action}` directly.
+
+## Test commands
+
+- `npm run test:lambda`
+- `npm run build`
 
 ### DynamoDB shape
 

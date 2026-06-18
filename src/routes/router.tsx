@@ -1,8 +1,11 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 
 import { ProtectedRoute } from "../components/auth/protected-route";
+import { RequireGroups } from "../components/auth/require-groups";
 import { AppShell } from "../components/layout/app-shell";
 import { AuthPage } from "../pages/auth-page";
+import { AdminTenantResetPage } from "../pages/admin-tenant-reset-page";
+import { AdminUserGroupsPage } from "../pages/admin-user-groups-page";
 import { CalendarSettingsPage } from "../pages/calendar-settings-page";
 import { MemberDetailPage } from "../pages/member-detail-page";
 import { MembersPage } from "../pages/members-page";
@@ -58,6 +61,22 @@ export const router = createBrowserRouter([
       {
         path: "members/:memberId",
         element: <MemberDetailPage />,
+      },
+      {
+        path: "admin/user-groups",
+        element: (
+          <RequireGroups groups={["admin"]}>
+            <AdminUserGroupsPage />
+          </RequireGroups>
+        ),
+      },
+      {
+        path: "admin/tenant-reset",
+        element: (
+          <RequireGroups groups={["admin"]}>
+            <AdminTenantResetPage />
+          </RequireGroups>
+        ),
       },
       {
         path: "*",
