@@ -397,14 +397,14 @@ const normalizeGroupEntries = (rawGroups: unknown): string[] => {
     } catch {
       const unwrapped = trimmed.slice(1, -1).trim();
       return unwrapped
-        .split(",")
+        .split(/[,\s]+/)
         .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
         .filter(Boolean);
     }
   }
 
   return trimmed
-    .split(",")
+    .split(trimmed.includes(",") ? "," : /\s+/)
     .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
     .filter(Boolean);
 };
@@ -1241,14 +1241,58 @@ const requireAdminContext = async (
     return;
   }
 
+  const actorGroups = await getActorGroups(context, deps);
+  if (actorGroups.some(isAdminGroup)) {
+    return;
+  }
+
   await logAuditEvent(context, actionType, "failed", deps, {
     metadata: {
       reason: "forbidden",
-      actorGroups: context.actorGroups,
+      actorGroups,
     },
   });
   throw new HttpError(403, "Admin access is required.");
 };
+
+const getActorGroups = async (context: RequestContext, deps: HandlerDependencies): Promise<AppCognitoGroup[]> => {
+  try {
+    const filters = [
+      `sub = "${escapeCognitoFilterValue(context.actorSub)}"`,
+      context.actorEmail !== "unknown@example.com" ? `email = "${escapeCognitoFilterValue(context.actorEmail)}"` : "",
+    ].filter(Boolean);
+
+    for (const filter of filters) {
+      const response = await deps.cognitoClient.send(
+        new ListUsersCommand({
+          UserPoolId: getUserPoolId(),
+          Filter: filter,
+          Limit: 1,
+        }),
+      );
+
+      const username = response.Users?.[0]?.Username;
+      if (!username) {
+        continue;
+      }
+
+      const groupsResponse = await deps.cognitoClient.send(
+        new AdminListGroupsForUserCommand({
+          UserPoolId: getUserPoolId(),
+          Username: username,
+        }),
+      );
+
+      return normalizeGroups((groupsResponse.Groups ?? []).map((group) => group.GroupName ?? ""));
+    }
+  } catch {
+    return context.actorGroups;
+  }
+
+  return context.actorGroups;
+};
+
+const escapeCognitoFilterValue = (value: string) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
 const toTenantUserSummary = (
   username: string,

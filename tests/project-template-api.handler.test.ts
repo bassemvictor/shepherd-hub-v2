@@ -2450,6 +2450,70 @@ test("admin routes reject non-admin users and write an audit log", async () => {
   assert.equal((auditPut?.input.Item as { resultStatus?: string }).resultStatus, "failed");
 });
 
+test("admin routes fall back to Cognito groups when the token omits admin", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  let actorLookupCalls = 0;
+  const handler = createHandler({
+    cognitoClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "ListUsersCommand") {
+          actorLookupCalls += 1;
+          if (actorLookupCalls === 1) {
+            assert.equal(command.input.Filter, "sub = \"user-123\"");
+            return {
+              Users: [{ Username: "owner@example.com" }],
+            };
+          }
+
+          assert.equal(command.input.Filter, undefined);
+          return {
+            Users: [],
+          };
+        }
+
+        if (command.constructor.name === "AdminListGroupsForUserCommand") {
+          assert.equal(command.input.Username, "owner@example.com");
+          return {
+            Groups: [{ GroupName: "sales_manager" }, { GroupName: "admin" }, { GroupName: "servant" }],
+          };
+        }
+
+        throw new Error(`Unexpected Cognito command: ${command.constructor.name}`);
+      },
+    },
+    documentClient: {
+      send: async () => ({}),
+    },
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/users",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": ["servant"],
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+});
+
 test("admin group updates prevent removing your own admin role", async () => {
   process.env.PROJECT_TEMPLATE_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
@@ -2849,6 +2913,53 @@ test("admin endpoints accept bracketed cognito group claims", async () => {
           jwt: {
             claims: {
               "cognito:groups": "[admin]",
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+});
+
+test("admin endpoints accept whitespace-delimited cognito group claims", async () => {
+  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
+  const handler = createHandler({
+    cognitoClient: {
+      send: async (command: { constructor: { name: string } }) => {
+        if (command.constructor.name === "ListUsersCommand") {
+          return {
+            Users: [],
+          };
+        }
+
+        throw new Error(`Unexpected Cognito command: ${command.constructor.name}`);
+      },
+    },
+    documentClient: {
+      send: async () => ({}),
+    },
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/admin/users",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "cognito:groups": "[sales_manager priest admin servant]",
               "custom:tenantId": "tenant-abc",
               email: "owner@example.com",
               name: "Owner Example",

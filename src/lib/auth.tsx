@@ -77,14 +77,14 @@ const normalizeGroupEntries = (rawGroups: unknown): string[] => {
     } catch {
       const unwrapped = trimmed.slice(1, -1).trim();
       return unwrapped
-        .split(",")
+        .split(/[,\s]+/)
         .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
         .filter(Boolean);
     }
   }
 
   return trimmed
-    .split(",")
+    .split(trimmed.includes(",") ? "," : /\s+/)
     .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
     .filter(Boolean);
 };

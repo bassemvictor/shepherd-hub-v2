@@ -96,6 +96,13 @@ const MOBILE_BETA_SLOT_MINUTES = 30;
 const MOBILE_BETA_DAY_START_HOUR = 6;
 const MOBILE_BETA_DAY_END_HOUR = 24;
 const MOBILE_BETA_TAB_STORAGE_KEY = "schedule-beta-mobile-tab";
+const EVENT_DURATION_PRESETS = [
+  { label: "15 min", minutes: 15 },
+  { label: "30 min", minutes: 30 },
+  { label: "1 hr", minutes: 60 },
+  { label: "1.5 hr", minutes: 90 },
+  { label: "2 hr", minutes: 120 },
+] as const;
 
 const normalizeHexColor = (value?: string | null) => {
   const color = value?.trim();
@@ -408,6 +415,16 @@ const snapDateTimeInputToQuarterHour = (value: string, mode: "floor" | "ceil" | 
   return parsed ? toLocalDateTimeInputFromDate(snapDateToQuarterHour(parsed, mode)) : value;
 };
 
+const updateLocalDateTimeInputDate = (value: string, nextDate: string) => {
+  const time = /^\d{2}:\d{2}$/.test(value.slice(11, 16)) ? value.slice(11, 16) : "09:00";
+  return snapDateTimeInputToQuarterHour(`${nextDate}T${time}`);
+};
+
+const updateLocalDateTimeInputTime = (value: string, nextTime: string) => {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value.slice(0, 10)) ? value.slice(0, 10) : toDateOnlyValue(new Date());
+  return snapDateTimeInputToQuarterHour(`${date}T${nextTime}`);
+};
+
 const localInputToIso = (value: string, allDay: boolean, boundary: "start" | "end") => {
   if (allDay) {
     return boundary === "start" ? value : shiftDateOnlyValue(value, 1);
@@ -618,7 +635,17 @@ const EventEditor = ({
   const primaryActionLabel = mode === "create" ? "Create Event" : "Save Changes";
   const sectionCardClassName = "space-y-3 rounded-[1.2rem] border border-border/80 bg-card/96 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur dark:shadow-[0_14px_32px_rgba(0,0,0,0.24)] sm:p-3.5";
   const fieldClassName = "h-10 rounded-xl border-border bg-card px-3 text-sm shadow-sm shadow-slate-200/35 transition focus:border-primary focus:ring-primary/10 dark:shadow-black/20";
-  const allDayLabel = form.allDay ? "All-day event" : "Specific start and end time";
+
+  const applyDurationPreset = (minutes: number) => {
+    const startDate = parseLocalDateTimeInput(form.start);
+    if (!startDate) {
+      return;
+    }
+
+    const nextEnd = new Date(startDate);
+    nextEnd.setMinutes(nextEnd.getMinutes() + minutes);
+    onChange({ ...form, end: toLocalDateTimeInputFromDate(nextEnd) });
+  };
 
   const content = (
     <div className="space-y-3">
@@ -721,40 +748,91 @@ const EventEditor = ({
             <h4 className="text-lg font-semibold tracking-tight">Start &amp; End</h4>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-2.5">
-          <label className="space-y-1.5 rounded-xl border border-border bg-card px-3 py-2.5 shadow-sm shadow-slate-200/35 dark:shadow-black/20">
+        <div className="grid grid-cols-2 gap-2">
+          <label className="space-y-1 rounded-xl border border-border bg-card px-2.5 py-2 shadow-sm shadow-slate-200/35 dark:shadow-black/20">
             <span className="text-sm font-medium text-muted-foreground">Start</span>
-            <div className="relative">
-              <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
-                onChange={(event) => onChange({
-                  ...form,
-                  start: form.allDay ? event.target.value : snapDateTimeInputToQuarterHour(event.target.value),
-                })}
-                step={form.allDay ? undefined : 900}
-                type={form.allDay ? "date" : "datetime-local"}
-                value={form.start}
-              />
-            </div>
+            {form.allDay ? (
+              <div className="relative">
+                <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
+                  onChange={(event) => onChange({ ...form, start: event.target.value })}
+                  type="date"
+                  value={form.start}
+                />
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="relative">
+                  <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
+                    onChange={(event) => onChange({ ...form, start: updateLocalDateTimeInputDate(form.start, event.target.value) })}
+                    type="date"
+                    value={form.start.slice(0, 10)}
+                  />
+                </div>
+                <Input
+                  className="h-8 rounded-lg border-border/80 bg-muted/20 px-2.5 text-sm shadow-none"
+                  onChange={(event) => onChange({ ...form, start: updateLocalDateTimeInputTime(form.start, event.target.value) })}
+                  step={900}
+                  type="time"
+                  value={form.start.slice(11, 16)}
+                />
+              </div>
+            )}
           </label>
-          <label className="space-y-1.5 rounded-xl border border-border bg-card px-3 py-2.5 shadow-sm shadow-slate-200/35 dark:shadow-black/20">
+          <label className="space-y-1 rounded-xl border border-border bg-card px-2.5 py-2 shadow-sm shadow-slate-200/35 dark:shadow-black/20">
             <span className="text-sm font-medium text-muted-foreground">End</span>
-            <div className="relative">
-              <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
-                onChange={(event) => onChange({
-                  ...form,
-                  end: form.allDay ? event.target.value : snapDateTimeInputToQuarterHour(event.target.value),
-                })}
-                step={form.allDay ? undefined : 900}
-                type={form.allDay ? "date" : "datetime-local"}
-                value={form.end}
-              />
-            </div>
+            {form.allDay ? (
+              <div className="relative">
+                <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
+                  onChange={(event) => onChange({ ...form, end: event.target.value })}
+                  type="date"
+                  value={form.end}
+                />
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="relative">
+                  <Clock3 className="pointer-events-none absolute left-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    className="h-7 border-0 bg-transparent px-0 pl-7 text-sm shadow-none focus:border-0 focus:ring-0"
+                    onChange={(event) => onChange({ ...form, end: updateLocalDateTimeInputDate(form.end, event.target.value) })}
+                    type="date"
+                    value={form.end.slice(0, 10)}
+                  />
+                </div>
+                <Input
+                  className="h-8 rounded-lg border-border/80 bg-muted/20 px-2.5 text-sm shadow-none"
+                  onChange={(event) => onChange({ ...form, end: updateLocalDateTimeInputTime(form.end, event.target.value) })}
+                  step={900}
+                  type="time"
+                  value={form.end.slice(11, 16)}
+                />
+              </div>
+            )}
           </label>
         </div>
+        {!form.allDay ? (
+          <div className="space-y-1">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Duration</div>
+            <div className="grid grid-cols-5 gap-1.5">
+              {EVENT_DURATION_PRESETS.map((preset) => (
+                <button
+                  key={preset.minutes}
+                  className="schedule-beta-slot-pill min-h-0 px-2 py-1 text-[0.7rem]"
+                  onClick={() => applyDurationPreset(preset.minutes)}
+                  type="button"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <label className="flex items-center gap-2.5 text-sm font-medium text-foreground">
           <Checkbox
             checked={form.allDay}
