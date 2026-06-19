@@ -2015,7 +2015,7 @@ test("schedule overview excludes user-owned records from a different tenant", as
     calendars: [],
     oauthConfigured: false,
     settings: {
-      calendarListRefreshThresholdMinutes: 30,
+      calendarListRefreshThresholdMinutes: 10080,
     },
   });
 });

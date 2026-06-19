@@ -476,7 +476,7 @@ const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
 const isAdminGroup = (group: AppCognitoGroup) => group === "admin";
 
-const defaultCalendarListRefreshThresholdMinutes = 30;
+const defaultCalendarListRefreshThresholdMinutes = 60 * 24 * 7;
 
 const defaultInitialSyncRange = (nowIso: string): InitialSyncRange => {
   const now = new Date(nowIso);
@@ -2731,8 +2731,8 @@ const syncCalendarListFromGoogle = async (
   for (const entry of googleCalendars) {
     const existing = existingById.get(entry.id);
     const sync = existing?.sync ?? {
-      syncMode: entry.primary ? "ALWAYS_GOOGLE" : "CACHE_UNTIL_STALE",
-      refreshIntervalMinutes: entry.primary ? 15 : 60 * 24,
+      syncMode: "CACHE_UNTIL_STALE",
+      refreshIntervalMinutes: entry.primary ? 5 : 60 * 24,
       initialSyncRange: defaultInitialSyncRange(now),
       lastSyncStatus: "idle" as SyncStatus,
       requiresFullSync: true,

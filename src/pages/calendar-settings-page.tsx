@@ -32,6 +32,8 @@ import {
 
 type CalendarSettingsDraft = UpdateCalendarSettingsInput & { calendarId: string };
 
+const defaultCalendarListRefreshThresholdMinutes = 10080;
+
 const toDraft = (calendar: ScheduleCalendar): CalendarSettingsDraft => ({
   calendarId: calendar.calendarId,
   showInCalendar: calendar.selected,
@@ -48,7 +50,9 @@ export const CalendarSettingsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, CalendarSettingsDraft>>({});
-  const [calendarListRefreshThresholdMinutes, setCalendarListRefreshThresholdMinutes] = useState(30);
+  const [calendarListRefreshThresholdMinutes, setCalendarListRefreshThresholdMinutes] = useState(
+    defaultCalendarListRefreshThresholdMinutes,
+  );
   const [saving, setSaving] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [refreshingList, setRefreshingList] = useState(false);
@@ -103,7 +107,8 @@ export const CalendarSettingsPage = () => {
 
   const savedPayload = useMemo(
     () => ({
-      calendarListRefreshThresholdMinutes: overview?.settings.calendarListRefreshThresholdMinutes ?? 30,
+      calendarListRefreshThresholdMinutes:
+        overview?.settings.calendarListRefreshThresholdMinutes ?? defaultCalendarListRefreshThresholdMinutes,
       calendars: sortDrafts((overview?.calendars ?? []).map(toDraft)),
     }),
     [overview],
