@@ -1816,8 +1816,8 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     }
 
     const calendarApi = calendarRef.current?.getApi();
-    const timeMin = calendarApi?.view.activeStart.toISOString();
-    const timeMax = calendarApi?.view.activeEnd.toISOString();
+    const timeMin = calendarApi?.view.activeStart.toISOString() ?? visibleRange?.timeMin ?? selectedWeek.start.toISOString();
+    const timeMax = calendarApi?.view.activeEnd.toISOString() ?? visibleRange?.timeMax ?? selectedWeek.endExclusive.toISOString();
 
     if (!timeMin || !timeMax) {
       return;
@@ -1846,7 +1846,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
       setSyncingVisible(false);
       finishSyncProgress(syncSucceeded);
     }
-  }, [activeCalendarIds, finishSyncProgress, pushToast, startSyncProgress]);
+  }, [activeCalendarIds, finishSyncProgress, pushToast, selectedWeek, startSyncProgress, visibleRange]);
 
   const handleSaveEvent = useCallback(async () => {
     const startIso = localInputToIso(form.start, form.allDay, "start");
