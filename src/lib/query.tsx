@@ -32,7 +32,7 @@ const shouldPersistQuery = (queryKey: readonly unknown[]) => queryKey[0] === "me
 export const AppQueryProvider = ({ children }: PropsWithChildren) => {
   const { user } = useAuth();
   const [queryClient] = useState(createAppQueryClient);
-  const tenantStorageKey = `project-template-query-cache:${user?.tenantId ?? "anonymous"}`;
+  const tenantStorageKey = `shepherd-hub-query-cache:${user?.tenantId ?? "anonymous"}`;
 
   const persister = useMemo(() => {
     if (typeof window === "undefined") {

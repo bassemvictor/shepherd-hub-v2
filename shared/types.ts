@@ -6,11 +6,7 @@ export type EntityEnvelope = {
 };
 
 export type AppCognitoGroup =
-  | "sales_engineer"
-  | "sales_manager"
-  | "pricing_engineer"
   | "admin"
-  | "super_user"
   | "priest"
   | "servant";
 

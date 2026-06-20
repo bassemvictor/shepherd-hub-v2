@@ -3,7 +3,7 @@ import test from "node:test";
 import type { APIGatewayProxyStructuredResultV2 } from "aws-lambda";
 import * as XLSX from "xlsx";
 
-import { createHandler } from "../amplify/functions/project-template-api/handler.js";
+import { createHandler } from "../amplify/functions/shepherd-hub-api/handler.js";
 import type { VisitationReportResponse } from "../shared/types.js";
 
 const createEvent = (overrides: Record<string, unknown> = {}) => ({
@@ -30,7 +30,7 @@ const createEvent = (overrides: Record<string, unknown> = {}) => ({
 });
 
 test("creates a member and scopes it to the tenant", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const uuids = ["member-1", "activity-1"];
   const handler = createHandler({
@@ -123,7 +123,7 @@ test("creates a member and scopes it to the tenant", async () => {
 });
 
 test("returns a validation error when required member fields are missing", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
       send: async () => {
@@ -160,7 +160,7 @@ test("returns a validation error when required member fields are missing", async
 });
 
 test("creates a member with tenant and member indexes", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const uuids = ["member-1", "activity-1"];
   const handler = createHandler({
@@ -255,7 +255,7 @@ test("creates a member with tenant and member indexes", async () => {
 });
 
 test("imports a Unity workbook when headers start below a title row", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const worksheet = XLSX.utils.aoa_to_sheet([
     ["UnityApp"],
@@ -323,7 +323,7 @@ test("imports a Unity workbook when headers start below a title row", async () =
 });
 
 test("member responses ignore legacy role and status fields from stored items", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string } }) => {
@@ -413,7 +413,7 @@ test("member responses ignore legacy role and status fields from stored items", 
 });
 
 test("members index returns only lightweight list fields for the tenant", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
@@ -499,7 +499,7 @@ test("members index returns only lightweight list fields for the tenant", async 
 });
 
 test("stores visitation member links with VISITATION type", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
 
   const handler = createHandler({
@@ -600,7 +600,7 @@ test("stores visitation member links with VISITATION type", async () => {
 });
 
 test("stores tenant visitation records under the canonical tenant event partition for the Google event id", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const writtenVisitations: Array<Record<string, unknown>> = [];
 
   const handler = createHandler({
@@ -759,7 +759,7 @@ test("stores tenant visitation records under the canonical tenant event partitio
 });
 
 test("writes memberIds into Google event private metadata when creating a schedule event", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   let googleRequestBody = "";
   let storedEvent: Record<string, unknown> | undefined;
 
@@ -933,7 +933,7 @@ test("writes memberIds into Google event private metadata when creating a schedu
 });
 
 test("full sync restores member links from Google event private metadata", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
 
   const handler = createHandler({
@@ -1153,7 +1153,7 @@ test("full sync restores member links from Google event private metadata", async
 });
 
 test("refreshed calendars return events only for the requested schedule range", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
 
   const handler = createHandler({
     documentClient: {
@@ -1299,7 +1299,7 @@ test("refreshed calendars return events only for the requested schedule range", 
 });
 
 test("member visitation history is tenant-shared and includes assignment snapshots", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
@@ -1433,7 +1433,7 @@ test("member visitation history is tenant-shared and includes assignment snapsho
 });
 
 test("member visitation history merges duplicate Unity member rows for the same tenant member", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
@@ -1610,7 +1610,7 @@ test("member visitation history merges duplicate Unity member rows for the same 
 });
 
 test("visitation reports default to all visitors and support only-my-visits filtering", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
@@ -1814,7 +1814,7 @@ test("visitation reports default to all visitors and support only-my-visits filt
 });
 
 test("manual visitation creation preserves the selected visitor while keeping the actor as creator", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const putItems: Array<Record<string, unknown>> = [];
   const handler = createHandler({
     documentClient: {
@@ -1923,7 +1923,7 @@ test("manual visitation creation preserves the selected visitor while keeping th
 });
 
 test("schedule overview excludes user-owned records from a different tenant", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
@@ -2021,7 +2021,7 @@ test("schedule overview excludes user-owned records from a different tenant", as
 });
 
 test("refreshing calendars returns a reconnect message when the stored Google token lacks calendar scope", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const handler = createHandler({
     documentClient: {
@@ -2096,7 +2096,7 @@ test("refreshing calendars returns a reconnect message when the stored Google to
 });
 
 test("refreshing calendars maps Google scope 403 errors to a reconnect message", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const handler = createHandler({
     documentClient: {
@@ -2189,7 +2189,7 @@ test("refreshing calendars maps Google scope 403 errors to a reconnect message",
 });
 
 test("clearing a calendar cache deletes cached events without deleting tenant-shared assignments", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const handler = createHandler({
     documentClient: {
@@ -2291,7 +2291,7 @@ test("clearing a calendar cache deletes cached events without deleting tenant-sh
 });
 
 test("creating a schedule event stores the Google event id as the canonical event id", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const handler = createHandler({
     documentClient: {
@@ -2406,7 +2406,7 @@ test("creating a schedule event stores the Google event id as the canonical even
 });
 
 test("admin routes reject non-admin users and write an audit log", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const handler = createHandler({
@@ -2451,7 +2451,7 @@ test("admin routes reject non-admin users and write an audit log", async () => {
 });
 
 test("admin routes fall back to Cognito groups when the token omits admin", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   let actorLookupCalls = 0;
   const handler = createHandler({
@@ -2475,7 +2475,7 @@ test("admin routes fall back to Cognito groups when the token omits admin", asyn
         if (command.constructor.name === "AdminListGroupsForUserCommand") {
           assert.equal(command.input.Username, "owner@example.com");
           return {
-            Groups: [{ GroupName: "sales_manager" }, { GroupName: "admin" }, { GroupName: "servant" }],
+            Groups: [{ GroupName: "admin" }, { GroupName: "servant" }],
           };
         }
 
@@ -2515,7 +2515,7 @@ test("admin routes fall back to Cognito groups when the token omits admin", asyn
 });
 
 test("admin group updates prevent removing your own admin role", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   const documentCommands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const handler = createHandler({
@@ -2588,7 +2588,7 @@ test("admin group updates prevent removing your own admin role", async () => {
 });
 
 test("google cached event reset deletes cached events using the event owner partition", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const handler = createHandler({
@@ -2748,7 +2748,7 @@ test("google cached event reset deletes cached events using the event owner part
 });
 
 test("member reset deletes members and activities in a single batched pass", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const handler = createHandler({
@@ -2839,7 +2839,7 @@ test("member reset deletes members and activities in a single batched pass", asy
 });
 
 test("admin endpoints accept stringified cognito group claims", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   const handler = createHandler({
     cognitoClient: {
@@ -2886,7 +2886,7 @@ test("admin endpoints accept stringified cognito group claims", async () => {
 });
 
 test("admin endpoints accept bracketed cognito group claims", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   const handler = createHandler({
     cognitoClient: {
@@ -2933,7 +2933,7 @@ test("admin endpoints accept bracketed cognito group claims", async () => {
 });
 
 test("admin endpoints accept whitespace-delimited cognito group claims", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   const handler = createHandler({
     cognitoClient: {
@@ -2959,7 +2959,7 @@ test("admin endpoints accept whitespace-delimited cognito group claims", async (
         authorizer: {
           jwt: {
             claims: {
-              "cognito:groups": "[sales_manager priest admin servant]",
+              "cognito:groups": "[priest admin servant]",
               "custom:tenantId": "tenant-abc",
               email: "owner@example.com",
               name: "Owner Example",
@@ -2980,7 +2980,7 @@ test("admin endpoints accept whitespace-delimited cognito group claims", async (
 });
 
 test("admin user listing filters tenant users locally without a Cognito filter", async () => {
-  process.env.PROJECT_TEMPLATE_TABLE = "records-table";
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   process.env.COGNITO_USER_POOL_ID = "us-east-1_example";
   const listUsersInputs: Array<Record<string, unknown>> = [];
   const handler = createHandler({

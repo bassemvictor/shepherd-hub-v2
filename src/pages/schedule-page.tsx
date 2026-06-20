@@ -104,6 +104,34 @@ const EVENT_DURATION_PRESETS = [
   { label: "2 hr", minutes: 120 },
 ] as const;
 
+const clampSyncProgress = (value: number) => Math.max(0, Math.min(100, value));
+
+const SyncProgressCalendarIcon = ({
+  className,
+  progress,
+}: {
+  className?: string;
+  progress: number;
+}) => {
+  const clampedProgress = clampSyncProgress(progress);
+
+  return (
+    <span
+      aria-hidden="true"
+      aria-valuenow={Math.round(clampedProgress)}
+      className={`schedule-sync-progress-icon ${className ?? ""}`}
+    >
+      <CalendarDays className="schedule-sync-progress-icon-base" />
+      <span
+        className="schedule-sync-progress-icon-overlay"
+        style={{ clipPath: `inset(${100 - clampedProgress}% 0 0 0)` }}
+      >
+        <CalendarDays className="schedule-sync-progress-icon-fill" />
+      </span>
+    </span>
+  );
+};
+
 const normalizeHexColor = (value?: string | null) => {
   const color = value?.trim();
   if (!color) {
@@ -1095,6 +1123,7 @@ const ScheduleBetaMobileView = ({
   onForceSyncVisible,
   renderCalendarEvent,
   scheduleLoading,
+  syncProgress,
   selectedDate,
   weekDays,
 }: {
@@ -1117,6 +1146,7 @@ const ScheduleBetaMobileView = ({
   onForceSyncVisible: () => void;
   renderCalendarEvent: (info: EventContentArg) => JSX.Element;
   scheduleLoading: boolean;
+  syncProgress: number;
   selectedDate: Date;
   weekDays: Date[];
 }) => {
@@ -1215,7 +1245,7 @@ const ScheduleBetaMobileView = ({
             type="button"
             variant="outline"
           >
-            <RefreshCcw className={`h-4 w-4 ${scheduleLoading ? "animate-spin" : ""}`} />
+            <RefreshCcw className="h-4 w-4" />
           </Button>
           <Button
             aria-label="Choose visible calendars"
@@ -1225,7 +1255,7 @@ const ScheduleBetaMobileView = ({
             type="button"
             variant="outline"
           >
-            <CalendarDays className="h-4 w-4" />
+            <SyncProgressCalendarIcon className="h-4 w-4" progress={syncProgress} />
           </Button>
         </div>
       </div>
@@ -1417,6 +1447,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
   const [syncMetadata, setSyncMetadata] = useState<ScheduleEventsResponse["calendars"]>([]);
   const [visibleCalendarIds, setVisibleCalendarIds] = useState<string[]>([]);
   const [syncingVisible, setSyncingVisible] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -1444,6 +1475,45 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     const stored = window.localStorage.getItem(MOBILE_BETA_TAB_STORAGE_KEY);
     return stored === "day" ? "day" : "list";
   });
+  const progressIntervalRef = useRef<number | null>(null);
+
+  const clearSyncProgressTimer = useCallback(() => {
+    if (progressIntervalRef.current !== null) {
+      window.clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  }, []);
+
+  const startSyncProgress = useCallback(() => {
+    clearSyncProgressTimer();
+    setSyncProgress(0);
+    progressIntervalRef.current = window.setInterval(() => {
+      setSyncProgress((current) => {
+        if (current >= 82) {
+          return current;
+        }
+        if (current < 18) {
+          return current + 8;
+        }
+        if (current < 42) {
+          return current + 5;
+        }
+        if (current < 64) {
+          return current + 3;
+        }
+        return current + 1;
+      });
+    }, 220);
+  }, [clearSyncProgressTimer]);
+
+  const finishSyncProgress = useCallback((success: boolean) => {
+    clearSyncProgressTimer();
+    setSyncProgress(success ? 100 : 0);
+  }, [clearSyncProgressTimer]);
+
+  useEffect(() => () => {
+    clearSyncProgressTimer();
+  }, [clearSyncProgressTimer]);
 
   const pushToast = useCallback((tone: ToastItem["tone"], message: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1560,11 +1630,13 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
       setRawEvents([]);
       setSyncMetadata([]);
       setFetchingEvents(false);
+      finishSyncProgress(false);
       return;
     }
 
     setFetchingEvents(true);
     setError(null);
+    startSyncProgress();
 
     const baseParams = new URLSearchParams({
       timeMin,
@@ -1579,6 +1651,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     const refreshPromise = api.get<ScheduleEventsResponse>(`/schedule/events?${baseParams.toString()}`);
 
     let cacheResolved = false;
+    let refreshSucceeded = false;
 
     try {
       const cacheResponse = await cachePromise;
@@ -1593,6 +1666,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     try {
       const refreshResponse = await refreshPromise;
       if (requestSequenceRef.current === sequence) {
+        refreshSucceeded = true;
         applyEventsResponse(refreshResponse);
       }
     } catch (reason) {
@@ -1610,9 +1684,10 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     } finally {
       if (requestSequenceRef.current === sequence) {
         setFetchingEvents(false);
+        finishSyncProgress(refreshSucceeded);
       }
     }
-  }, [applyEventsResponse, pushToast]);
+  }, [applyEventsResponse, finishSyncProgress, pushToast, startSyncProgress]);
 
   useEffect(() => {
     if (!visibleRange) {
@@ -1749,12 +1824,15 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     }
 
     setSyncingVisible(true);
+    startSyncProgress();
+    let syncSucceeded = false;
     try {
       const response = await api.post<ScheduleEventsResponse>("/schedule/sync", {
         calendarIds: activeCalendarIds,
         timeMin,
         timeMax,
       });
+      syncSucceeded = true;
       setSyncMetadata(response.calendars);
       setLastLoadedAt(response.generatedAt);
       setRawEvents(response.events);
@@ -1766,8 +1844,9 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
       pushToast("error", message);
     } finally {
       setSyncingVisible(false);
+      finishSyncProgress(syncSucceeded);
     }
-  }, [activeCalendarIds, pushToast]);
+  }, [activeCalendarIds, finishSyncProgress, pushToast, startSyncProgress]);
 
   const handleSaveEvent = useCallback(async () => {
     const startIso = localInputToIso(form.start, form.allDay, "start");
@@ -2149,6 +2228,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
           onToggleCalendars={() => setFiltersOpen(true)}
           renderCalendarEvent={renderCalendarEvent}
           scheduleLoading={scheduleLoading}
+          syncProgress={syncProgress}
           selectedDate={selectedDate}
           weekDays={selectedWeek.days}
         />
@@ -2258,11 +2338,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
 
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2">
                   <div className="flex items-center gap-2 text-sm text-slate-700">
-                    {scheduleLoading ? (
-                      <RefreshCcw className="h-4 w-4 animate-spin text-primary" />
-                    ) : (
-                      <CalendarDays className="h-4 w-4" />
-                    )}
+                    {scheduleLoading ? <RefreshCcw className="h-4 w-4 animate-spin text-primary" /> : <CalendarDays className="h-4 w-4" />}
                     <span>
                       {syncingVisible
                         ? "Syncing visible calendars with Google..."

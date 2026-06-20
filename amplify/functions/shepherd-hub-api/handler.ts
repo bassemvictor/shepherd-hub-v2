@@ -307,11 +307,7 @@ const defaultDependencies: HandlerDependencies = {
 };
 
 const allGroups: AppCognitoGroup[] = [
-  "sales_engineer",
-  "sales_manager",
-  "pricing_engineer",
   "admin",
-  "super_user",
   "priest",
   "servant",
 ];
@@ -416,10 +412,10 @@ const normalizeGroups = (rawGroups: unknown): AppCognitoGroup[] =>
 
 const getContext = (event: APIGatewayProxyEventV2WithJWTAuthorizer): RequestContext => {
   const claims = event.requestContext.authorizer?.jwt.claims ?? {};
-  const tableName = process.env.PROJECT_TEMPLATE_TABLE ?? "";
+  const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "";
 
   if (!tableName) {
-    throw new Error("Missing PROJECT_TEMPLATE_TABLE environment variable.");
+    throw new Error("Missing SHEPHERD_HUB_RECORDS_TABLE environment variable.");
   }
 
   const actorSub = typeof claims.sub === "string" ? claims.sub : "anonymous";
@@ -4023,7 +4019,7 @@ const handleGoogleCallback = async (
     return html(400, "<h1>Missing OAuth callback parameters.</h1>");
   }
 
-  const tableName = process.env.PROJECT_TEMPLATE_TABLE ?? "";
+  const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "";
   const stateResponse = await deps.documentClient.send(
     new GetCommand({
       Key: {

@@ -7,17 +7,17 @@ import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 
 import { auth } from "./auth/resource.js";
-import { projectTemplateApi } from "./functions/project-template-api/resource.js";
+import { shepherdHubApi } from "./functions/shepherd-hub-api/resource.js";
 
 const backend = defineBackend({
   auth,
-  projectTemplateApi,
+  shepherdHubApi,
 });
 
 const apiStack = backend.createStack("project-template-api");
 const dataStack = backend.createStack("project-template-data");
 
-const tableName = process.env.PROJECT_TEMPLATE_TABLE?.trim();
+const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE?.trim();
 
 const recordsTable = new Table(dataStack, "ProjectTemplateTable", {
   ...(tableName ? { tableName } : {}),
@@ -68,17 +68,17 @@ recordsTable.addGlobalSecondaryIndex({
   },
 });
 
-backend.projectTemplateApi.addEnvironment("PROJECT_TEMPLATE_TABLE", recordsTable.tableName);
-backend.projectTemplateApi.addEnvironment("COGNITO_USER_POOL_ID", backend.auth.resources.userPool.userPoolId);
-backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID ?? "");
-backend.projectTemplateApi.addEnvironment("GOOGLE_CLIENT_SECRET", process.env.GOOGLE_CLIENT_SECRET ?? "");
-backend.projectTemplateApi.addEnvironment("GOOGLE_REDIRECT_URI", process.env.GOOGLE_REDIRECT_URI ?? "");
-backend.projectTemplateApi.addEnvironment(
+backend.shepherdHubApi.addEnvironment("SHEPHERD_HUB_RECORDS_TABLE", recordsTable.tableName);
+backend.shepherdHubApi.addEnvironment("COGNITO_USER_POOL_ID", backend.auth.resources.userPool.userPoolId);
+backend.shepherdHubApi.addEnvironment("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID ?? "");
+backend.shepherdHubApi.addEnvironment("GOOGLE_CLIENT_SECRET", process.env.GOOGLE_CLIENT_SECRET ?? "");
+backend.shepherdHubApi.addEnvironment("GOOGLE_REDIRECT_URI", process.env.GOOGLE_REDIRECT_URI ?? "");
+backend.shepherdHubApi.addEnvironment(
   "GOOGLE_OAUTH_SUCCESS_REDIRECT_URL",
   process.env.GOOGLE_OAUTH_SUCCESS_REDIRECT_URL ?? "",
 );
-recordsTable.grantReadWriteData(backend.projectTemplateApi.resources.lambda);
-backend.projectTemplateApi.resources.lambda.addToRolePolicy(
+recordsTable.grantReadWriteData(backend.shepherdHubApi.resources.lambda);
+backend.shepherdHubApi.resources.lambda.addToRolePolicy(
   new PolicyStatement({
     effect: Effect.ALLOW,
     actions: [
@@ -93,7 +93,7 @@ backend.projectTemplateApi.resources.lambda.addToRolePolicy(
 );
 
 const httpApi = new HttpApi(apiStack, "ProjectTemplateHttpApi", {
-  apiName: "projectTemplateApi",
+  apiName: "shepherdHubApi",
   corsPreflight: {
     allowOrigins: ["*"],
     allowHeaders: ["content-type", "authorization"],
@@ -110,7 +110,7 @@ const httpApi = new HttpApi(apiStack, "ProjectTemplateHttpApi", {
 
 const integration = new HttpLambdaIntegration(
   "ProjectTemplateApiIntegration",
-  backend.projectTemplateApi.resources.lambda,
+  backend.shepherdHubApi.resources.lambda,
   {
     scopePermissionToRoute: false,
   },
@@ -162,7 +162,7 @@ httpApi.addRoutes({
 backend.addOutput({
   custom: {
     API: {
-      [httpApi.httpApiName!]: {
+      shepherdHubApi: {
         apiName: httpApi.httpApiName,
         endpoint: httpApi.url,
         region: Stack.of(httpApi).region,

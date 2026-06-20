@@ -17,14 +17,14 @@ export class ApiError extends Error {
 type AmplifyOutputs = {
   custom?: {
     API?: {
-      projectTemplateApi?: {
+      shepherdHubApi?: {
         endpoint?: string;
       };
     };
   };
 };
 
-const configuredApiEndpoint = (outputs as AmplifyOutputs).custom?.API?.projectTemplateApi?.endpoint ?? "";
+const configuredApiEndpoint = (outputs as AmplifyOutputs).custom?.API?.shepherdHubApi?.endpoint ?? "";
 const baseUrl = (configuredApiEndpoint || import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 
 export const isApiConfigured = Boolean(baseUrl);

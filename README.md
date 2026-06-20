@@ -1,6 +1,8 @@
 # Shepherd Hub
 
-## What stays in the template
+## Overview
+
+Shepherd Hub is a multi-tenant church operations app built with:
 
 - AWS Amplify Gen 2
 - Cognito authentication with email/password sign-in
@@ -9,9 +11,8 @@
 - DynamoDB single-table storage
 - React + TypeScript frontend
 - Protected routes and authenticated API calls
-- Side menu app shell
-- Existing styling approach and UI component set
-- Responsive card, table, and right-side drawer patterns
+- A side-menu app shell with shared UI primitives
+- Responsive card, table, chart, and right-side drawer patterns
 
 ## Included app areas
 
@@ -26,6 +27,18 @@
 - Connects to Google Calendar
 - Syncs calendars and schedule events through the API
 - Supports event creation, editing, and member assignment
+
+### 3. Reports
+
+- Includes a reports dashboard and member visitation views
+- Uses cached API data for KPIs, charts, and follow-up workflows
+- Shares the same protected routing and shell patterns as the rest of the app
+
+### 4. Admin
+
+- Lets admins manage tenant user groups
+- Includes tenant-scoped reset tools with audit logging
+- Restricts both page access and backend API access to the `admin` group
 
 ## Authentication flow
 
@@ -179,9 +192,11 @@ sequenceDiagram
 Backend infrastructure is defined in [amplify/backend.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/backend.ts:1).
 
 - Auth: [amplify/auth/resource.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/auth/resource.ts:1)
-- Lambda: [amplify/functions/project-template-api/resource.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/functions/project-template-api/resource.ts:1)
-- Lambda handler: [amplify/functions/project-template-api/handler.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/functions/project-template-api/handler.ts:1)
+- Lambda: [amplify/functions/shepherd-hub-api/resource.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/functions/shepherd-hub-api/resource.ts:1)
+- Lambda handler: [amplify/functions/shepherd-hub-api/handler.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/functions/shepherd-hub-api/handler.ts:1)
 - Table: DynamoDB single table with `PK` and `SK`
+
+Some low-level Amplify/CDK stack and construct identifiers still use legacy names. They are deployment identifiers rather than product-facing names, and changing them may replace cloud resources.
 
 ### API routes
 
@@ -215,7 +230,7 @@ Backend infrastructure is defined in [amplify/backend.ts](/Users/sallysamuel/wor
 
 ## Admin groups and reset tools
 
-- Cognito now supports `admin`, `priest`, and `servant` in addition to the existing legacy groups already present in the template.
+- Cognito supports `admin`, `priest`, and `servant`.
 - Admin-only pages live at `/admin/user-groups` and `/admin/tenant-reset`.
 - Frontend visibility is claim-based, but the Lambda also enforces the `admin` group on every `/admin/*` API.
 - Tenant user listing comes from Cognito `ListUsers` filtered by `custom:tenantId`, and group changes use Cognito admin group APIs after re-validating the target user belongs to the same tenant.
@@ -249,7 +264,7 @@ Tenant resolution is claim-based in the Lambda:
 
 ## Reusable frontend pieces
 
-These are the main template building blocks:
+These are the main reusable frontend building blocks:
 
 - `AppShell`: [src/components/layout/app-shell.tsx](/Users/sallysamuel/workspace/amplify-react-template/src/components/layout/app-shell.tsx:1)
 - `SideMenu`: [src/components/layout/side-menu.tsx](/Users/sallysamuel/workspace/amplify-react-template/src/components/layout/side-menu.tsx:1)
@@ -273,7 +288,7 @@ These are the main template building blocks:
 
 ## How to add a new side menu item
 
-Edit the `baseNavigation` array in [src/components/layout/side-menu.tsx](/Users/sallysamuel/workspace/amplify-react-template/src/components/layout/side-menu.tsx:1).
+Edit the `buildNavigation` function in [src/components/layout/side-menu.tsx](/Users/sallysamuel/workspace/amplify-react-template/src/components/layout/side-menu.tsx:1).
 
 Each item needs:
 
@@ -310,7 +325,7 @@ The members page demonstrates:
 ## How to add a new Lambda CRUD route
 
 1. Add the route in [amplify/backend.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/backend.ts:1).
-2. Add the handler branch in [amplify/functions/project-template-api/handler.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/functions/project-template-api/handler.ts:1).
+2. Add the handler branch in [amplify/functions/shepherd-hub-api/handler.ts](/Users/sallysamuel/workspace/amplify-react-template/amplify/functions/shepherd-hub-api/handler.ts:1).
 3. Add shared request/response types in [shared/types.ts](/Users/sallysamuel/workspace/amplify-react-template/shared/types.ts:1).
 4. Call the route from the frontend through `src/lib/api.ts`.
 5. Add or update Lambda tests in `tests/`.
@@ -325,7 +340,7 @@ The members page demonstrates:
 
 ### Backend
 
-- `PROJECT_TEMPLATE_TABLE`
+- `SHEPHERD_HUB_RECORDS_TABLE`
   - Set automatically by Amplify for the Lambda
 
 Optional JWT claims for tenanting:
@@ -369,4 +384,4 @@ npm run test:lambda
 ## Notes
 
 - `amplify_outputs.json` must be regenerated after creating a fresh sandbox or deploy.
-- The template intentionally removed tender-specific workflows, forms, calculations, and entities.
+- A few low-level Amplify/CDK identifiers still use legacy names to avoid unintended infrastructure replacement during deployment.

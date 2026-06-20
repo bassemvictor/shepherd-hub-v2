@@ -44,11 +44,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export const ALL_GROUPS: AppCognitoGroup[] = [
-  "sales_engineer",
-  "sales_manager",
-  "pricing_engineer",
   "admin",
-  "super_user",
   "priest",
   "servant",
 ];
@@ -222,10 +218,6 @@ export const groupLabelMap: Record<string, string> = {
   admin: "Admin",
   priest: "Priest",
   servant: "Servant",
-  sales_manager: "Sales Manager",
-  pricing_engineer: "Pricing Engineer",
-  sales_engineer: "Sales Engineer",
-  super_user: "Super User",
 };
 
 export const formatGroupLabel = (group: string) => groupLabelMap[group] ?? group;

@@ -5,6 +5,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { useAuth } from "../lib/auth";
+import { APP_SHORT_DISPLAY_NAME } from "../lib/app-metadata";
 
 export const AuthPage = () => {
   const navigate = useNavigate();
@@ -79,7 +80,7 @@ export const AuthPage = () => {
         <Card className="w-full max-w-2xl rounded-lg px-4 py-5 sm:px-6 sm:py-6">
           <div className="flex flex-col items-center text-center">
             <img alt="Shepherd Hub logo" className="h-16 w-auto sm:h-20" src="/logo_blue.png" />
-            <p className="mt-4 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Shepherd Hub 2.0</p>
+            <p className="mt-4 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{APP_SHORT_DISPLAY_NAME}</p>
             <h1 className="mt-4 text-3xl font-semibold tracking-tight text-balance text-slate-900 sm:text-4xl">
               {requiresNewPassword ? "Create your new password" : "Sign in to continue"}
             </h1>
