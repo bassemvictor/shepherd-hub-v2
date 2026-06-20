@@ -1,6 +1,6 @@
 import { ArrowUpDown, Download, Plus, RefreshCcw } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import type { CreateMemberInput, MemberImportResult } from "../../shared/types";
@@ -29,6 +29,7 @@ const fileToBase64 = (file: File) =>
 
 export const MembersPage = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const {
@@ -49,6 +50,17 @@ export const MembersPage = () => {
   const [savingMember, setSavingMember] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<MemberImportResult | null>(null);
+
+  useEffect(() => {
+    if (searchParams.get("mobileAction") !== "new-member") {
+      return;
+    }
+
+    setCreateOpen(true);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("mobileAction");
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const filteredMembers = useMemo(() => {
     const normalized = query.trim().toLowerCase();

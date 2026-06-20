@@ -10,6 +10,7 @@ import { CalendarSettingsPage } from "../pages/calendar-settings-page";
 import { MemberDetailPage } from "../pages/member-detail-page";
 import { MembersPage } from "../pages/members-page";
 import { NotFoundPage } from "../pages/not-found-page";
+import { ReportsHomePage } from "../pages/reports-home-page";
 import { ScheduleBetaPage, SchedulePage } from "../pages/schedule-page";
 import { VisitationReportsPage } from "../pages/visitation-reports-page";
 
@@ -49,6 +50,10 @@ export const router = createBrowserRouter([
       {
         path: "reports/visitations",
         element: <Navigate replace to="/reports/dashboard" />,
+      },
+      {
+        path: "reports",
+        element: <ReportsHomePage />,
       },
       {
         path: "reports/dashboard",

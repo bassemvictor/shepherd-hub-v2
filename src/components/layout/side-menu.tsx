@@ -39,6 +39,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
         label: "Reports",
         icon: BarChart3,
         children: [
+          { label: "Reports Home", href: "/reports" },
           { label: "Reports Dashboard", href: "/reports/dashboard" },
           { label: "Member Visitation", href: "/reports/member-visitation" },
         ],
@@ -96,7 +97,8 @@ export const SideMenu = ({ onNavigate, user }: SideMenuProps) => {
                     <button
                       className={cn(
                         "flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-sm text-blue-100/80 transition-colors hover:bg-white/8 hover:text-white",
-                        activeChild && "bg-primary text-white shadow-lg shadow-blue-950/20",
+                        reportsOpen && "bg-white/8 text-white",
+                        activeChild && "text-white",
                       )}
                       onClick={() => setReportsOpen((current) => !current)}
                       type="button"
@@ -109,6 +111,7 @@ export const SideMenu = ({ onNavigate, user }: SideMenuProps) => {
                       <div className="space-y-1 pl-3">
                         {item.children.map((child) => (
                           <NavLink
+                            end={child.href === "/reports"}
                             key={child.href}
                             to={child.href}
                             className={({ isActive }) =>

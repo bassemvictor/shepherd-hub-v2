@@ -1925,6 +1925,15 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
   }, [clearIntentSearchParams, defaultCalendarId, editorOpen, memberIndex, openCreateEditor, searchParams]);
 
   useEffect(() => {
+    if (!useBetaMobileExperience || editorOpen || searchParams.get("mobileAction") !== "new-event") {
+      return;
+    }
+
+    setNewEventDialogOpen(true);
+    clearIntentSearchParams(["mobileAction"]);
+  }, [clearIntentSearchParams, editorOpen, searchParams, useBetaMobileExperience]);
+
+  useEffect(() => {
     const eventDate = searchParams.get("date");
     const eventId = searchParams.get("eventId");
     const calendarApi = calendarRef.current?.getApi();

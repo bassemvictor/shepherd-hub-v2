@@ -7,6 +7,8 @@ import { useTheme } from "../../lib/theme";
 import { APP_DISPLAY_NAME, APP_SHORT_DISPLAY_NAME } from "../../lib/app-metadata";
 import { getBreadcrumbs, getPageTitle } from "../../lib/route-metadata";
 import { cn } from "../../lib/utils";
+import { useIsMobile } from "../../pages/calendar-shared";
+import { MobileBottomNav, shouldShowMobileBottomNav } from "./mobile-bottom-nav";
 import { SideMenu } from "./side-menu";
 import { Button } from "../ui/button";
 
@@ -15,8 +17,10 @@ export const AppShell = () => {
   const { user, signOutUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isMobile = useIsMobile();
   const breadcrumbs = useMemo(() => getBreadcrumbs(pathname), [pathname]);
   const title = useMemo(() => getPageTitle(pathname), [pathname]);
+  const showMobileBottomNav = isMobile && shouldShowMobileBottomNav(pathname);
   const primaryGroup = user?.groups[0] ? formatGroupLabel(user.groups[0]) : "Authenticated User";
   const initials = useMemo(() => {
     const source = user?.name || user?.email || "AU";
@@ -161,11 +165,18 @@ export const AppShell = () => {
             </div>
           </header>
 
-          <main className="min-w-0 flex-1 px-3 py-4 sm:px-4 sm:py-4 lg:px-6">
+          <main
+            className={cn(
+              "min-w-0 flex-1 px-3 py-4 sm:px-4 sm:py-4 lg:px-6",
+              showMobileBottomNav && "pb-[calc(7.5rem+env(safe-area-inset-bottom))]",
+            )}
+          >
             <Outlet />
           </main>
         </div>
       </div>
+
+      {showMobileBottomNav ? <MobileBottomNav onOpenMore={() => setSidebarOpen(true)} /> : null}
     </div>
   );
 };
