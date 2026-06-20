@@ -9,17 +9,6 @@ type MobileBottomNavProps = {
   onOpenMore: () => void;
 };
 
-const footerRoutes = [
-  "/reports",
-  "/calendar/schedule-beta",
-  "/members",
-  "/reports/dashboard",
-  "/reports/member-visitation",
-] as const;
-
-export const shouldShowMobileBottomNav = (pathname: string) =>
-  footerRoutes.some((route) => pathname === route) || pathname.startsWith("/reports/");
-
 export const MobileBottomNav = ({ onOpenMore }: MobileBottomNavProps) => {
   const { pathname } = useLocation();
   const navigate = useNavigate();

@@ -8,7 +8,7 @@ import { APP_DISPLAY_NAME, APP_SHORT_DISPLAY_NAME } from "../../lib/app-metadata
 import { getBreadcrumbs, getPageTitle } from "../../lib/route-metadata";
 import { cn } from "../../lib/utils";
 import { useIsMobile } from "../../pages/calendar-shared";
-import { MobileBottomNav, shouldShowMobileBottomNav } from "./mobile-bottom-nav";
+import { MobileBottomNav } from "./mobile-bottom-nav";
 import { SideMenu } from "./side-menu";
 import { Button } from "../ui/button";
 
@@ -20,7 +20,7 @@ export const AppShell = () => {
   const isMobile = useIsMobile();
   const breadcrumbs = useMemo(() => getBreadcrumbs(pathname), [pathname]);
   const title = useMemo(() => getPageTitle(pathname), [pathname]);
-  const showMobileBottomNav = isMobile && shouldShowMobileBottomNav(pathname);
+  const showMobileBottomNav = isMobile;
   const primaryGroup = user?.groups[0] ? formatGroupLabel(user.groups[0]) : "Authenticated User";
   const initials = useMemo(() => {
     const source = user?.name || user?.email || "AU";
