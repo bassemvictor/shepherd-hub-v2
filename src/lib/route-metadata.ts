@@ -4,11 +4,11 @@ const routeTitleMap: Record<string, string> = {
   "/": "Congregation",
   "/calendar": "Connect & Configure",
   "/calendar/schedule": "Schedule",
-  "/calendar/schedule-beta": "Schedule Beta",
+  "/calendar/schedule-beta": "Schedule",
   "/members": "Congregation",
   "/admin/user-groups": "User Groups",
   "/admin/tenant-reset": "Tenant Reset",
-  "/reports": "Reports Home",
+  "/reports": "Reports",
   "/reports/visitations": "Reports Dashboard",
   "/reports/dashboard": "Reports Dashboard",
   "/reports/member-visitation": "Member Visitation",
@@ -16,15 +16,15 @@ const routeTitleMap: Record<string, string> = {
 };
 
 const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
-  "/calendar": [{ label: "Configurations" }, { label: "Connect & Configure" }],
+  "/calendar": [{ label: "Settings" }, { label: "Connect & Configure" }],
   "/calendar/schedule": [{ label: "Calendar" }, { label: "Schedule" }],
-  "/calendar/schedule-beta": [{ label: "Calendar" }, { label: "Schedule Beta" }],
+  "/calendar/schedule-beta": [{ label: "Calendar" }, { label: "Schedule" }],
   "/members": [{ label: "Congregation" }],
   "/admin/user-groups": [{ label: "Admin" }, { label: "User Groups" }],
   "/admin/tenant-reset": [{ label: "Admin" }, { label: "Tenant Reset" }],
-  "/reports": [{ label: "Reports" }, { label: "Reports Home" }],
-  "/reports/dashboard": [{ label: "Reports" }, { label: "Reports Dashboard" }],
-  "/reports/member-visitation": [{ label: "Reports" }, { label: "Member Visitation" }],
+  "/reports": [{ label: "Insights" }, { label: "Reports" }],
+  "/reports/dashboard": [{ label: "Insights" }, { label: "Reports Dashboard" }],
+  "/reports/member-visitation": [{ label: "Insights" }, { label: "Member Visitation" }],
   "/auth": [{ label: "Sign In" }],
 };
 

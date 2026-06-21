@@ -4,13 +4,14 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { formatGroupLabel, useAuth } from "../../lib/auth";
 import { useTheme } from "../../lib/theme";
-import { APP_DISPLAY_NAME, APP_SHORT_DISPLAY_NAME } from "../../lib/app-metadata";
+import { APP_NAME, APP_SHORT_VERSION, APP_VERSION } from "../../lib/app-metadata";
 import { getBreadcrumbs, getPageTitle } from "../../lib/route-metadata";
 import { cn } from "../../lib/utils";
 import { useIsMobile } from "../../pages/calendar-shared";
 import { MobileBottomNav } from "./mobile-bottom-nav";
 import { SideMenu } from "./side-menu";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 
 export const AppShell = () => {
   const { pathname } = useLocation();
@@ -49,8 +50,11 @@ export const AppShell = () => {
                   <p className="text-[10px] uppercase tracking-[0.18em] text-blue-200/80">
                     {user?.tenantId ?? "No Tenant Assigned"}
                   </p>
-                  <h1 className="mt-1 truncate text-[1.25rem] font-semibold leading-none tracking-tight text-white sm:text-[1.45rem]">
-                    {APP_SHORT_DISPLAY_NAME}
+                  <h1 className="mt-1 flex items-center gap-2 text-[1.25rem] font-semibold leading-none tracking-tight text-white sm:text-[1.45rem]">
+                    <span className="truncate">{APP_NAME}</span>
+                    <Badge className="shrink-0 bg-white/12 text-[10px] text-blue-100" variant="neutral">
+                      {APP_SHORT_VERSION}
+                    </Badge>
                   </h1>
                 </div>
               </div>
@@ -66,7 +70,12 @@ export const AppShell = () => {
             <SideMenu onNavigate={() => setSidebarOpen(false)} user={user} />
 
             <div className="rounded-md border border-white/10 bg-white/6 p-3">
-              <p className="text-sm font-medium text-white">{APP_DISPLAY_NAME}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-white">{APP_NAME}</p>
+                <Badge className="shrink-0 bg-white/12 text-[10px] text-blue-100" variant="neutral">
+                  {APP_VERSION}
+                </Badge>
+              </div>
               <p className="mt-1 text-xs text-blue-100/70">
                 Coordinate tenant {user?.tenantId ?? "unassigned"} events and member visitations.  
               </p>

@@ -127,7 +127,7 @@ export const MobileBottomNav = ({ onOpenMore }: MobileBottomNavProps) => {
             <CalendarDays className="h-5 w-5 text-primary" />
             <div className="text-left">
               <div className="font-semibold text-foreground">New Event</div>
-              <div className="text-sm text-muted-foreground">Open the Schedule Beta event flow.</div>
+              <div className="text-sm text-muted-foreground">Open the alternate Schedule event flow.</div>
             </div>
           </button>
           <button

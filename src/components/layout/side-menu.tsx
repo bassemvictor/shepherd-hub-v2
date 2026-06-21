@@ -4,14 +4,17 @@ import { NavLink, useLocation } from "react-router-dom";
 
 import { isAdminUser, type AppAuthUser } from "../../lib/auth";
 import { cn } from "../../lib/utils";
+import { Badge } from "../ui/badge";
 
 type NavigationItem = {
   label: string;
   href?: string;
   icon: typeof Users;
+  badge?: string;
   children?: Array<{
     label: string;
     href: string;
+    badge?: string;
   }>;
 };
 
@@ -25,7 +28,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
     label: "Calendar",
     items: [
       { label: "Schedule", href: "/calendar/schedule", icon: CalendarDays },
-      { label: "Schedule Beta", href: "/calendar/schedule-beta", icon: CalendarDays },
+      { label: "Schedule", href: "/calendar/schedule-beta", icon: CalendarDays, badge: "Beta" },
     ],
   },
   {
@@ -33,13 +36,13 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
     items: [{ label: "Members", href: "/members", icon: Users }],
   },
   {
-    label: "Reports",
+    label: "Insights",
     items: [
       {
         label: "Reports",
         icon: BarChart3,
         children: [
-          { label: "Reports Home", href: "/reports" },
+          { label: "Reports", href: "/reports" },
           { label: "Reports Dashboard", href: "/reports/dashboard" },
           { label: "Member Visitation", href: "/reports/member-visitation" },
         ],
@@ -47,7 +50,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
     ],
   },
   {
-    label: "Configurations",
+    label: "Settings",
     items: [{ label: "Connect & Configure", href: "/calendar", icon: Settings2 }],
   },
   ...(user && isAdminUser(user.groups)
@@ -123,7 +126,14 @@ export const SideMenu = ({ onNavigate, user }: SideMenuProps) => {
                             onClick={onNavigate}
                           >
                             <ClipboardList className="h-3.5 w-3.5" />
-                            <span>{child.label}</span>
+                            <span className="flex items-center gap-2">
+                              <span>{child.label}</span>
+                              {child.badge ? (
+                                <Badge className="bg-white/12 px-1.5 py-0 text-[10px] text-blue-100" variant="neutral">
+                                  {child.badge}
+                                </Badge>
+                              ) : null}
+                            </span>
                           </NavLink>
                         ))}
                       </div>
@@ -146,7 +156,14 @@ export const SideMenu = ({ onNavigate, user }: SideMenuProps) => {
                   onClick={onNavigate}
                 >
                   <Icon className="h-3.5 w-3.5" />
-                  <span>{item.label}</span>
+                  <span className="flex items-center gap-2">
+                    <span>{item.label}</span>
+                    {item.badge ? (
+                      <Badge className="bg-white/12 px-1.5 py-0 text-[10px] text-blue-100" variant="neutral">
+                        {item.badge}
+                      </Badge>
+                    ) : null}
+                  </span>
                 </NavLink>
               );
             })}

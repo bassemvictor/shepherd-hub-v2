@@ -2171,7 +2171,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
   }
 
   const scheduleLoading = syncingVisible || fetchingEvents;
-  const pageTitle = variant === "beta" ? "Schedule Beta" : "Schedule";
+  const pageTitle = "Schedule";
 
   return (
     <div className="space-y-4">

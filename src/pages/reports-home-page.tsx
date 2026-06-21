@@ -21,8 +21,8 @@ const reportDestinations = [
 
 export const ReportsHomePage = () => (
   <ReportsLayout
-    subtitle="Open the report you need from one simple reporting home."
-    title="Reports Home"
+    subtitle="Open the report you need from one simple reporting hub."
+    title="Reports"
   >
     <Card className="border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,247,251,0.96)_100%)]">
       <CardHeader className="gap-2 pb-2">
