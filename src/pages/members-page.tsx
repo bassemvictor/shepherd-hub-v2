@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import type { CreateMemberInput, MemberImportResult } from "../../shared/types";
+import type { CreateMemberInput, MemberImportJob } from "../../shared/types";
 import { MemberAvatar, MemberFormDialog, MemberImportDialog, UnityBadge } from "../components/members/member-ui";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
@@ -15,6 +15,7 @@ import { refreshMembersIndexCache, useMembersIndex } from "../lib/members-index"
 
 type SortMode = "az" | "recent";
 const PAGE_SIZE = 25;
+const activeImportJobStorageKey = "members-import-job-id";
 
 const fileToBase64 = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -49,7 +50,7 @@ export const MembersPage = () => {
   const [importOpen, setImportOpen] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<MemberImportResult | null>(null);
+  const [importJob, setImportJob] = useState<MemberImportJob | null>(null);
 
   useEffect(() => {
     if (searchParams.get("mobileAction") !== "new-member") {
@@ -61,6 +62,22 @@ export const MembersPage = () => {
     nextParams.delete("mobileAction");
     setSearchParams(nextParams, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    const persistedJobId = window.sessionStorage.getItem(activeImportJobStorageKey);
+    if (!persistedJobId || importJob) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const nextJob = await api.get<MemberImportJob>(`/members/import/${persistedJobId}`);
+        setImportJob(nextJob);
+      } catch {
+        window.sessionStorage.removeItem(activeImportJobStorageKey);
+      }
+    })();
+  }, [importJob]);
 
   const filteredMembers = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -98,22 +115,45 @@ export const MembersPage = () => {
 
   const handleImport = useCallback(async (file: File) => {
     setImporting(true);
-    setImportResult(null);
+    setImportJob(null);
     setError(null);
     try {
       const workbookBase64 = await fileToBase64(file);
-      const result = await api.post<MemberImportResult>("/members/import", {
+      const nextJob = await api.post<MemberImportJob>("/members/import", {
         fileName: file.name,
         workbookBase64,
       });
-      setImportResult(result);
-      await refreshMembersIndexCache(queryClient, cacheScope);
+      window.sessionStorage.setItem(activeImportJobStorageKey, nextJob.jobId);
+      setImportJob(nextJob);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to import members.");
     } finally {
       setImporting(false);
     }
-  }, [cacheScope, queryClient, user?.tenantId]);
+  }, [user?.tenantId]);
+
+  useEffect(() => {
+    if (!importJob || !["queued", "running"].includes(importJob.status)) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const nextJob = await api.get<MemberImportJob>(`/members/import/${importJob.jobId}`);
+          setImportJob(nextJob);
+          if (nextJob.status === "completed") {
+            window.sessionStorage.removeItem(activeImportJobStorageKey);
+            await refreshMembersIndexCache(queryClient, cacheScope);
+          }
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : "Unable to refresh import status.");
+        }
+      })();
+    }, 1200);
+
+    return () => window.clearTimeout(timer);
+  }, [cacheScope, importJob, queryClient]);
 
   if (!isApiConfigured) {
     return <ErrorState description="Set `VITE_API_BASE_URL` or regenerate `amplify_outputs.json` before using member APIs." title="API not configured" />;
@@ -270,10 +310,10 @@ export const MembersPage = () => {
       />
       <MemberImportDialog
         busy={importing}
+        job={importJob}
         onClose={() => setImportOpen(false)}
         onImport={handleImport}
         open={importOpen}
-        result={importResult}
       />
     </div>
   );

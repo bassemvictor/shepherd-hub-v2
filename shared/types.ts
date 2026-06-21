@@ -389,7 +389,23 @@ export type MemberImportResult = {
   created: number;
   updated: number;
   skipped: number;
+  errorCount: number;
   errors: Array<{ row: number; message: string }>;
+};
+
+export type MemberImportJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type MemberImportJob = EntityEnvelope & {
+  jobId: string;
+  fileName: string;
+  status: MemberImportJobStatus;
+  totalRows: number;
+  processedRows: number;
+  totalChunks: number;
+  processedChunks: number;
+  completedAt?: string;
+  startedAt?: string;
+  result: MemberImportResult;
 };
 
 export type CreateMemberInput = Partial<

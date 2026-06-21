@@ -1,5 +1,5 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { Stack } from "aws-cdk-lib";
+import { Duration, Stack } from "aws-cdk-lib";
 import { CorsHttpMethod, HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
@@ -116,6 +116,16 @@ const integration = new HttpLambdaIntegration(
   },
 );
 
+const importIntegration = new HttpLambdaIntegration(
+  "ProjectTemplateImportIntegration",
+  backend.shepherdHubApi.resources.lambda,
+  {
+    scopePermissionToRoute: false,
+    // HTTP API integrations top out at 30 seconds, so keep this just under the cap explicitly.
+    timeout: Duration.seconds(29),
+  },
+);
+
 const authorizer = new HttpUserPoolAuthorizer("ProjectTemplateAuthorizer", backend.auth.resources.userPool, {
   userPoolClients: [backend.auth.resources.userPoolClient],
 });
@@ -130,7 +140,18 @@ const addProtectedRoutes = (path: string, methods: HttpMethod[]) =>
 
 addProtectedRoutes("/members", [HttpMethod.GET, HttpMethod.POST]);
 addProtectedRoutes("/members/index", [HttpMethod.GET]);
-addProtectedRoutes("/members/import", [HttpMethod.POST]);
+httpApi.addRoutes({
+  path: "/members/import",
+  methods: [HttpMethod.POST],
+  integration: importIntegration,
+  authorizer,
+});
+httpApi.addRoutes({
+  path: "/members/import/{jobId}",
+  methods: [HttpMethod.GET],
+  integration: importIntegration,
+  authorizer,
+});
 addProtectedRoutes("/members/{memberId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
 addProtectedRoutes("/members/{memberId}/events", [HttpMethod.GET]);
 addProtectedRoutes("/members/{memberId}/visitations", [HttpMethod.POST]);

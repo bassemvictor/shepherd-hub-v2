@@ -45,6 +45,8 @@ import type {
   MemberDirectoryResponse,
   MemberVisitation,
   MemberImportInput,
+  MemberImportJob,
+  MemberImportJobStatus,
   MemberImportResult,
   MemberIndexItem,
   MemberIndexResponse,
@@ -215,6 +217,33 @@ type MemberActivityItem = BaseItem & {
   actorUserId: string;
   actorDisplayName: string;
   metadata?: Record<string, unknown>;
+};
+
+type ImportWorkbookRow = {
+  rowNumber: number;
+  values: Record<string, unknown>;
+};
+
+type MemberImportJobItem = BaseItem & {
+  tenantId: string;
+  jobId: string;
+  fileName: string;
+  status: MemberImportJobStatus;
+  totalRows: number;
+  processedRows: number;
+  totalChunks: number;
+  processedChunks: number;
+  startedAt?: string;
+  completedAt?: string;
+  result: MemberImportResult;
+};
+
+type MemberImportChunkItem = BaseItem & {
+  tenantId: string;
+  jobId: string;
+  chunkIndex: number;
+  rowCount: number;
+  rows: ImportWorkbookRow[];
 };
 
 type AuditLogItem = BaseItem & {
@@ -447,6 +476,10 @@ const eventSk = (calendarId: string, eventId: string) => `EVENT#${calendarId}#${
 const eventGsiPk = (userId: string, calendarId: string) => `USER#${userId}#CALENDAR#${calendarId}`;
 const eventGsiSk = (start: string, eventId: string) => `EVENT#${start}#${eventId}`;
 const memberSk = (memberId: string) => `MEMBER#${memberId}`;
+const memberImportJobSk = (jobId: string) => `MEMBER_IMPORT_JOB#${jobId}`;
+const memberImportChunkSk = (jobId: string, chunkIndex: number) =>
+  `MEMBER_IMPORT_JOB#${jobId}#CHUNK#${String(chunkIndex).padStart(6, "0")}`;
+const memberImportChunkSkPrefix = (jobId: string) => `MEMBER_IMPORT_JOB#${jobId}#CHUNK#`;
 const memberGsiPk = (tenantId: string) => `TENANT#${tenantId}#MEMBERS`;
 const memberGsiSk = (normalizedName: string, memberId: string) => `NAME#${normalizedName}#MEMBER#${memberId}`;
 const memberUnityGsiPk = (tenantId: string) => `TENANT#${tenantId}#UNITY`;
@@ -471,6 +504,8 @@ const oauthStatePk = (state: string) => `OAUTH_STATE#${state}`;
 const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
 const isAdminGroup = (group: AppCognitoGroup) => group === "admin";
+const importJobChunkSize = 20;
+const importJobErrorLimit = 100;
 
 const defaultCalendarListRefreshThresholdMinutes = 60 * 24 * 7;
 
@@ -1118,14 +1153,94 @@ const parseImportWorkbook = (input: MemberImportInput) => {
 
   return rows
     .slice(headerRowIndex + 1)
-    .filter((row) => Array.isArray(row) && row.some((cell) => normalizeWhitespace(cell)))
-    .map((row) => {
+    .map((row, index) => ({ row, rowNumber: headerRowIndex + index + 2 }))
+    .filter(({ row }) => Array.isArray(row) && row.some((cell) => normalizeWhitespace(cell)))
+    .map(({ row, rowNumber }) => {
       const values = Array.isArray(row) ? row : [];
-      return headers.reduce<Record<string, unknown>>((record, header, index) => {
-        record[header] = values[index] ?? "";
-        return record;
+      const record = headers.reduce<Record<string, unknown>>((next, header, index) => {
+        next[header] = values[index] ?? "";
+        return next;
       }, {});
+
+      return {
+        rowNumber,
+        values: record,
+      };
     });
+};
+
+const chunkItems = <T>(items: T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
+
+const emptyImportResult = (): MemberImportResult => ({
+  created: 0,
+  updated: 0,
+  skipped: 0,
+  errorCount: 0,
+  errors: [],
+});
+
+const mergeImportErrors = (
+  current: MemberImportResult["errors"],
+  additions: MemberImportResult["errors"],
+) => [...current, ...additions].slice(0, importJobErrorLimit);
+
+const toMemberImportJob = (item: MemberImportJobItem): MemberImportJob => ({
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+  entityType: item.entityType,
+  tenantId: item.tenantId,
+  jobId: item.jobId,
+  fileName: item.fileName,
+  status: item.status,
+  totalRows: item.totalRows,
+  processedRows: item.processedRows,
+  totalChunks: item.totalChunks,
+  processedChunks: item.processedChunks,
+  startedAt: item.startedAt,
+  completedAt: item.completedAt,
+  result: item.result,
+});
+
+const putItemsInBatches = async (
+  documentClient: Pick<DynamoDBDocumentClient, "send">,
+  tableName: string,
+  items: Record<string, unknown>[],
+) => {
+  for (const batch of chunkItems(items, 25)) {
+    await documentClient.send(
+      new BatchWriteCommand({
+        RequestItems: {
+          [tableName]: batch.map((Item) => ({
+            PutRequest: { Item },
+          })),
+        },
+      }),
+    );
+  }
+};
+
+const deleteKeysInBatches = async (
+  documentClient: Pick<DynamoDBDocumentClient, "send">,
+  tableName: string,
+  keys: Array<{ PK: string; SK: string }>,
+) => {
+  for (const batch of chunkItems(keys, 25)) {
+    await documentClient.send(
+      new BatchWriteCommand({
+        RequestItems: {
+          [tableName]: batch.map((Key) => ({
+            DeleteRequest: { Key },
+          })),
+        },
+      }),
+    );
+  }
 };
 
 const queryAll = async (
@@ -1715,6 +1830,127 @@ const listMembersByUnityId = async (context: RequestContext, unityId: string, de
   });
 
   return response as MemberItem[];
+};
+
+const getMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: memberImportJobSk(jobId),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  return (response.Item as MemberImportJobItem | undefined) ?? null;
+};
+
+const listMemberImportChunks = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+  const response = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantPk(context.tenantId),
+      ":sk": memberImportChunkSkPrefix(jobId),
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :sk)",
+    TableName: context.tableName,
+  });
+
+  return response as MemberImportChunkItem[];
+};
+
+const processImportRow = async (
+  context: RequestContext,
+  row: ImportWorkbookRow,
+  fileName: string,
+  deps: HandlerDependencies,
+): Promise<Omit<MemberImportResult, "errorCount">> => {
+  const unityId = toOptionalString(row.values["Member ID"]);
+  const fullName = normalizeWhitespace(row.values["Member Name"]);
+  if (!unityId || !fullName) {
+    return {
+      created: 0,
+      updated: 0,
+      skipped: 1,
+      errors: [],
+    };
+  }
+
+  try {
+    const existing = await getMemberByUnityId(context, unityId, deps);
+    const member = buildMemberItem(
+      context,
+      {
+        source: "UNITY",
+        unityId,
+        familyId: toOptionalString(row.values["Family ID"]),
+        householdName: toOptionalString(row.values["Household Name"]),
+        fullName,
+        phone: toOptionalString(row.values["Phone Number"]),
+        email: toOptionalString(row.values["Email"]),
+        dateOfBirth: toIsoDate(row.values["Date of Birth"]),
+        age: toOptionalNumber(row.values["Age"]),
+        gender: toOptionalString(row.values["Gender"]),
+        familyStatus: toOptionalString(row.values["Family Status"]),
+        church: toOptionalString(row.values["Church"]),
+        fatherOfConfession: toOptionalString(row.values["Father of Confession"]),
+        deaconshipRank: toOptionalString(row.values["Deaconship Rank"]),
+        ordinationDate: toIsoDate(row.values["Ordination Date"]),
+        churchProvince: toOptionalString(row.values["Church Province"]),
+        churchCity: toOptionalString(row.values["Church City"]),
+        churchRegion: toOptionalString(row.values["Church Region"]),
+        diocese: toOptionalString(row.values["Diocese"]),
+        address: toOptionalString(row.values["Address"]),
+        postalCode: toOptionalString(row.values["Postal Code"]),
+        activated: toOptionalBoolean(row.values["Activated"]),
+        approved: toOptionalBoolean(row.values["Approved"]),
+        locked: toOptionalBoolean(row.values["Locked"]),
+        visibility: toOptionalString(row.values["Visibility"]),
+        username: toOptionalString(row.values["Username"]),
+        registrationDate: toIsoDate(row.values["Registration Date"]),
+        groups: String(row.values["Groups"] ?? "")
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+        customFlag: toOptionalString(row.values["Custom Flag"]),
+        licensePlate: toOptionalString(row.values["License Plate"]),
+      },
+      deps,
+      existing,
+    );
+    member.notes = existing?.notes;
+    await putMember(context, member, deps);
+    await logMemberActivity(
+      context,
+      member.memberId,
+      existing ? "Member Updated" : "Member Imported",
+      existing ? `${member.fullName} refreshed from Unity import.` : `${member.fullName} imported from Unity.`,
+      deps,
+      { unityId, row: row.rowNumber, fileName },
+    );
+    return {
+      created: existing ? 0 : 1,
+      updated: existing ? 1 : 0,
+      skipped: 0,
+      errors: [],
+    };
+  } catch (error) {
+    return {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      errors: [
+        {
+          row: row.rowNumber,
+          message: error instanceof Error ? error.message : "Unknown import error.",
+        },
+      ],
+    };
+  }
 };
 
 const listMembers = async (context: RequestContext, deps: HandlerDependencies) => {
@@ -3312,89 +3548,125 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
   return json(200, { deleted: true, memberId });
 };
 
-const importMembers = async (context: RequestContext, input: MemberImportInput, deps: HandlerDependencies) => {
+const createMemberImportJob = async (context: RequestContext, input: MemberImportInput, deps: HandlerDependencies) => {
   const rows = parseImportWorkbook(input);
-  const result: MemberImportResult = {
-    created: 0,
-    updated: 0,
-    skipped: 0,
-    errors: [],
-  };
-
-  for (const [index, row] of rows.entries()) {
-    const unityId = toOptionalString(row["Member ID"]);
-    const fullName = normalizeWhitespace(row["Member Name"]);
-    if (!unityId || !fullName) {
-      result.skipped += 1;
-      continue;
-    }
-
-    try {
-      const existing = await getMemberByUnityId(context, unityId, deps);
-      const member = buildMemberItem(
-        context,
-        {
-          source: "UNITY",
-          unityId,
-          familyId: toOptionalString(row["Family ID"]),
-          householdName: toOptionalString(row["Household Name"]),
-          fullName,
-          phone: toOptionalString(row["Phone Number"]),
-          email: toOptionalString(row["Email"]),
-          dateOfBirth: toIsoDate(row["Date of Birth"]),
-          age: toOptionalNumber(row["Age"]),
-          gender: toOptionalString(row["Gender"]),
-          familyStatus: toOptionalString(row["Family Status"]),
-          church: toOptionalString(row["Church"]),
-          fatherOfConfession: toOptionalString(row["Father of Confession"]),
-          deaconshipRank: toOptionalString(row["Deaconship Rank"]),
-          ordinationDate: toIsoDate(row["Ordination Date"]),
-          churchProvince: toOptionalString(row["Church Province"]),
-          churchCity: toOptionalString(row["Church City"]),
-          churchRegion: toOptionalString(row["Church Region"]),
-          diocese: toOptionalString(row["Diocese"]),
-          address: toOptionalString(row["Address"]),
-          postalCode: toOptionalString(row["Postal Code"]),
-          activated: toOptionalBoolean(row["Activated"]),
-          approved: toOptionalBoolean(row["Approved"]),
-          locked: toOptionalBoolean(row["Locked"]),
-          visibility: toOptionalString(row["Visibility"]),
-          username: toOptionalString(row["Username"]),
-          registrationDate: toIsoDate(row["Registration Date"]),
-          groups: String(row["Groups"] ?? "")
-            .split(",")
-            .map((entry) => entry.trim())
-            .filter(Boolean),
-          customFlag: toOptionalString(row["Custom Flag"]),
-          licensePlate: toOptionalString(row["License Plate"]),
-        },
-        deps,
-        existing,
-      );
-      member.notes = existing?.notes;
-      await putMember(context, member, deps);
-      await logMemberActivity(
-        context,
-        member.memberId,
-        existing ? "Member Updated" : "Member Imported",
-        existing ? `${member.fullName} refreshed from Unity import.` : `${member.fullName} imported from Unity.`,
-        deps,
-        { unityId, row: index + 2, fileName: input.fileName },
-      );
-      if (existing) {
-        result.updated += 1;
-      } else {
-        result.created += 1;
-      }
-    } catch (error) {
-      result.errors.push({
-        row: index + 2,
-        message: error instanceof Error ? error.message : "Unknown import error.",
-      });
-    }
+  if (!rows.length) {
+    return json(400, { message: "No Unity member rows were found in this workbook." });
   }
 
-  return json(200, result);
+  const createdAt = deps.now();
+  const jobId = deps.uuid();
+  const chunks = chunkItems(rows, importJobChunkSize);
+  const jobItem: MemberImportJobItem = {
+    PK: tenantPk(context.tenantId),
+    SK: memberImportJobSk(jobId),
+    createdAt,
+    updatedAt: createdAt,
+    entityType: "MEMBER_IMPORT_JOB",
+    tenantId: context.tenantId,
+    jobId,
+    fileName: toOptionalString(input.fileName) ?? "Unity import.xlsx",
+    status: "queued",
+    totalRows: rows.length,
+    processedRows: 0,
+    totalChunks: chunks.length,
+    processedChunks: 0,
+    startedAt: undefined,
+    completedAt: undefined,
+    result: emptyImportResult(),
+  };
+
+  const chunkItemsToWrite: MemberImportChunkItem[] = chunks.map((chunk, chunkIndex) => ({
+    PK: tenantPk(context.tenantId),
+    SK: memberImportChunkSk(jobId, chunkIndex),
+    createdAt,
+    updatedAt: createdAt,
+    entityType: "MEMBER_IMPORT_CHUNK",
+    tenantId: context.tenantId,
+    jobId,
+    chunkIndex,
+    rowCount: chunk.length,
+    rows: chunk,
+  }));
+
+  await putImportJob(context, jobItem, deps);
+  await putItemsInBatches(deps.documentClient, context.tableName, chunkItemsToWrite);
+
+  return json(202, toMemberImportJob(jobItem));
+};
+
+const putImportJob = async (context: RequestContext, item: MemberImportJobItem, deps: HandlerDependencies) => {
+  await deps.documentClient.send(
+    new PutCommand({
+      Item: item,
+      TableName: context.tableName,
+    }),
+  );
+};
+
+const processMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+  const job = await getMemberImportJob(context, jobId, deps);
+  if (!job) {
+    return json(404, { message: "Import job not found." });
+  }
+
+  if (job.status === "completed" || job.status === "failed") {
+    return json(200, toMemberImportJob(job));
+  }
+
+  const chunks = await listMemberImportChunks(context, jobId, deps);
+  const nextChunk = chunks[0];
+  if (!nextChunk) {
+    const completedAt = deps.now();
+    const completedJob: MemberImportJobItem = {
+      ...job,
+      updatedAt: completedAt,
+      completedAt,
+      status: "completed",
+      processedRows: job.totalRows,
+      processedChunks: job.totalChunks,
+    };
+    await putImportJob(context, completedJob, deps);
+    return json(200, toMemberImportJob(completedJob));
+  }
+
+  let chunkResult = { created: 0, updated: 0, skipped: 0, errors: [] as MemberImportResult["errors"] };
+  for (const row of nextChunk.rows) {
+    const outcome = await processImportRow(context, row, job.fileName, deps);
+    chunkResult = {
+      created: chunkResult.created + outcome.created,
+      updated: chunkResult.updated + outcome.updated,
+      skipped: chunkResult.skipped + outcome.skipped,
+      errors: [...chunkResult.errors, ...outcome.errors],
+    };
+  }
+
+  await deleteKeysInBatches(deps.documentClient, context.tableName, [{ PK: nextChunk.PK, SK: nextChunk.SK }]);
+
+  const updatedAt = deps.now();
+  const processedRows = Math.min(job.totalRows, job.processedRows + nextChunk.rowCount);
+  const processedChunks = Math.min(job.totalChunks, job.processedChunks + 1);
+  const result: MemberImportResult = {
+    created: job.result.created + chunkResult.created,
+    updated: job.result.updated + chunkResult.updated,
+    skipped: job.result.skipped + chunkResult.skipped,
+    errorCount: job.result.errorCount + chunkResult.errors.length,
+    errors: mergeImportErrors(job.result.errors, chunkResult.errors),
+  };
+  const status: MemberImportJobStatus = processedChunks >= job.totalChunks ? "completed" : "running";
+  const nextJob: MemberImportJobItem = {
+    ...job,
+    updatedAt,
+    startedAt: job.startedAt ?? updatedAt,
+    completedAt: status === "completed" ? updatedAt : undefined,
+    processedRows,
+    processedChunks,
+    status,
+    result,
+  };
+  await putImportJob(context, nextJob, deps);
+
+  return json(200, toMemberImportJob(nextJob));
 };
 
 const getMemberEventsResponse = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
@@ -4695,7 +4967,12 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       if (method === "POST" && path === "/members/import") {
-        return await importMembers(context, parseBody<MemberImportInput>(typedEvent.body), deps);
+        return await createMemberImportJob(context, parseBody<MemberImportInput>(typedEvent.body), deps);
+      }
+
+      const importJobId = typedEvent.pathParameters?.jobId;
+      if (path === `/members/import/${importJobId}` && importJobId && method === "GET") {
+        return await processMemberImportJob(context, importJobId, deps);
       }
 
       const memberId = typedEvent.pathParameters?.memberId;

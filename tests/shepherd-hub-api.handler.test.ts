@@ -254,7 +254,7 @@ test("creates a member with tenant and member indexes", async () => {
   assert.match(String(response.body), /Adel Abraham/);
 });
 
-test("imports a Unity workbook when headers start below a title row", async () => {
+test("creates an async Unity import job when headers start below a title row", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const worksheet = XLSX.utils.aoa_to_sheet([
@@ -272,15 +272,12 @@ test("imports a Unity workbook when headers start below a title row", async () =
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
   const workbookBase64 = XLSX.write(workbook, { bookType: "xlsx", type: "base64" });
-  const uuids = ["member-1", "activity-1"];
+  const uuids = ["import-job-1"];
 
   const handler = createHandler({
     documentClient: {
       send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
         commands.push({ input: command.input, name: command.constructor.name });
-        if (command.constructor.name === "QueryCommand") {
-          return { Items: [] };
-        }
         return {};
       },
     },
@@ -312,13 +309,160 @@ test("imports a Unity workbook when headers start below a title row", async () =
     () => undefined,
   ) as APIGatewayProxyStructuredResultV2;
 
+  assert.equal(response.statusCode, 202);
+  assert.deepEqual(JSON.parse(String(response.body)), {
+    createdAt: "2026-06-03T12:00:00.000Z",
+    updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "MEMBER_IMPORT_JOB",
+    tenantId: "tenant-abc",
+    jobId: "import-job-1",
+    fileName: "Adel.xlsx",
+    status: "queued",
+    totalRows: 1,
+    processedRows: 0,
+    totalChunks: 1,
+    processedChunks: 0,
+    result: {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      errorCount: 0,
+      errors: [],
+    },
+  });
+  assert.equal(commands[0]?.name, "PutCommand");
+  assert.equal(commands[1]?.name, "BatchWriteCommand");
+});
+
+test("processes a member import job chunk and completes the job", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const uuids = ["member-1", "activity-1"];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          return {
+            Item: {
+              PK: "TENANT#tenant-abc",
+              SK: "MEMBER_IMPORT_JOB#import-job-1",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "MEMBER_IMPORT_JOB",
+              tenantId: "tenant-abc",
+              jobId: "import-job-1",
+              fileName: "Adel.xlsx",
+              status: "queued",
+              totalRows: 1,
+              processedRows: 0,
+              totalChunks: 1,
+              processedChunks: 0,
+              result: {
+                created: 0,
+                updated: 0,
+                skipped: 0,
+                errorCount: 0,
+                errors: [],
+              },
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          if (command.input.IndexName === "GSI2") {
+            return { Items: [] };
+          }
+
+          return {
+            Items: [
+              {
+                PK: "TENANT#tenant-abc",
+                SK: "MEMBER_IMPORT_JOB#import-job-1#CHUNK#000000",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "MEMBER_IMPORT_CHUNK",
+                tenantId: "tenant-abc",
+                jobId: "import-job-1",
+                chunkIndex: 0,
+                rowCount: 1,
+                rows: [
+                  {
+                    rowNumber: 3,
+                    values: {
+                      "Family ID": "family-1",
+                      "Household Name": "Abraham Household",
+                      "Member ID": "17317",
+                      "Member Name": "Adel Abraham",
+                      "Phone Number": "(613) 606-4114",
+                      Email: "adel@example.com",
+                    },
+                  },
+                ],
+              },
+            ],
+          };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => uuids.shift() ?? "fallback-id",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/members/import/import-job-1",
+      pathParameters: {
+        jobId: "import-job-1",
+      },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
   assert.equal(response.statusCode, 200);
   assert.deepEqual(JSON.parse(String(response.body)), {
-    created: 1,
-    updated: 0,
-    skipped: 0,
-    errors: [],
+    createdAt: "2026-06-03T12:00:00.000Z",
+    updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "MEMBER_IMPORT_JOB",
+    tenantId: "tenant-abc",
+    jobId: "import-job-1",
+    fileName: "Adel.xlsx",
+    status: "completed",
+    totalRows: 1,
+    processedRows: 1,
+    totalChunks: 1,
+    processedChunks: 1,
+    startedAt: "2026-06-03T12:00:00.000Z",
+    completedAt: "2026-06-03T12:00:00.000Z",
+    result: {
+      created: 1,
+      updated: 0,
+      skipped: 0,
+      errorCount: 0,
+      errors: [],
+    },
   });
+  assert.ok(commands.some((command) => command.name === "BatchWriteCommand"));
   assert.ok(commands.some((command) => command.name === "PutCommand"));
 });
 

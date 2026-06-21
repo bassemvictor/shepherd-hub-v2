@@ -5,8 +5,8 @@ import type {
   CreateMemberInput,
   EventMemberSummary,
   Member,
+  MemberImportJob,
   MemberVisitation,
-  MemberImportResult,
   MemberIndexItem,
 } from "../../../shared/types";
 import { cn } from "../../lib/utils";
@@ -285,17 +285,20 @@ export const MemberFormDialog = ({
 export const MemberImportDialog = ({
   open,
   busy,
-  result,
+  job,
   onClose,
   onImport,
 }: {
   open: boolean;
   busy: boolean;
-  result: MemberImportResult | null;
+  job: MemberImportJob | null;
   onClose: () => void;
   onImport: (file: File) => Promise<void> | void;
 }) => {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const isProcessingJob = job ? ["queued", "running"].includes(job.status) : false;
+  const isBusy = busy || isProcessingJob;
+  const progressLabel = job ? `${job.processedRows} of ${job.totalRows} rows processed` : null;
 
   return (
     <Dialog
@@ -321,25 +324,35 @@ export const MemberImportDialog = ({
         />
         <button
           className="flex w-full flex-col items-center justify-center gap-2 rounded-3xl border border-dashed border-border bg-slate-50 px-4 py-8 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-70"
-          disabled={busy}
+          disabled={isBusy}
           onClick={() => inputRef.current?.click()}
           type="button"
         >
-          {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
-          <span>{busy ? "Importing Excel..." : "Choose Excel file"}</span>
+          {isBusy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
+          <span>{isBusy ? "Importing Excel..." : "Choose Excel file"}</span>
           <span className="text-xs font-normal text-slate-500">
-            {busy ? "Please wait while members are updated." : "Supports .xls and .xlsx files."}
+            {isBusy ? "Please wait while members are updated." : "Supports .xls and .xlsx files."}
           </span>
         </button>
-        {result ? (
+        {job ? (
           <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-700">
-            <p>{result.created} created, {result.updated} updated, {result.skipped} skipped.</p>
-            {result.errors.length ? <p className="mt-1 text-rose-600">{result.errors.length} rows had errors.</p> : null}
+            <p className="font-medium">
+              {job.status === "completed"
+                ? "Import complete."
+                : job.status === "running"
+                  ? "Import in progress."
+                  : "Import queued."}
+            </p>
+            {progressLabel ? <p className="mt-1">{progressLabel}.</p> : null}
+            <p className="mt-1">
+              {job.result.created} created, {job.result.updated} updated, {job.result.skipped} skipped.
+            </p>
+            {job.result.errorCount ? <p className="mt-1 text-rose-600">{job.result.errorCount} rows had errors.</p> : null}
           </div>
         ) : null}
         <div className="flex justify-end">
-          <Button disabled={busy} onClick={onClose} type="button" variant="outline">
-            {busy ? "Importing..." : "Close"}
+          <Button disabled={isBusy} onClick={onClose} type="button" variant="outline">
+            {isBusy ? "Importing..." : "Close"}
           </Button>
         </div>
       </div>
