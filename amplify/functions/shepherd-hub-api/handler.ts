@@ -79,6 +79,7 @@ import type {
   CurrentUserVisitationActivity,
   TenantUserSummary,
   TenantUsersResponse,
+  ActivityTypeDistributionBucket,
   VisitationDistributionBucket,
   VisitationOverviewRow,
   VisitationReportFilters,
@@ -3975,6 +3976,7 @@ const getVisitationReport = async (
     thisMonth: 0,
     thisYear: 0,
   };
+  const activityTypeCounts = new Map<ActivityTypeDistributionBucket["key"], number>();
   const everyoneLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
   const filteredLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
   const currentUserLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
@@ -4043,6 +4045,8 @@ const getVisitationReport = async (
     }
 
     incrementCount(filteredRangeCountByMemberId, visitation.memberId);
+    const normalizedType = normalizeVisitationType(visitation.type);
+    activityTypeCounts.set(normalizedType, (activityTypeCounts.get(normalizedType) ?? 0) + 1);
 
     const existingVisitor = topVisitorsByUserId.get(visitation.visitorUserId);
     if (existingVisitor) {
@@ -4237,6 +4241,24 @@ const getVisitationReport = async (
     { key: "four_to_six", label: "4-6 visits", count: distributionCounts.four_to_six, percentage: (distributionCounts.four_to_six / distributionTotal) * 100 },
     { key: "seven_plus", label: "7+ visits", count: distributionCounts.seven_plus, percentage: (distributionCounts.seven_plus / distributionTotal) * 100 },
   ];
+  const totalActivities = [...activityTypeCounts.values()].reduce((sum, count) => sum + count, 0);
+  const activityTypeDistribution: ActivityTypeDistributionBucket[] = [
+    {
+      key: "all",
+      label: "All",
+      count: totalActivities,
+      percentage: totalActivities > 0 ? 100 : 0,
+    },
+    ...visitationTypes.map((type) => {
+      const count = activityTypeCounts.get(type) ?? 0;
+      return {
+        key: type,
+        label: type,
+        count,
+        percentage: totalActivities > 0 ? (count / totalActivities) * 100 : 0,
+      };
+    }),
+  ];
 
   const summary: VisitationReportKpiSummary = {
     totalMembers: filteredMembers.length,
@@ -4280,6 +4302,7 @@ const getVisitationReport = async (
     },
     summary,
     distribution,
+    activityTypeDistribution,
     attentionMembers,
     rows: allRows.slice(startIndex, startIndex + filters.pageSize),
     pagination,

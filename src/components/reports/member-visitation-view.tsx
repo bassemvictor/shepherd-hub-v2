@@ -8,6 +8,7 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import {
   formatReportDate,
+  getActivityCopy,
   getLastVisit,
   getRelevantVisits,
   getVisitCountForPeriod,
@@ -15,14 +16,16 @@ import {
   type ReportPeriod,
   type ReportScope,
 } from "./visitation-report-utils";
+import type { ReportsVisitationTypeFilter } from "../../../shared/types";
 
 const statusVariant = (status: ReturnType<typeof getVisitStatus>) =>
-  (status === "Need a Visit" ? "warning" as const : "success" as const);
+  (status.startsWith("Needs ") ? "warning" as const : "success" as const);
 
 export const MemberVisitationView = ({
   rows,
   scope,
   period,
+  visitationType,
   currentUser,
   page,
   totalPages,
@@ -31,18 +34,20 @@ export const MemberVisitationView = ({
   rows: VisitationOverviewRow[];
   scope: ReportScope;
   period: ReportPeriod;
+  visitationType: ReportsVisitationTypeFilter;
   currentUser?: AppAuthUser | null;
   page: number;
   totalPages: number;
   onPageChange: (page: number) => void;
 }) => {
   const navigate = useNavigate();
+  const activityCopy = getActivityCopy(visitationType);
 
   return (
     <Card>
       <CardHeader className="items-start sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <CardTitle>Member Visitation</CardTitle>
+          <CardTitle>Member Report</CardTitle>
           <div className="text-xs text-muted-foreground">Clear member-by-member results for the filters you selected.</div>
         </div>
         <div className="flex items-center gap-2">
@@ -59,7 +64,7 @@ export const MemberVisitationView = ({
         <div className="grid gap-3 md:hidden">
           {rows.map((row) => {
             const relevant = getRelevantVisits(row, scope, currentUser);
-            const status = getVisitStatus(row, period, scope, currentUser);
+            const status = getVisitStatus(row, period, scope, visitationType, currentUser);
             return (
               <button
                 className="rounded-lg border border-border/80 bg-slate-50 p-3 text-left"
@@ -76,9 +81,10 @@ export const MemberVisitationView = ({
                 </div>
                 <div className="mt-3 grid gap-2 text-sm text-slate-700">
                   <div>Group: {row.sectorOrGroup || "Not set"}</div>
-                  <div>Last Visit: {formatReportDate(getLastVisit(row, scope, currentUser))}</div>
-                  <div>Visits: {getVisitCountForPeriod(row, period, scope, currentUser)}</div>
-                  <div>Visitor: {relevant.lastVisitedBy || "No visitor yet"}</div>
+                  <div>Activity Type: {visitationType === "all" ? "All" : visitationType}</div>
+                  <div>{activityCopy.lastLabel}: {formatReportDate(getLastVisit(row, scope, currentUser))}</div>
+                  <div>{activityCopy.countLabel}: {getVisitCountForPeriod(row, period, scope, currentUser)}</div>
+                  <div>Recorded By: {relevant.lastVisitedBy || activityCopy.noneYetLabel}</div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {row.phone ? <a className="inline-flex h-8 items-center rounded-md border border-border bg-white px-2 text-xs" href={`tel:${row.phone}`} onClick={(event) => event.stopPropagation()}><Phone className="mr-1 h-3.5 w-3.5" />Call</a> : null}
@@ -95,7 +101,7 @@ export const MemberVisitationView = ({
           <table className="min-w-full border-separate border-spacing-0">
             <thead>
               <tr className="text-left">
-                {["Member", "Phone", "Group", "Last Visit", "Visits", "Visitor", "Status", "Actions"].map((header) => (
+                {["Member", "Phone", "Group", "Activity Type", activityCopy.lastLabel, activityCopy.countLabel, "Recorded By", "Status", "Actions"].map((header) => (
                   <th className="border-b border-border px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground" key={header}>
                     {header}
                   </th>
@@ -105,7 +111,7 @@ export const MemberVisitationView = ({
             <tbody>
               {rows.map((row) => {
                 const relevant = getRelevantVisits(row, scope, currentUser);
-                const status = getVisitStatus(row, period, scope, currentUser);
+                const status = getVisitStatus(row, period, scope, visitationType, currentUser);
                 return (
                   <tr className="bg-white hover:bg-slate-50/80" key={row.memberId}>
                     <td className="border-b border-border/70 px-3 py-3">
@@ -116,9 +122,10 @@ export const MemberVisitationView = ({
                     </td>
                     <td className="border-b border-border/70 px-3 py-3 text-sm">{row.phone || "Not set"}</td>
                     <td className="border-b border-border/70 px-3 py-3 text-sm">{row.sectorOrGroup || "Not set"}</td>
+                    <td className="border-b border-border/70 px-3 py-3 text-sm">{visitationType === "all" ? "All" : visitationType}</td>
                     <td className="border-b border-border/70 px-3 py-3 text-sm">{formatReportDate(getLastVisit(row, scope, currentUser))}</td>
                     <td className="border-b border-border/70 px-3 py-3 text-sm">{getVisitCountForPeriod(row, period, scope, currentUser)}</td>
-                    <td className="border-b border-border/70 px-3 py-3 text-sm">{relevant.lastVisitedBy || "No visitor yet"}</td>
+                    <td className="border-b border-border/70 px-3 py-3 text-sm">{relevant.lastVisitedBy || activityCopy.noneYetLabel}</td>
                     <td className="border-b border-border/70 px-3 py-3"><Badge variant={statusVariant(status)}>{status}</Badge></td>
                     <td className="border-b border-border/70 px-3 py-3">
                       <div className="flex flex-wrap gap-1.5">

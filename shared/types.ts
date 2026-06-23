@@ -311,6 +311,13 @@ export type VisitationDistributionBucket = {
   percentage: number;
 };
 
+export type ActivityTypeDistributionBucket = {
+  key: "all" | VisitationType;
+  label: string;
+  count: number;
+  percentage: number;
+};
+
 export type VisitationOverviewRow = {
   memberId: string;
   memberFullName: string;
@@ -368,6 +375,7 @@ export type VisitationReportResponse = {
   filters: VisitationReportFilters;
   summary: VisitationReportKpiSummary;
   distribution: VisitationDistributionBucket[];
+  activityTypeDistribution: ActivityTypeDistributionBucket[];
   attentionMembers: VisitationOverviewRow[];
   rows: VisitationOverviewRow[];
   pagination: ReportPagination;

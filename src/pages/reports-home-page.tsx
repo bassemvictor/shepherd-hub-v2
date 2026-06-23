@@ -12,8 +12,8 @@ const reportDestinations = [
     icon: ChartColumnBig,
   },
   {
-    title: "Member Visitation",
-    description: "Review detailed member-level results with filters, paging, and export-ready data.",
+    title: "Member Report",
+    description: "Review detailed member-level results with filters, sorting, paging, and export-ready data.",
     href: "/reports/member-visitation",
     icon: UsersRound,
   },
@@ -28,7 +28,7 @@ export const ReportsHomePage = () => (
       <CardHeader className="gap-2 pb-2">
         <CardTitle className="text-xl text-foreground">Choose a report</CardTitle>
         <CardDescription className="max-w-2xl text-sm">
-          Start from the main dashboard for a quick overview, or open member visitation for a detailed list.
+          Start from the main dashboard for a quick overview, or open the member report for a detailed list.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3 pt-2 md:grid-cols-2">

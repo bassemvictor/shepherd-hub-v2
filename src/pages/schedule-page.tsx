@@ -783,7 +783,7 @@ const EventEditor = ({
         </div>
         {selectedMembers.length ? (
           <label className="space-y-1.5">
-            <span className="text-sm font-medium text-foreground">Visitation Type</span>
+            <span className="text-sm font-medium text-foreground">Activity Type</span>
             <Select
               className={fieldClassName}
               onChange={(event) => onChange(applyVisitationTypeToForm(form, normalizeVisitationType(event.target.value), memberIndex))}

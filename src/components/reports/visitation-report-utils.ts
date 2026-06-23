@@ -1,10 +1,53 @@
 import type { AppAuthUser } from "../../lib/auth";
-import type { VisitationOverviewRow, VisitationReportFilters, VisitationScopeMetrics } from "../../../shared/types";
+import type {
+  ReportsVisitationTypeFilter,
+  VisitationOverviewRow,
+  VisitationReportFilters,
+  VisitationScopeMetrics,
+} from "../../../shared/types";
 
 export type ReportScope = "me" | "everyone";
 export type ReportView = "dashboard" | "members";
 export type ReportPeriod = "all_time" | "last_30_days" | "last_90_days" | "this_year" | "custom";
 export type ReportShowFilter = "everyone" | "need_visit" | "visited";
+
+const withArticle = (label: string) => (/^[aeiou]/i.test(label) ? `an ${label}` : `a ${label}`);
+
+export const getActivityCopy = (visitationType: ReportsVisitationTypeFilter) => {
+  const singular = visitationType === "all"
+    ? "Activity"
+    : visitationType === "Visitation"
+      ? "Visit"
+      : visitationType;
+  const plural = visitationType === "all"
+    ? "Activities"
+    : visitationType === "Visitation"
+      ? "Visits"
+      : visitationType === "Confession"
+        ? "Confessions"
+        : visitationType === "Phone Call"
+          ? "Phone Calls"
+          : visitationType === "Meeting"
+            ? "Meetings"
+            : visitationType === "Other"
+              ? "Other Activities"
+              : `${visitationType}s`;
+  const singularLower = singular.toLowerCase();
+  const pluralLower = plural.toLowerCase();
+
+  return {
+    singular,
+    plural,
+    singularLower,
+    pluralLower,
+    needsLabel: visitationType === "all" ? "Needs Activity" : `Needs ${withArticle(singular)}`,
+    membersNeedingLabel: visitationType === "all" ? "Needing Activity" : `Needing ${withArticle(singular)}`,
+    hasLabel: visitationType === "all" ? "Has Activity" : `Has ${singular}`,
+    noneYetLabel: visitationType === "all" ? "No activity yet" : `No ${singularLower} yet`,
+    lastLabel: `Last ${singular}`,
+    countLabel: `${singular} Count`,
+  };
+};
 
 const DAY_IN_MS = 86_400_000;
 
@@ -129,8 +172,12 @@ export const getVisitStatus = (
   member: VisitationOverviewRow,
   period: ReportPeriod,
   scope: ReportScope,
+  visitationType: ReportsVisitationTypeFilter,
   currentUser?: AppAuthUser | null,
-) => (hasVisitInPeriod(member, period, scope, currentUser) ? "Visited" as const : "Need a Visit" as const);
+) => {
+  const copy = getActivityCopy(visitationType);
+  return hasVisitInPeriod(member, period, scope, currentUser) ? copy.hasLabel : copy.needsLabel;
+};
 
 export const matchesShowFilter = (
   member: VisitationOverviewRow,
@@ -204,37 +251,45 @@ export const getPeriodDescription = (period: ReportPeriod) => {
   return "the selected period";
 };
 
-export const getFilterSummary = (showFilter: ReportShowFilter, period: ReportPeriod) => {
+export const getFilterSummary = (
+  showFilter: ReportShowFilter,
+  period: ReportPeriod,
+  visitationType: ReportsVisitationTypeFilter,
+) => {
+  const copy = getActivityCopy(visitationType);
+
   if (showFilter === "everyone") {
     return "Showing all members.";
   }
 
   if (showFilter === "need_visit") {
     if (period === "all_time") {
-      return "Showing members who have never been visited.";
+      return `Showing members with no recorded ${copy.pluralLower}.`;
     }
-    return `Showing members who have not been visited in ${getPeriodDescription(period)}.`;
+    return `Showing members with no recorded ${copy.pluralLower} in ${getPeriodDescription(period)}.`;
   }
 
   if (period === "all_time") {
-    return "Showing members who have been visited at least once.";
+    return `Showing members with at least one recorded ${copy.singularLower}.`;
   }
 
-  return `Showing members who were visited in ${getPeriodDescription(period)}.`;
+  return `Showing members with recorded ${copy.pluralLower} in ${getPeriodDescription(period)}.`;
 };
 
 export const getCoverageChartData = (
   rows: VisitationOverviewRow[],
   period: ReportPeriod,
   scope: ReportScope,
+  visitationType: ReportsVisitationTypeFilter,
   currentUser?: AppAuthUser | null,
 ) => {
   const visited = rows.filter((row) => hasVisitInPeriod(row, period, scope, currentUser)).length;
   const needVisit = rows.length - visited;
+  const copy = getActivityCopy(visitationType);
 
   return [
-    { key: "visited", label: "Visited", count: visited },
-    { key: "need_visit", label: "Need a Visit", count: needVisit },
+    { key: "visited", label: copy.hasLabel, count: visited },
+    { key: "need_visit", label: copy.needsLabel, count: needVisit },
   ] as const;
 };
 
@@ -242,6 +297,7 @@ export const getFrequencyChartData = (
   rows: VisitationOverviewRow[],
   period: ReportPeriod,
   scope: ReportScope,
+  visitationType: ReportsVisitationTypeFilter,
   currentUser?: AppAuthUser | null,
 ) => {
   const counts = {
@@ -267,12 +323,14 @@ export const getFrequencyChartData = (
     }
   });
 
+  const copy = getActivityCopy(visitationType);
+
   return [
-    { key: "zero", label: "0 Visits", count: counts.zero },
-    { key: "one", label: "1 Visit", count: counts.one },
-    { key: "two_to_three", label: "2-3 Visits", count: counts.two_to_three },
-    { key: "four_to_six", label: "4-6 Visits", count: counts.four_to_six },
-    { key: "seven_plus", label: "7+ Visits", count: counts.seven_plus },
+    { key: "zero", label: `0 ${copy.plural}`, count: counts.zero },
+    { key: "one", label: `1 ${copy.singular}`, count: counts.one },
+    { key: "two_to_three", label: `2-3 ${copy.plural}`, count: counts.two_to_three },
+    { key: "four_to_six", label: `4-6 ${copy.plural}`, count: counts.four_to_six },
+    { key: "seven_plus", label: `7+ ${copy.plural}`, count: counts.seven_plus },
   ] as const;
 };
 

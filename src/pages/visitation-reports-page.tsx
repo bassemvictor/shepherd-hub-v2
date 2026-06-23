@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import type { ReportsVisitationTypeFilter, VisitationOverviewRow, VisitationReportResponse } from "../../shared/types";
+import type {
+  ReportsSortBy,
+  ReportsSortDirection,
+  ReportsVisitationTypeFilter,
+  VisitationOverviewRow,
+  VisitationReportResponse,
+} from "../../shared/types";
 import { CompactFilterBar } from "../components/reports/compact-filter-bar";
 import { MemberVisitationView } from "../components/reports/member-visitation-view";
 import { ReportsDashboard } from "../components/reports/reports-dashboard";
 import { ReportsLayout } from "../components/reports/reports-layout";
 import {
+  getActivityCopy,
   buildReportFilters,
   formatReportDate,
   getFilterSummary,
@@ -30,6 +37,8 @@ const buildSearchState = (params: URLSearchParams) => ({
   period: (params.get("period") as ReportPeriod) || "last_90_days",
   selectedVisitorUserId: params.get("visitor") || undefined,
   visitationType: (params.get("type") as ReportsVisitationTypeFilter) || "all",
+  sortBy: (params.get("sortBy") as ReportsSortBy) || "member_name",
+  sortDirection: (params.get("sortDirection") as ReportsSortDirection) || "asc",
   show: (params.get("show") as ReportShowFilter) || "everyone",
   search: params.get("search") || "",
   customFrom: params.get("from") || "",
@@ -54,6 +63,12 @@ const buildParams = (state: ReturnType<typeof buildSearchState>) => {
   if (state.visitationType && state.visitationType !== "all") {
     params.set("type", state.visitationType);
   }
+  if (state.sortBy !== "member_name") {
+    params.set("sortBy", state.sortBy);
+  }
+  if (state.sortDirection !== "asc") {
+    params.set("sortDirection", state.sortDirection);
+  }
   if (state.period === "custom") {
     if (state.customFrom) {
       params.set("from", state.customFrom);
@@ -70,19 +85,22 @@ const toCsv = (
   rows: VisitationOverviewRow[],
   scope: ReportScope,
   period: ReportPeriod,
+  activityTypeLabel: string,
   currentUserName?: string,
 ) => {
-  const headers = ["Member", "Phone", "Group", "Last Visit", "Visits", "Visitor", "Status", "Scope"];
+  const activityCopy = getActivityCopy(activityTypeLabel === "All" ? "all" : activityTypeLabel as ReportsVisitationTypeFilter);
+  const headers = ["Member", "Phone", "Group", "Activity Type", activityCopy.lastLabel, activityCopy.countLabel, "Recorded By", "Status", "Scope"];
   const lines = rows.map((row) => {
     const metrics = getRelevantVisits(row, scope);
     return [
       row.memberFullName,
       row.phone ?? "",
       row.sectorOrGroup ?? "",
+      activityTypeLabel,
       formatReportDate(getLastVisit(row, scope)),
       getVisitCountForPeriod(row, period, scope),
       metrics.lastVisitedBy ?? "",
-      getVisitStatus(row, period, scope),
+      getVisitStatus(row, period, scope, activityTypeLabel === "All" ? "all" : activityTypeLabel as ReportsVisitationTypeFilter),
       scope === "me" ? `Me${currentUserName ? ` (${currentUserName})` : ""}` : "Everyone",
     ];
   });
@@ -146,6 +164,9 @@ const applyShowFilter = (
   }
 };
 
+const getActivityTypeLabel = (visitationType: ReportsVisitationTypeFilter) =>
+  visitationType === "all" ? "All" : visitationType;
+
 export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }) => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -166,6 +187,8 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       || patch.period !== undefined
       || patch.selectedVisitorUserId !== undefined
       || patch.visitationType !== undefined
+      || patch.sortBy !== undefined
+      || patch.sortDirection !== undefined
       || patch.customFrom !== undefined
       || patch.customTo !== undefined;
 
@@ -179,6 +202,8 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
   const hasPendingChanges = draftState.period !== searchState.period
     || draftState.selectedVisitorUserId !== searchState.selectedVisitorUserId
     || draftState.visitationType !== searchState.visitationType
+    || draftState.sortBy !== searchState.sortBy
+    || draftState.sortDirection !== searchState.sortDirection
     || draftState.show !== searchState.show
     || draftState.search !== searchState.search
     || draftState.customFrom !== searchState.customFrom
@@ -189,6 +214,8 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       period: draftState.period,
       selectedVisitorUserId: draftState.selectedVisitorUserId,
       visitationType: draftState.visitationType,
+      sortBy: draftState.sortBy,
+      sortDirection: draftState.sortDirection,
       show: draftState.show,
       search: draftState.search,
       customFrom: draftState.customFrom,
@@ -212,6 +239,8 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       filters.pageSize = DEFAULT_PAGE_SIZE;
       filters.search = reportView === "members" ? searchState.search.trim() || undefined : undefined;
       filters.type = searchState.visitationType as typeof filters.type;
+      filters.sortBy = searchState.sortBy;
+      filters.sortDirection = searchState.sortDirection;
       applyShowFilter(filters, searchState.show);
 
       const nextReport = await api.get<VisitationReportResponse>(
@@ -232,6 +261,8 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     searchState.period,
     searchState.search,
     searchState.selectedVisitorUserId,
+    searchState.sortBy,
+    searchState.sortDirection,
     searchState.visitationType,
     searchState.show,
   ]);
@@ -258,8 +289,11 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       return;
     }
 
-    downloadCsv(toCsv(report.rows, REPORT_SCOPE, searchState.period, user?.name), "visitation-report.csv");
-  }, [report, searchState.period, user?.name]);
+    downloadCsv(
+      toCsv(report.rows, REPORT_SCOPE, searchState.period, getActivityTypeLabel(searchState.visitationType), user?.name),
+      "member-report.csv",
+    );
+  }, [report, searchState.period, searchState.visitationType, user?.name]);
 
   if (!isApiConfigured) {
     return <div className="rounded-lg border border-border bg-white p-4 text-sm text-slate-700">Configure the API before using visitation reports.</div>;
@@ -280,18 +314,21 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
             runDisabled={loading || !hasPendingChanges}
             onSearchChange={reportView === "members" ? (search) => setDraftState((current) => ({ ...current, search })) : undefined}
             onShowFilterChange={(show) => setDraftState((current) => ({ ...current, show }))}
+            onSortChange={({ sortBy, sortDirection }) => setDraftState((current) => ({ ...current, sortBy, sortDirection }))}
             onVisitorChange={(selectedVisitorUserId) => setDraftState((current) => ({ ...current, selectedVisitorUserId }))}
             onVisitationTypeChange={(visitationType) => setDraftState((current) => ({ ...current, visitationType }))}
             period={draftState.period}
             scope={REPORT_SCOPE}
             search={reportView === "members" ? draftState.search : ""}
             selectedVisitorUserId={draftState.selectedVisitorUserId}
+            sortBy={draftState.sortBy}
+            sortDirection={draftState.sortDirection}
             visitationType={draftState.visitationType}
             showFilter={draftState.show}
             visitors={report?.visitors ?? []}
           />
           <div className="text-xs text-muted-foreground">
-            {getFilterSummary(searchState.show, searchState.period)}
+            {getFilterSummary(searchState.show, searchState.period, searchState.visitationType)}
           </div>
         </div>
       )}
@@ -300,7 +337,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
           ? "Track who needs a visit, who has been visited, and who to follow up with next."
           : "See exactly which members match the visitation filters you selected."
       }
-      title={reportView === "dashboard" ? "Reports Dashboard" : "Member Visitation"}
+      title={reportView === "dashboard" ? "Reports Dashboard" : "Member Report"}
     >
       {loading ? (
         <div className="rounded-lg border border-border bg-white p-4 text-sm text-muted-foreground">Loading report data...</div>
@@ -319,6 +356,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
             report={report}
             scope={REPORT_SCOPE}
             showFilter={searchState.show}
+            visitationType={searchState.visitationType}
           />
         ) : report.rows.length ? (
           <MemberVisitationView
@@ -329,6 +367,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
             rows={report.rows}
             scope={REPORT_SCOPE}
             totalPages={report.pagination.totalPages}
+            visitationType={searchState.visitationType}
           />
         ) : (
           <div className="rounded-lg border border-border bg-white p-8 text-center text-sm text-muted-foreground">

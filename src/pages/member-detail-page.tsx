@@ -581,10 +581,10 @@ export const MemberDetailPage = () => {
                   }}
                   type="button"
                 >
-                  Schedule Visit
+                  Schedule Activity
                 </Button>
                 <Button className="w-full" onClick={() => void openCreateManualVisitation()} size="sm" type="button" variant="outline">
-                  Record Visit
+                  Record Activity
                 </Button>
               </div>
 
@@ -624,7 +624,7 @@ export const MemberDetailPage = () => {
                 </div>
               ) : (
                 <div className="flex min-h-32 items-center justify-center rounded-md border border-dashed border-border bg-white px-4 text-center text-sm font-medium text-muted-foreground">
-                  No visitations recorded yet.
+                  No activities recorded yet.
                 </div>
               )}
             </div>
@@ -697,7 +697,7 @@ export const MemberDetailPage = () => {
         }}
         open={manualEditorOpen}
         panelClassName="bg-[linear-gradient(180deg,#f7faff_0%,#f3f7fd_100%)] dark:bg-[linear-gradient(180deg,#09111f_0%,#0b1422_100%)]"
-        title={manualEditorMode === "create" ? "Record Visit" : "Edit Manual Visit"}
+        title={manualEditorMode === "create" ? "Record Activity" : "Edit Manual Activity"}
         titleClassName="text-2xl font-semibold tracking-tight text-foreground"
         width="lg"
       >
@@ -777,7 +777,7 @@ export const MemberDetailPage = () => {
                 </div>
                 {manualForm.memberIds.length ? (
                   <label className="space-y-1.5">
-                    <span className="text-sm font-medium text-foreground">Visitation Type</span>
+                    <span className="text-sm font-medium text-foreground">Activity Type</span>
                     <Select
                       className={fieldClassName}
                       onChange={(event) =>
@@ -938,7 +938,7 @@ export const MemberDetailPage = () => {
         }
         onClose={() => setSelectedManualVisitation(null)}
         open={Boolean(selectedManualVisitation)}
-        title={selectedManualVisitation?.title ?? "Manual Visit"}
+        title={selectedManualVisitation?.title ?? "Manual Activity"}
       >
         {selectedManualVisitation ? (
           <div className="space-y-3">
@@ -946,7 +946,7 @@ export const MemberDetailPage = () => {
             <div className="grid gap-2">
               {[
                 ["Visit Date", formatVisitDateTime(selectedManualVisitation)],
-                ["Visitation Type", normalizeVisitationType(selectedManualVisitation.type)],
+                ["Activity Type", normalizeVisitationType(selectedManualVisitation.type)],
                 ["Location", selectedManualVisitation.location || "Not set"],
                 ["Visitor", selectedManualVisitation.visitorDisplayName],
                 ["Visit Status", visitationStatusLabel(selectedManualVisitation.visitStatus)],
@@ -983,7 +983,7 @@ export const MemberDetailPage = () => {
         onClose={() => setManualDeleteOpen(false)}
         onConfirm={() => void handleManualDelete()}
         open={manualDeleteOpen}
-        title="Delete Manual Visit?"
+        title="Delete Manual Activity?"
       />
     </div>
   );

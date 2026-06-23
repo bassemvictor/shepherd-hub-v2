@@ -2,9 +2,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 
 export const TopVisitorsCard = ({
   title = "Top Visitors",
+  subtitle = "Visits in selected period",
   entries,
 }: {
   title?: string;
+  subtitle?: string;
   entries: Array<{ visitorUserId: string; visitorDisplayName: string; visitCountInRange: number }>;
 }) => (
   <Card>
@@ -16,7 +18,7 @@ export const TopVisitorsCard = ({
         <div className="flex items-center justify-between rounded-md border border-border/80 px-3 py-2" key={entry.visitorUserId}>
           <div>
             <div className="text-sm font-medium text-slate-900">{index + 1}. {entry.visitorDisplayName}</div>
-            <div className="text-xs text-muted-foreground">Visits in selected period</div>
+            <div className="text-xs text-muted-foreground">{subtitle}</div>
           </div>
           <div className="text-lg font-semibold text-slate-950">{entry.visitCountInRange}</div>
         </div>

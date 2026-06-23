@@ -1,11 +1,16 @@
 import { Download, Play, Search } from "lucide-react";
 
-import type { ReportVisitorOption, ReportsVisitationTypeFilter } from "../../../shared/types";
+import type {
+  ReportVisitorOption,
+  ReportsSortBy,
+  ReportsSortDirection,
+  ReportsVisitationTypeFilter,
+} from "../../../shared/types";
 import { visitationTypes } from "../../../shared/types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
-import type { ReportPeriod, ReportScope, ReportShowFilter } from "./visitation-report-utils";
+import { getActivityCopy, type ReportPeriod, type ReportScope, type ReportShowFilter } from "./visitation-report-utils";
 
 const FilterField = ({
   label,
@@ -36,6 +41,9 @@ export const CompactFilterBar = ({
   visitors,
   visitationType,
   onVisitationTypeChange,
+  sortBy,
+  sortDirection,
+  onSortChange,
   showFilter,
   onShowFilterChange,
   onRunReport,
@@ -56,15 +64,21 @@ export const CompactFilterBar = ({
   visitors: ReportVisitorOption[];
   visitationType: ReportsVisitationTypeFilter;
   onVisitationTypeChange: (value: ReportsVisitationTypeFilter) => void;
+  sortBy: ReportsSortBy;
+  sortDirection: ReportsSortDirection;
+  onSortChange: (value: { sortBy: ReportsSortBy; sortDirection: ReportsSortDirection }) => void;
   showFilter: ReportShowFilter;
   onShowFilterChange: (value: ReportShowFilter) => void;
   onRunReport: () => void;
   runDisabled?: boolean;
   onExport: () => void;
   scope: ReportScope;
-}) => (
+}) => {
+  const activityCopy = getActivityCopy(visitationType);
+
+  return (
   <>
-    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_160px_160px_170px_170px_150px_120px]">
+    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_160px_160px_170px_170px_170px_150px_120px]">
       {onSearchChange ? (
         <FilterField label="Search">
           <label className="relative block">
@@ -82,8 +96,8 @@ export const CompactFilterBar = ({
       <FilterField label="Show">
         <Select onChange={(event) => onShowFilterChange(event.target.value as ReportShowFilter)} value={showFilter}>
           <option value="everyone">Everyone</option>
-          <option value="need_visit">Need a Visit</option>
-          <option value="visited">Visited</option>
+          <option value="need_visit">{activityCopy.needsLabel}</option>
+          <option value="visited">{activityCopy.hasLabel}</option>
         </Select>
       </FilterField>
 
@@ -123,6 +137,28 @@ export const CompactFilterBar = ({
         </Select>
       </FilterField>
 
+      <FilterField label="Sort">
+        <Select
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === "visit_count_desc") {
+              onSortChange({ sortBy: "visit_count", sortDirection: "desc" });
+              return;
+            }
+            if (value === "visit_count_asc") {
+              onSortChange({ sortBy: "visit_count", sortDirection: "asc" });
+              return;
+            }
+            onSortChange({ sortBy: "member_name", sortDirection: "asc" });
+          }}
+          value={sortBy === "visit_count" ? `visit_count_${sortDirection}` : "member_name_asc"}
+        >
+          <option value="member_name_asc">Member Name</option>
+          <option value="visit_count_desc">Count: High to Low</option>
+          <option value="visit_count_asc">Count: Low to High</option>
+        </Select>
+      </FilterField>
+
       <FilterField label="Run Report">
         <Button className="w-full" disabled={runDisabled} onClick={onRunReport} type="button">
           <Play className="h-3.5 w-3.5" />
@@ -149,4 +185,5 @@ export const CompactFilterBar = ({
       </div>
     ) : null}
   </>
-);
+  );
+};

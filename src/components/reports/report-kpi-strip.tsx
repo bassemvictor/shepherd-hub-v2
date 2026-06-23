@@ -1,16 +1,24 @@
-import type { VisitationReportKpiSummary } from "../../../shared/types";
+import type { ReportsVisitationTypeFilter, VisitationReportKpiSummary } from "../../../shared/types";
+import { getActivityCopy } from "./visitation-report-utils";
 
 const formatNumber = (value: number) =>
   Number.isInteger(value) ? String(value) : value.toFixed(2);
 
-export const ReportKpiStrip = ({ summary }: { summary: VisitationReportKpiSummary }) => {
+export const ReportKpiStrip = ({
+  summary,
+  visitationType,
+}: {
+  summary: VisitationReportKpiSummary;
+  visitationType: ReportsVisitationTypeFilter;
+}) => {
+  const activityCopy = getActivityCopy(visitationType);
   const items = [
     { label: "Total Members", value: summary.totalMembers },
     { label: "Matching Members", value: summary.matchingMembers },
-    { label: "Never Visited", value: summary.notVisitedMembers },
-    { label: "Members Needing Visits", value: summary.overdueMembers + summary.lowVisitationMembers },
-    { label: "Members Visited", value: summary.visitedInRangeMembers },
-    { label: "Avg Visits / Member", value: summary.averageVisitsPerMember },
+    { label: `No ${activityCopy.plural}`, value: summary.notVisitedMembers },
+    { label: `Members ${activityCopy.membersNeedingLabel}`, value: summary.overdueMembers + summary.lowVisitationMembers },
+    { label: `Members With ${activityCopy.plural}`, value: summary.visitedInRangeMembers },
+    { label: `Avg ${activityCopy.plural} / Member`, value: summary.averageVisitsPerMember },
   ];
 
   return (

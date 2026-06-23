@@ -44,7 +44,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
         children: [
           { label: "Reports", href: "/reports" },
           { label: "Reports Dashboard", href: "/reports/dashboard" },
-          { label: "Member Visitation", href: "/reports/member-visitation" },
+          { label: "Member Report", href: "/reports/member-visitation" },
         ],
       },
     ],

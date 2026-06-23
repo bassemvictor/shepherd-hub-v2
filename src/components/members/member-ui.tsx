@@ -96,8 +96,8 @@ export const MemberDetailsTabs = ({
 }) => {
   const items = [
     { id: "details", label: "Details" },
-    { id: "visitations", label: "Visitations" },
-    { id: "activity", label: "Activity" },
+    { id: "visitations", label: "Activities" },
+    { id: "activity", label: "Timeline" },
   ] as const;
 
   return (
