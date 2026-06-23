@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import type { VisitationOverviewRow, VisitationReportResponse } from "../../shared/types";
+import type { ReportsVisitationTypeFilter, VisitationOverviewRow, VisitationReportResponse } from "../../shared/types";
 import { CompactFilterBar } from "../components/reports/compact-filter-bar";
 import { MemberVisitationView } from "../components/reports/member-visitation-view";
 import { ReportsDashboard } from "../components/reports/reports-dashboard";
@@ -29,6 +29,7 @@ const REPORT_SCOPE: ReportScope = "everyone";
 const buildSearchState = (params: URLSearchParams) => ({
   period: (params.get("period") as ReportPeriod) || "last_90_days",
   selectedVisitorUserId: params.get("visitor") || undefined,
+  visitationType: (params.get("type") as ReportsVisitationTypeFilter) || "all",
   show: (params.get("show") as ReportShowFilter) || "everyone",
   search: params.get("search") || "",
   customFrom: params.get("from") || "",
@@ -49,6 +50,9 @@ const buildParams = (state: ReturnType<typeof buildSearchState>) => {
   }
   if (state.selectedVisitorUserId) {
     params.set("visitor", state.selectedVisitorUserId);
+  }
+  if (state.visitationType && state.visitationType !== "all") {
+    params.set("type", state.visitationType);
   }
   if (state.period === "custom") {
     if (state.customFrom) {
@@ -117,6 +121,7 @@ const filtersToQueryString = (filters: ReturnType<typeof buildReportFilters>, pa
   }
   params.set("memberScope", filters.memberScope);
   params.set("memberSource", filters.memberSource);
+  params.set("type", filters.type);
   params.set("status", filters.status);
   params.set("sortBy", filters.sortBy);
   params.set("sortDirection", filters.sortDirection);
@@ -160,6 +165,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       || patch.show !== undefined
       || patch.period !== undefined
       || patch.selectedVisitorUserId !== undefined
+      || patch.visitationType !== undefined
       || patch.customFrom !== undefined
       || patch.customTo !== undefined;
 
@@ -172,6 +178,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
 
   const hasPendingChanges = draftState.period !== searchState.period
     || draftState.selectedVisitorUserId !== searchState.selectedVisitorUserId
+    || draftState.visitationType !== searchState.visitationType
     || draftState.show !== searchState.show
     || draftState.search !== searchState.search
     || draftState.customFrom !== searchState.customFrom
@@ -181,6 +188,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     setState({
       period: draftState.period,
       selectedVisitorUserId: draftState.selectedVisitorUserId,
+      visitationType: draftState.visitationType,
       show: draftState.show,
       search: draftState.search,
       customFrom: draftState.customFrom,
@@ -203,6 +211,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       filters.page = reportView === "members" ? searchState.page : 1;
       filters.pageSize = DEFAULT_PAGE_SIZE;
       filters.search = reportView === "members" ? searchState.search.trim() || undefined : undefined;
+      filters.type = searchState.visitationType as typeof filters.type;
       applyShowFilter(filters, searchState.show);
 
       const nextReport = await api.get<VisitationReportResponse>(
@@ -223,6 +232,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     searchState.period,
     searchState.search,
     searchState.selectedVisitorUserId,
+    searchState.visitationType,
     searchState.show,
   ]);
 
@@ -271,10 +281,12 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
             onSearchChange={reportView === "members" ? (search) => setDraftState((current) => ({ ...current, search })) : undefined}
             onShowFilterChange={(show) => setDraftState((current) => ({ ...current, show }))}
             onVisitorChange={(selectedVisitorUserId) => setDraftState((current) => ({ ...current, selectedVisitorUserId }))}
+            onVisitationTypeChange={(visitationType) => setDraftState((current) => ({ ...current, visitationType }))}
             period={draftState.period}
             scope={REPORT_SCOPE}
             search={reportView === "members" ? draftState.search : ""}
             selectedVisitorUserId={draftState.selectedVisitorUserId}
+            visitationType={draftState.visitationType}
             showFilter={draftState.show}
             visitors={report?.visitors ?? []}
           />

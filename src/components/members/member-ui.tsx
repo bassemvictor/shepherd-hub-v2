@@ -127,6 +127,7 @@ export const MemberSearchAutocomplete = ({
   selectedIds,
   onSelect,
   placeholder = "Search members",
+  maxResults = 5,
 }: {
   items: MemberIndexItem[];
   query: string;
@@ -134,8 +135,10 @@ export const MemberSearchAutocomplete = ({
   selectedIds: string[];
   onSelect: (item: MemberIndexItem) => void;
   placeholder?: string;
+  maxResults?: number;
 }) => {
   const [activeIndex, setActiveIndex] = useState(0);
+  const resultRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const results = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) {
@@ -148,12 +151,16 @@ export const MemberSearchAutocomplete = ({
           !selectedIds.includes(item.memberId) &&
           item.normalizedSearchText.includes(normalized),
       )
-      .slice(0, 5);
-  }, [items, query, selectedIds]);
+      .slice(0, maxResults);
+  }, [items, maxResults, query, selectedIds]);
 
   useEffect(() => {
     setActiveIndex(0);
   }, [query]);
+
+  useEffect(() => {
+    resultRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
 
   const showSuggestions = query.trim().length > 0 && results.length > 0;
 
@@ -188,7 +195,7 @@ export const MemberSearchAutocomplete = ({
         />
       </label>
       {showSuggestions ? (
-        <div className="rounded-md border border-border bg-white p-1 panel-shadow">
+        <div className="max-h-64 overflow-y-auto rounded-md border border-border bg-white p-1 panel-shadow">
           {results.map((item, index) => (
             <button
               className={cn(
@@ -197,6 +204,9 @@ export const MemberSearchAutocomplete = ({
               )}
               key={item.memberId}
               onClick={() => onSelect(item)}
+              ref={(element) => {
+                resultRefs.current[index] = element;
+              }}
               type="button"
             >
               <MemberAvatar fullName={item.fullName} initials={item.initials} size="sm" />

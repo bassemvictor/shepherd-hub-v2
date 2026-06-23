@@ -89,6 +89,7 @@ export type ScheduleEvent = EntityEnvelope & {
   assignedMemberNames?: string[];
   memberIds?: string[];
   memberNames?: string[];
+  visitationType?: VisitationType;
 };
 
 export type CalendarSyncSnapshot = {
@@ -141,6 +142,7 @@ export type CreateScheduleEventInput = {
   end: string;
   allDay?: boolean;
   memberIds?: string[];
+  type?: VisitationType;
 };
 
 export type UpdateScheduleEventInput = {
@@ -153,6 +155,7 @@ export type UpdateScheduleEventInput = {
   end?: string;
   allDay?: boolean;
   memberIds?: string[];
+  type?: VisitationType;
 };
 
 export type ConnectGoogleResponse = {
@@ -160,6 +163,8 @@ export type ConnectGoogleResponse = {
 };
 
 export type MemberSource = "UNITY" | "MANUAL";
+export const visitationTypes = ["Visitation", "Confession", "Phone Call", "Meeting", "Other"] as const;
+export type VisitationType = typeof visitationTypes[number];
 
 export type MemberIndexItem = {
   memberId: string;
@@ -232,6 +237,7 @@ export type VisitationSource = "calendar" | "manual";
 export type MemberVisitation = EntityEnvelope & {
   visitationId: string;
   source: VisitationSource;
+  type: VisitationType;
   title: string;
   visitDate: string;
   endDate?: string;
@@ -263,6 +269,7 @@ export type ReportsVisitorFilterMode = "any" | "me_only" | "exclude_me" | "speci
 export type ReportsVisitCountMode = "all" | "not_visited" | "lte" | "gt";
 export type ReportsMemberScope = "active_only" | "all_members";
 export type ReportsMemberSourceFilter = "all" | "unity" | "manual";
+export type ReportsVisitationTypeFilter = "all" | VisitationType;
 export type ReportsSortBy = "last_visit_date" | "visit_count" | "member_name";
 export type ReportsSortDirection = "asc" | "desc";
 export type ReportsMemberStatusFilter = "all" | "never_visited" | "not_visited_recently" | "low_visitation" | "visited";
@@ -277,6 +284,7 @@ export type VisitationReportFilters = {
   visitorUserId?: string;
   memberScope: ReportsMemberScope;
   memberSource: ReportsMemberSourceFilter;
+  type: ReportsVisitationTypeFilter;
   status: ReportsMemberStatusFilter;
   group?: string;
   search?: string;
@@ -434,6 +442,7 @@ export type UpdateEventMembersInput = {
 export type CreateManualVisitationInput = {
   title: string;
   visitDate: string;
+  type?: VisitationType;
   location?: string;
   visitStatus?: string;
   notes?: string;

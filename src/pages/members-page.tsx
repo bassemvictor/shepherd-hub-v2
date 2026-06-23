@@ -43,7 +43,7 @@ export const MembersPage = () => {
     status: authStatus,
   } = useMembersIndex();
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [sortMode, setSortMode] = useState<SortMode>("az");
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
@@ -62,6 +62,11 @@ export const MembersPage = () => {
     nextParams.delete("mobileAction");
     setSearchParams(nextParams, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    const nextQuery = searchParams.get("q") ?? "";
+    setQuery((current) => (current === nextQuery ? current : nextQuery));
+  }, [searchParams]);
 
   useEffect(() => {
     const persistedJobId = window.sessionStorage.getItem(activeImportJobStorageKey);
@@ -179,8 +184,16 @@ export const MembersPage = () => {
               aria-label="Search members"
               className="w-full min-w-0 bg-transparent text-sm outline-none"
               onChange={(event) => {
-                setQuery(event.target.value);
+                const nextQuery = event.target.value;
+                setQuery(nextQuery);
                 setPage(1);
+                const nextParams = new URLSearchParams(searchParams);
+                if (nextQuery.trim()) {
+                  nextParams.set("q", nextQuery);
+                } else {
+                  nextParams.delete("q");
+                }
+                setSearchParams(nextParams, { replace: true });
               }}
               placeholder="Search members"
               value={query}

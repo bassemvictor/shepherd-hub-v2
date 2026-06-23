@@ -62,6 +62,7 @@ export const buildReportFilters = (
     visitorUserId: selectedVisitorUserId,
     memberScope: "active_only",
     memberSource: "all",
+    type: "all",
     status: "all",
     group: undefined,
     search: undefined,

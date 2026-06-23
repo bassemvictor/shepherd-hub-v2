@@ -42,7 +42,9 @@ import type {
   ScheduleEventsResponse,
   ScheduleOverviewResponse,
   UpdateScheduleEventInput,
+  VisitationType,
 } from "../../shared/types";
+import { visitationTypes } from "../../shared/types";
 import {
   MemberChip,
   MemberSearchAutocomplete,
@@ -85,12 +87,12 @@ type EventFormState = {
   allDay: boolean;
   memberIds: string[];
   memberQuery: string;
+  visitationType: VisitationType;
 };
 
 const fullCalendarPlugins = [dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin];
 
 const FALLBACK_EVENT_COLOR = "#2563eb";
-const VISITATION_TITLE_PREFIX = "Visitation: ";
 const QUARTER_HOUR_MINUTES = 15;
 const MOBILE_BETA_SLOT_MINUTES = 30;
 const MOBILE_BETA_DAY_START_HOUR = 6;
@@ -103,6 +105,7 @@ const EVENT_DURATION_PRESETS = [
   { label: "1.5 hr", minutes: 90 },
   { label: "2 hr", minutes: 120 },
 ] as const;
+const DEFAULT_VISITATION_TYPE: VisitationType = "Visitation";
 
 const clampSyncProgress = (value: number) => Math.max(0, Math.min(100, value));
 
@@ -468,6 +471,9 @@ const parseAttendees = (value: string) =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
+const normalizeVisitationType = (value: string | undefined): VisitationType =>
+  visitationTypes.includes(value as VisitationType) ? value as VisitationType : DEFAULT_VISITATION_TYPE;
+
 const buildOptionalEventFields = (form: EventFormState) => {
   const attendees = parseAttendees(form.attendeesText);
   const description = form.description.trim();
@@ -478,6 +484,7 @@ const buildOptionalEventFields = (form: EventFormState) => {
     ...(location ? { location } : {}),
     ...(attendees.length ? { attendees } : {}),
     ...(form.memberIds.length ? { memberIds: form.memberIds } : {}),
+    ...(form.memberIds.length ? { type: normalizeVisitationType(form.visitationType) } : {}),
   };
 };
 
@@ -488,13 +495,17 @@ const getSelectedMemberNames = (memberIds: string[], memberIndex: MemberIndexIte
 
 const isVisitationSummary = (value: string) => {
   const normalized = value.trim();
-  return normalized === "Visitation" || normalized.startsWith(VISITATION_TITLE_PREFIX.trim());
+  return visitationTypes.some((type) => normalized === type || normalized.startsWith(`${type}: `));
 };
 
-const buildVisitationSummary = (memberIds: string[], memberIndex: MemberIndexItem[]) => {
+const buildVisitationSummary = (
+  memberIds: string[],
+  memberIndex: MemberIndexItem[],
+  visitationType: VisitationType = DEFAULT_VISITATION_TYPE,
+) => {
   const memberNames = getSelectedMemberNames(memberIds, memberIndex);
 
-  return memberNames.length ? `${VISITATION_TITLE_PREFIX}${memberNames.join(", ")}` : "Visitation";
+  return memberNames.length ? `${visitationType}: ${memberNames.join(", ")}` : visitationType;
 };
 
 const isVisitationDescription = (value: string) => value.trim().startsWith("Members:");
@@ -509,6 +520,11 @@ const applyMemberSelectionToForm = (
   nextMemberIds: string[],
   memberIndex: MemberIndexItem[],
 ): EventFormState => {
+  const hadMembers = currentForm.memberIds.length > 0;
+  const hasMembers = nextMemberIds.length > 0;
+  const nextVisitationType = hasMembers
+    ? (hadMembers ? normalizeVisitationType(currentForm.visitationType) : DEFAULT_VISITATION_TYPE)
+    : DEFAULT_VISITATION_TYPE;
   const previousFirstMember = emptyMemberSelection(memberIndex, currentForm.memberIds)[0];
   const nextSelectedMembers = emptyMemberSelection(memberIndex, nextMemberIds);
   const nextFirstMember = nextSelectedMembers[0];
@@ -517,7 +533,7 @@ const applyMemberSelectionToForm = (
     ...currentForm,
     summary:
       !currentForm.summary.trim() || isVisitationSummary(currentForm.summary)
-        ? buildVisitationSummary(nextMemberIds, memberIndex)
+        ? buildVisitationSummary(nextMemberIds, memberIndex, nextVisitationType)
         : currentForm.summary,
     description:
       !currentForm.description.trim() || isVisitationDescription(currentForm.description)
@@ -530,8 +546,22 @@ const applyMemberSelectionToForm = (
         : currentForm.attendeesText,
     memberIds: nextMemberIds,
     memberQuery: "",
+    visitationType: nextVisitationType,
   };
 };
+
+const applyVisitationTypeToForm = (
+  currentForm: EventFormState,
+  nextVisitationType: VisitationType,
+  memberIndex: MemberIndexItem[],
+): EventFormState => ({
+  ...currentForm,
+  summary:
+    !currentForm.summary.trim() || isVisitationSummary(currentForm.summary)
+      ? buildVisitationSummary(currentForm.memberIds, memberIndex, nextVisitationType)
+      : currentForm.summary,
+  visitationType: nextVisitationType,
+});
 
 const emptyEventForm = (calendarId = ""): EventFormState => {
   const start = snapDateToQuarterHour(new Date(), "ceil");
@@ -549,6 +579,7 @@ const emptyEventForm = (calendarId = ""): EventFormState => {
     allDay: false,
     memberIds: [],
     memberQuery: "",
+    visitationType: DEFAULT_VISITATION_TYPE,
   };
 };
 
@@ -563,6 +594,7 @@ const eventToFormState = (event: ScheduleEvent): EventFormState => ({
   allDay: event.allDay,
   memberIds: event.memberIds ?? [],
   memberQuery: "",
+  visitationType: event.memberIds?.length ? normalizeVisitationType(event.visitationType) : DEFAULT_VISITATION_TYPE,
 });
 
 const createFormFromSelection = (
@@ -581,6 +613,7 @@ const createFormFromSelection = (
   allDay,
   memberIds: [],
   memberQuery: "",
+  visitationType: DEFAULT_VISITATION_TYPE,
 });
 
 const createIntentFormFromSearchParams = (
@@ -598,11 +631,12 @@ const createIntentFormFromSearchParams = (
   const memberAddress = searchParams.get("memberAddress")?.trim() ?? "";
   const baseForm: EventFormState = {
     ...emptyEventForm(calendarId),
-    summary: memberName ? `${VISITATION_TITLE_PREFIX}${memberName}` : "Visitation",
+    summary: memberName ? `${DEFAULT_VISITATION_TYPE}: ${memberName}` : DEFAULT_VISITATION_TYPE,
     description: memberName ? `Members: ${memberName}` : "",
     location: memberAddress,
     attendeesText: memberEmail,
     memberIds: [memberId],
+    visitationType: DEFAULT_VISITATION_TYPE,
   };
 
   return memberIndex.length
@@ -675,6 +709,21 @@ const EventEditor = ({
     onChange({ ...form, end: toLocalDateTimeInputFromDate(nextEnd) });
   };
 
+  const selectedDurationMinutes = (() => {
+    if (form.allDay) {
+      return null;
+    }
+
+    const startDate = parseLocalDateTimeInput(form.start);
+    const endDate = parseLocalDateTimeInput(form.end);
+    if (!startDate || !endDate) {
+      return null;
+    }
+
+    const diffMinutes = Math.round((endDate.getTime() - startDate.getTime()) / 60000);
+    return diffMinutes > 0 ? diffMinutes : null;
+  })();
+
   const content = (
     <div className="space-y-3">
       <section className={sectionCardClassName}>
@@ -687,6 +736,7 @@ const EventEditor = ({
         </div>
         <MemberSearchAutocomplete
           items={memberIndex}
+          maxResults={24}
           onQueryChange={(value) => onChange({ ...form, memberQuery: value })}
           onSelect={(member) =>
             onChange(
@@ -731,6 +781,22 @@ const EventEditor = ({
             </div>
           )}
         </div>
+        {selectedMembers.length ? (
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium text-foreground">Visitation Type</span>
+            <Select
+              className={fieldClassName}
+              onChange={(event) => onChange(applyVisitationTypeToForm(form, normalizeVisitationType(event.target.value), memberIndex))}
+              value={normalizeVisitationType(form.visitationType)}
+            >
+              {visitationTypes.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </Select>
+          </label>
+        ) : null}
       </section>
 
       <section className={sectionCardClassName}>
@@ -851,7 +917,9 @@ const EventEditor = ({
               {EVENT_DURATION_PRESETS.map((preset) => (
                 <button
                   key={preset.minutes}
-                  className="schedule-beta-slot-pill min-h-0 px-2 py-1 text-[0.7rem]"
+                  className={`schedule-beta-slot-pill min-h-0 px-2 py-1 text-[0.7rem] ${
+                    selectedDurationMinutes === preset.minutes ? "schedule-beta-slot-pill-active" : ""
+                  }`}
                   onClick={() => applyDurationPreset(preset.minutes)}
                   type="button"
                 >

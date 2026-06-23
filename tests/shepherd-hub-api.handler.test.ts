@@ -906,6 +906,7 @@ test("writes memberIds into Google event private metadata when creating a schedu
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   let googleRequestBody = "";
   let storedEvent: Record<string, unknown> | undefined;
+  const writtenVisitations: Array<Record<string, unknown>> = [];
 
   const handler = createHandler({
     documentClient: {
@@ -914,6 +915,9 @@ test("writes memberIds into Google event private metadata when creating a schedu
           const item = command.input.Item as Record<string, unknown>;
           if (item.entityType === "schedule_event") {
             storedEvent = item;
+          }
+          if (item.entityType === "VISITATION") {
+            writtenVisitations.push(item);
           }
           return {};
         }
@@ -1074,6 +1078,383 @@ test("writes memberIds into Google event private metadata when creating a schedu
   assert.equal(storedEvent?.source, "GOOGLE");
   assert.deepEqual(storedEvent?.memberIds, ["member-1"]);
   assert.deepEqual(storedEvent?.memberNames, ["Adel Abraham"]);
+  assert.equal(storedEvent?.visitationType, "Visitation");
+  assert.equal(writtenVisitations[0]?.type, "Visitation");
+});
+
+test("stores an explicit visitation type when creating a schedule event", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  let storedEvent: Record<string, unknown> | undefined;
+  const writtenVisitations: Array<Record<string, unknown>> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "PutCommand") {
+          const item = command.input.Item as Record<string, unknown>;
+          if (item.entityType === "schedule_event") {
+            storedEvent = item;
+          }
+          if (item.entityType === "VISITATION") {
+            writtenVisitations.push(item);
+          }
+          return {};
+        }
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "google_connection",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account",
+                email: "owner@example.com",
+                accessToken: "token-123",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-03T12:00:00.000Z",
+                lastConnectedAt: "2026-06-03T12:00:00.000Z",
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "CALENDAR#calendar-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "CALENDAR#calendar-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_calendar",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                summary: "Main Calendar",
+                primary: true,
+                enabled: true,
+                selected: true,
+                sync: {
+                  syncMode: "ALWAYS_GOOGLE",
+                  refreshIntervalMinutes: 15,
+                  initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                  lastSyncStatus: "idle",
+                  requiresFullSync: false,
+                },
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "EVENT#calendar-1#event-1") {
+            return { Item: storedEvent };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          return {
+            Responses: {
+              "records-table": [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  fullName: "Adel Abraham",
+                  initials: "AA",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "adel abraham",
+                },
+              ],
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: "event-1",
+        summary: "Phone Call",
+        start: { dateTime: "2026-06-04T15:00:00.000Z" },
+        end: { dateTime: "2026-06-04T16:00:00.000Z" },
+        extendedProperties: {
+          private: {
+            memberIds: "member-1",
+          },
+        },
+      }),
+    }) as Response,
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events",
+      body: JSON.stringify({
+        calendarId: "calendar-1",
+        summary: "Phone Call",
+        start: "2026-06-04T15:00:00.000Z",
+        end: "2026-06-04T16:00:00.000Z",
+        memberIds: ["member-1"],
+        type: "Phone Call",
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 201);
+  assert.equal(storedEvent?.visitationType, "Phone Call");
+  assert.equal(writtenVisitations.at(-1)?.type, "Phone Call");
+});
+
+test("updates the visitation type when editing a schedule event", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  let storedEvent: Record<string, unknown> | undefined;
+  const writtenVisitations: Array<Record<string, unknown>> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "PutCommand") {
+          const item = command.input.Item as Record<string, unknown>;
+          if (item.entityType === "schedule_event") {
+            storedEvent = item;
+          }
+          if (item.entityType === "VISITATION") {
+            writtenVisitations.push(item);
+          }
+          return {};
+        }
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "google_connection",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account",
+                email: "owner@example.com",
+                accessToken: "token-123",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-03T12:00:00.000Z",
+                lastConnectedAt: "2026-06-03T12:00:00.000Z",
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "CALENDAR#calendar-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "CALENDAR#calendar-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_calendar",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                summary: "Main Calendar",
+                primary: true,
+                enabled: true,
+                selected: true,
+                sync: {
+                  syncMode: "ALWAYS_GOOGLE",
+                  refreshIntervalMinutes: 15,
+                  initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                  lastSyncStatus: "idle",
+                  requiresFullSync: false,
+                },
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "EVENT#calendar-1#event-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "EVENT#calendar-1#event-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_event",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                eventId: "event-1",
+                googleEventId: "event-1",
+                calendarName: "Main Calendar",
+                summary: "Visitation",
+                start: "2026-06-04T15:00:00.000Z",
+                end: "2026-06-04T16:00:00.000Z",
+                allDay: false,
+                status: "confirmed",
+                source: "GOOGLE",
+                memberIds: ["member-1"],
+                memberNames: ["Adel Abraham"],
+                visitationType: "Visitation",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          return {
+            Responses: {
+              "records-table": [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  fullName: "Adel Abraham",
+                  initials: "AA",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "adel abraham",
+                },
+              ],
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+          if (values[":pk"] === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
+                  type: "Visitation",
+                  memberId: "member-1",
+                  memberIds: ["member-1"],
+                  memberNames: ["Adel Abraham"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Owner Example",
+                  createdByUserId: "user-123",
+                  createdByName: "Owner Example",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  title: "Visitation",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  allDay: false,
+                  visitStatus: "scheduled",
+                  eventId: "event-1",
+                  calendarEventId: "event-1",
+                  calendarId: "calendar-1",
+                  calendarOwnerUserId: "user-123",
+                  calendarOwnerName: "Owner Example",
+                },
+              ],
+            };
+          }
+
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: "event-1",
+        summary: "Visitation",
+        start: { dateTime: "2026-06-04T15:00:00.000Z" },
+        end: { dateTime: "2026-06-04T16:00:00.000Z" },
+        extendedProperties: {
+          private: {
+            memberIds: "member-1",
+          },
+        },
+      }),
+    }) as Response,
+    now: () => "2026-06-03T13:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events/event-1",
+      pathParameters: { eventId: "event-1" },
+      body: JSON.stringify({
+        calendarId: "calendar-1",
+        type: "Phone Call",
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "PUT",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(storedEvent?.visitationType, "Phone Call");
+  assert.equal(writtenVisitations.at(-1)?.type, "Phone Call");
+  assert.equal(JSON.parse(String(response.body)).visitationType, "Phone Call");
 });
 
 test("full sync restores member links from Google event private metadata", async () => {
@@ -1564,6 +1945,7 @@ test("member visitation history is tenant-shared and includes assignment snapsho
         notes: "Pastoral visit",
         source: "calendar",
         tenantId: "tenant-abc",
+        type: "Visitation",
         updatedAt: "2026-06-04T16:00:00.000Z",
         visitDate: "2026-06-04T15:00:00.000Z",
         visitStatus: "scheduled",
@@ -2058,12 +2440,133 @@ test("manual visitation creation preserves the selected visitor while keeping th
   ) as APIGatewayProxyStructuredResultV2;
 
   assert.equal(response.statusCode, 201);
-  assert.equal(putItems.length, 1);
-  assert.equal(putItems[0]?.visitorUserId, "user-456");
-  assert.equal(putItems[0]?.visitorDisplayName, "Visitor B");
-  assert.equal(putItems[0]?.createdByUserId, "user-123");
-  assert.equal(putItems[0]?.createdByName, "Viewer A");
-  assert.match(String(putItems[0]?.GSI1SK), /VISITOR#user-456#/);
+  const visitationItems = putItems.filter((item) => item.entityType === "VISITATION");
+  assert.equal(visitationItems.length, 1);
+  assert.equal(visitationItems[0]?.visitorUserId, "user-456");
+  assert.equal(visitationItems[0]?.visitorDisplayName, "Visitor B");
+  assert.equal(visitationItems[0]?.createdByUserId, "user-123");
+  assert.equal(visitationItems[0]?.createdByName, "Viewer A");
+  assert.equal(visitationItems[0]?.type, "Visitation");
+  assert.match(String(visitationItems[0]?.GSI1SK), /VISITOR#user-456#/);
+});
+
+test("member visitation responses default missing visitation types to Visitation", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "TENANT#tenant-abc" && key.SK === "MEMBER#member-1") {
+            return {
+              Item: {
+                PK: "TENANT#tenant-abc",
+                SK: "MEMBER#member-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "MEMBER",
+                tenantId: "tenant-abc",
+                memberId: "member-1",
+                unityId: "unity-1",
+                fullName: "Adel Abraham",
+                initials: "AA",
+                source: "UNITY",
+                isUnityMember: true,
+                normalizedSearchText: "adel abraham",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+          if (values[":gsiPk"] === "TENANT#tenant-abc#UNITY") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  unityId: "unity-1",
+                  fullName: "Adel Abraham",
+                  initials: "AA",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "adel abraham",
+                },
+              ],
+            };
+          }
+
+          if (values[":gsiPk"] === "TENANT#tenant-abc#MEMBER#member-1") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#legacy-visit-1",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-05T12:00:00.000Z",
+                  updatedAt: "2026-06-05T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "legacy-visit-1",
+                  source: "manual",
+                  memberId: "member-1",
+                  memberIds: ["member-1"],
+                  memberNames: ["Adel Abraham"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Viewer A",
+                  createdByUserId: "user-123",
+                  createdByName: "Viewer A",
+                  visitDate: "2026-06-05T15:00:00.000Z",
+                  title: "Legacy visit",
+                  visitStatus: "completed",
+                },
+              ],
+            };
+          }
+
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-06T12:00:00.000Z",
+    uuid: () => "visit-123",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/members/member-1/events",
+      pathParameters: { memberId: "member-1" },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "viewer@example.com",
+              name: "Viewer A",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(JSON.parse(String(response.body)).items[0]?.type, "Visitation");
 });
 
 test("schedule overview excludes user-owned records from a different tenant", async () => {

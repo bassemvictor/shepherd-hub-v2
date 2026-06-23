@@ -5,9 +5,11 @@ import type {
   ReportsSortBy,
   ReportsSortDirection,
   ReportsVisitCountMode,
+  ReportsVisitationTypeFilter,
   ReportsVisitorFilterMode,
   VisitationReportFilters,
 } from "../../../shared/types";
+import { visitationTypes } from "../../../shared/types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
@@ -141,6 +143,20 @@ export const ReportFilterPanel = ({
               <option value="all">All members</option>
               <option value="unity">Unity imported members</option>
               <option value="manual">Manually added members</option>
+            </Select>
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Visitation type</span>
+            <Select
+              onChange={(event) => onChange({ ...draft, type: event.target.value as ReportsVisitationTypeFilter })}
+              value={draft.type}
+            >
+              <option value="all">All</option>
+              {visitationTypes.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
             </Select>
           </label>
           <label className="space-y-1.5">

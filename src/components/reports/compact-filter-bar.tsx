@@ -1,6 +1,7 @@
 import { Download, Play, Search } from "lucide-react";
 
-import type { ReportVisitorOption } from "../../../shared/types";
+import type { ReportVisitorOption, ReportsVisitationTypeFilter } from "../../../shared/types";
+import { visitationTypes } from "../../../shared/types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
@@ -33,6 +34,8 @@ export const CompactFilterBar = ({
   selectedVisitorUserId,
   onVisitorChange,
   visitors,
+  visitationType,
+  onVisitationTypeChange,
   showFilter,
   onShowFilterChange,
   onRunReport,
@@ -51,6 +54,8 @@ export const CompactFilterBar = ({
   selectedVisitorUserId?: string;
   onVisitorChange: (value?: string) => void;
   visitors: ReportVisitorOption[];
+  visitationType: ReportsVisitationTypeFilter;
+  onVisitationTypeChange: (value: ReportsVisitationTypeFilter) => void;
   showFilter: ReportShowFilter;
   onShowFilterChange: (value: ReportShowFilter) => void;
   onRunReport: () => void;
@@ -59,7 +64,7 @@ export const CompactFilterBar = ({
   scope: ReportScope;
 }) => (
   <>
-    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_170px_170px_170px_150px_120px]">
+    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_160px_160px_170px_170px_150px_120px]">
       {onSearchChange ? (
         <FilterField label="Search">
           <label className="relative block">
@@ -102,6 +107,17 @@ export const CompactFilterBar = ({
           {visitors.map((visitor) => (
             <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
               {visitor.visitorDisplayName}
+            </option>
+          ))}
+        </Select>
+      </FilterField>
+
+      <FilterField label="Type">
+        <Select onChange={(event) => onVisitationTypeChange(event.target.value as ReportsVisitationTypeFilter)} value={visitationType}>
+          <option value="all">All</option>
+          {visitationTypes.map((type) => (
+            <option key={type} value={type}>
+              {type}
             </option>
           ))}
         </Select>

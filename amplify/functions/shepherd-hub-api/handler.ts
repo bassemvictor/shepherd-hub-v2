@@ -22,6 +22,7 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
 import * as XLSX from "xlsx";
+import { visitationTypes } from "../../../shared/types.js";
 
 import type {
   AppCognitoGroup,
@@ -65,6 +66,7 @@ import type {
   ReportsSortBy,
   ReportsSortDirection,
   ReportsVisitCountMode,
+  ReportsVisitationTypeFilter,
   ReportsVisitorFilterMode,
   SyncSource,
   SyncStatus,
@@ -86,6 +88,7 @@ import type {
   VisitationSource,
   UpdateManualVisitationInput,
   VisitorLeaderboardEntry,
+  VisitationType,
 } from "../../../shared/types.js";
 
 type BaseItem = {
@@ -154,12 +157,14 @@ type EventItem = BaseItem & {
   htmlLink?: string;
   memberIds?: string[];
   memberNames?: string[];
+  visitationType?: VisitationType;
 };
 
 type VisitationItem = BaseItem & {
   tenantId: string;
   visitationId: string;
   source: VisitationSource;
+  type?: VisitationType;
   memberId: string;
   memberIds: string[];
   memberNames: string[];
@@ -603,6 +608,15 @@ const toOptionalString = (value: unknown) => {
   return normalized || undefined;
 };
 
+const defaultVisitationType: VisitationType = "Visitation";
+
+const normalizeVisitationType = (value: unknown): VisitationType => {
+  const normalized = toOptionalString(value);
+  return visitationTypes.includes(normalized as VisitationType)
+    ? normalized as VisitationType
+    : defaultVisitationType;
+};
+
 const toOptionalNumber = (value: unknown) => {
   if (value === undefined || value === null || value === "") {
     return undefined;
@@ -745,6 +759,7 @@ const toScheduleEvent = (item: EventItem): ScheduleEvent => ({
   assignedMemberNames: item.memberNames,
   memberIds: item.memberIds,
   memberNames: item.memberNames,
+  visitationType: item.memberIds?.length ? normalizeVisitationType(item.visitationType) : undefined,
 });
 
 const toMember = (item: MemberItem): Member => ({
@@ -821,6 +836,7 @@ const toMemberVisitation = (item: VisitationItem, currentUserId: string): Member
   entityType: item.entityType,
   visitationId: item.visitationId,
   source: item.source,
+  type: normalizeVisitationType(item.type),
   title: item.title,
   visitDate: item.visitDate,
   endDate: item.endDate,
@@ -1039,6 +1055,11 @@ const normalizeReportMemberScope = (value: string | undefined): ReportsMemberSco
 const normalizeReportMemberSource = (value: string | undefined): ReportsMemberSourceFilter =>
   value === "manual" || value === "unity" || value === "all" ? value : "all";
 
+const normalizeReportVisitationType = (value: string | undefined): ReportsVisitationTypeFilter =>
+  value === "all" || visitationTypes.includes(value as VisitationType)
+    ? (value as ReportsVisitationTypeFilter)
+    : "all";
+
 const normalizeReportStatusFilter = (value: string | undefined): ReportsMemberStatusFilter =>
   value === "all"
   || value === "never_visited"
@@ -1094,6 +1115,7 @@ const parseVisitationReportFilters = (event: APIGatewayProxyEventV2WithJWTAuthor
     visitorUserId,
     memberScope: normalizeReportMemberScope(params.memberScope),
     memberSource: normalizeReportMemberSource(params.memberSource),
+    type: normalizeReportVisitationType(params.type),
     status: normalizeReportStatusFilter(params.status),
     group: toOptionalString(params.group),
     search: toOptionalString(params.search),
@@ -1758,6 +1780,7 @@ const persistEventWithMemberAssignments = async (
     ...normalizedEvent,
     memberIds: assignedMembers.map((member) => member.memberId),
     memberNames: assignedMembers.map((member) => member.fullName),
+    visitationType: assignedMembers.length ? normalizeVisitationType(normalizedEvent.visitationType) : undefined,
   };
   await putEvent(context, persistedEvent, deps);
   await syncVisitationRecords(context, persistedEvent, assignedMembers, deps);
@@ -2284,6 +2307,7 @@ const syncEventMembers = async (
   const fetchedMembers = ((batch.Responses?.[context.tableName] ?? []) as MemberItem[]).filter(Boolean);
   const membersById = new Map(fetchedMembers.map((item) => [item.memberId, item]));
   const transactItems: Array<Record<string, unknown>> = [];
+  const visitationType = normalizeVisitationType(event.visitationType);
 
   for (const item of current) {
     if (nextIds.includes(item.memberId)) {
@@ -2358,9 +2382,9 @@ const syncEventMembers = async (
         context,
         memberId,
         "Visitation Scheduled",
-        `${event.summary} scheduled for ${member.fullName}.`,
+        `${visitationType} scheduled for ${member.fullName}.`,
         deps,
-        { eventId: event.eventId },
+        { eventId: event.eventId, type: visitationType },
       );
     }
   }
@@ -2389,6 +2413,7 @@ const syncVisitationRecords = async (
   const visitationId = eventVisitationId(event.calendarId, event.eventId);
   const memberIds = nextMembers.map((item) => item.memberId);
   const memberNames = nextMembers.map((item) => item.fullName);
+  const visitationType = normalizeVisitationType(event.visitationType);
 
   for (const record of existingRecords) {
     if (nextMemberIds.has(record.memberId)) {
@@ -2422,6 +2447,7 @@ const syncVisitationRecords = async (
       tenantId: context.tenantId,
       visitationId,
       source: "calendar",
+      type: visitationType,
       memberId: member.memberId,
       memberIds,
       memberNames,
@@ -2449,6 +2475,31 @@ const syncVisitationRecords = async (
         TableName: context.tableName,
       }),
     );
+
+    if (existingMemberIds.has(member.memberId)) {
+      const existingRecord = existingRecords.find((item) => item.memberId === member.memberId);
+      if (
+        existingRecord
+        && (
+          normalizeVisitationType(existingRecord.type) !== visitationType
+          || existingRecord.title !== record.title
+          || existingRecord.visitDate !== record.visitDate
+          || existingRecord.endDate !== record.endDate
+          || existingRecord.location !== record.location
+          || existingRecord.notes !== record.notes
+          || existingRecord.visitStatus !== record.visitStatus
+        )
+      ) {
+        await logMemberActivity(
+          context,
+          member.memberId,
+          "Visitation Updated",
+          `${visitationType} updated for ${member.fullName}.`,
+          deps,
+          { eventId: event.eventId, type: visitationType, visitationId },
+        );
+      }
+    }
   }
 };
 
@@ -2493,6 +2544,7 @@ const persistManualVisitationGroup = async (
   visitationId: string,
   existing: VisitationItem[] | null,
   input: CreateManualVisitationInput | Required<Pick<CreateManualVisitationInput, "title" | "visitDate" | "memberIds">> & {
+    type?: VisitationType;
     location?: string;
     notes?: string;
     visitStatus?: string;
@@ -2514,6 +2566,7 @@ const persistManualVisitationGroup = async (
   const visitorUserId = toOptionalString(input.visitorUserId) ?? existing?.[0]?.visitorUserId ?? context.actorSub;
   const visitorDisplayName = toOptionalString(input.visitorDisplayName) ?? existing?.[0]?.visitorDisplayName ?? context.actorName;
   const existingByMemberId = new Map((existing ?? []).map((item) => [item.memberId, item]));
+  const visitationType = normalizeVisitationType(input.type ?? existing?.[0]?.type);
 
   for (const record of existing ?? []) {
     await deps.documentClient.send(
@@ -2542,6 +2595,7 @@ const persistManualVisitationGroup = async (
       tenantId: context.tenantId,
       visitationId,
       source: "manual",
+      type: visitationType,
       memberId: member.memberId,
       memberIds,
       memberNames,
@@ -3085,6 +3139,7 @@ const upsertGoogleEventIntoCache = async (
     source,
     htmlLink: googleEvent.htmlLink,
     memberIds,
+    visitationType: memberIds.length ? normalizeVisitationType(existingItem?.visitationType) : undefined,
   };
   return await persistEventWithMemberAssignments(
     context,
@@ -3700,6 +3755,17 @@ const createManualVisitation = async (
     ...input,
     memberIds: nextMemberIds,
   }, deps);
+  for (const record of records) {
+    const visitationType = normalizeVisitationType(record.type);
+    await logMemberActivity(
+      context,
+      record.memberId,
+      "Visitation Created",
+      `${visitationType} recorded for ${record.memberNames.find((name, index) => record.memberIds[index] === record.memberId) ?? record.title}.`,
+      deps,
+      { visitationId: record.visitationId, type: visitationType },
+    );
+  }
   return json(201, { items: records.map((item) => toMemberVisitation(item, context.actorSub)) });
 };
 
@@ -3722,6 +3788,7 @@ const updateManualVisitation = async (
   const merged: CreateManualVisitationInput = {
     title: input.title ?? existing[0].title,
     visitDate: input.visitDate ?? existing[0].visitDate,
+    type: input.type ?? existing[0].type,
     location: input.location ?? existing[0].location,
     visitStatus: input.visitStatus ?? existing[0].visitStatus,
     notes: input.notes ?? existing[0].notes,
@@ -3735,6 +3802,17 @@ const updateManualVisitation = async (
   }
 
   const records = await persistManualVisitationGroup(context, visitationId, existing, merged, deps);
+  for (const record of records) {
+    const visitationType = normalizeVisitationType(record.type);
+    await logMemberActivity(
+      context,
+      record.memberId,
+      "Visitation Updated",
+      `${visitationType} updated for ${record.memberNames.find((name, index) => record.memberIds[index] === record.memberId) ?? record.title}.`,
+      deps,
+      { visitationId: record.visitationId, type: visitationType },
+    );
+  }
   return json(200, { items: records.map((item) => toMemberVisitation(item, context.actorSub)) });
 };
 
@@ -3853,8 +3931,11 @@ const getVisitationReport = async (
     listTenantVisitations(context, deps),
     listUpcomingEventAssignments(context, deps.now(), deps),
   ]);
+  const reportVisitations = filters.type === "all"
+    ? visitations
+    : visitations.filter((item) => normalizeVisitationType(item.type) === filters.type);
   const allVisitors: ReportVisitorOption[] = [...new Map(
-    visitations.map((item) => [item.visitorUserId, {
+    reportVisitations.map((item) => [item.visitorUserId, {
       visitorUserId: item.visitorUserId,
       visitorDisplayName: item.visitorDisplayName,
     }]),
@@ -3923,7 +4004,7 @@ const getVisitationReport = async (
     target.set(visitation.memberId, current);
   };
 
-  for (const visitation of visitations) {
+  for (const visitation of reportVisitations) {
     updateScopeMetrics(everyoneLifetimeByMemberId, visitation);
 
     const matchesVisitor = matchesReportVisitorFilter(visitation, filters, context.actorSub);
@@ -4713,6 +4794,7 @@ const createScheduleEvent = async (
   const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
     memberIds: input.memberIds ?? [],
+    visitationType: input.type,
   }, deps);
   return json(201, toScheduleEvent(updatedStored));
 };
@@ -4753,6 +4835,7 @@ const updateScheduleEvent = async (
     end: input.end ?? existing.end,
     allDay: input.allDay ?? existing.allDay,
     memberIds: input.memberIds ?? existing.memberIds,
+    type: input.type ?? existing.visitationType,
   };
 
   if (new Date(nextEvent.end).getTime() <= new Date(nextEvent.start).getTime()) {
@@ -4776,6 +4859,7 @@ const updateScheduleEvent = async (
   const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
     memberIds: nextEvent.memberIds ?? [],
+    visitationType: nextEvent.type,
   }, deps);
   return json(200, toScheduleEvent(updatedStored));
 };

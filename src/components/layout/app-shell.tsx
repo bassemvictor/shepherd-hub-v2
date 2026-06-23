@@ -1,8 +1,9 @@
 import { Bell, ChevronRight, LogOut, Menu, Moon, Search, Shield, SunMedium } from "lucide-react";
-import { useMemo, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { formatGroupLabel, useAuth } from "../../lib/auth";
+import { useMembersIndex } from "../../lib/members-index";
 import { useTheme } from "../../lib/theme";
 import { APP_NAME, APP_SHORT_VERSION, APP_VERSION } from "../../lib/app-metadata";
 import { getBreadcrumbs, getPageTitle } from "../../lib/route-metadata";
@@ -15,10 +16,15 @@ import { Badge } from "../ui/badge";
 
 export const AppShell = () => {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { user, signOutUser } = useAuth();
+  const { items: members } = useMembersIndex();
   const { theme, toggleTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [memberSearchQuery, setMemberSearchQuery] = useState("");
+  const [memberSearchOpen, setMemberSearchOpen] = useState(false);
   const isMobile = useIsMobile();
+  const memberSearchRef = useRef<HTMLFormElement | null>(null);
   const breadcrumbs = useMemo(() => getBreadcrumbs(pathname), [pathname]);
   const title = useMemo(() => getPageTitle(pathname), [pathname]);
   const showMobileBottomNav = isMobile;
@@ -32,6 +38,48 @@ export const AppShell = () => {
       .slice(0, 2)
       .toUpperCase();
   }, [user?.email, user?.name]);
+  const normalizedMemberSearchQuery = memberSearchQuery.trim().toLowerCase();
+  const memberMatches = useMemo(() => {
+    if (!normalizedMemberSearchQuery) {
+      return [];
+    }
+
+    return members
+      .filter((member) => member.normalizedSearchText.includes(normalizedMemberSearchQuery))
+      .slice(0, 6);
+  }, [members, normalizedMemberSearchQuery]);
+  const showMemberResults = memberSearchOpen && normalizedMemberSearchQuery.length > 0;
+
+  useEffect(() => {
+    setMemberSearchQuery("");
+    setMemberSearchOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!memberSearchOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!memberSearchRef.current?.contains(event.target as Node)) {
+        setMemberSearchOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [memberSearchOpen]);
+
+  const navigateToMembersSearch = () => {
+    const nextQuery = memberSearchQuery.trim();
+    navigate(nextQuery ? `/members?q=${encodeURIComponent(nextQuery)}` : "/members");
+    setMemberSearchOpen(false);
+  };
+
+  const openMember = (memberId: string) => {
+    navigate(`/members/${memberId}`);
+    setMemberSearchOpen(false);
+  };
 
   return (
     <div className="min-h-screen bg-transparent">
@@ -126,10 +174,59 @@ export const AppShell = () => {
               </div>
 
               <div className="flex shrink-0 items-center gap-2 sm:gap-3 lg:justify-end">
-                <div className="hidden items-center gap-2 rounded-md border border-border bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground md:flex">
-                  <Search className="h-3.5 w-3.5" />
-                  Search records, pages, or actions
-                </div>
+                <form
+                  className="relative hidden w-[min(26rem,42vw)] md:block"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    navigateToMembersSearch();
+                  }}
+                  ref={memberSearchRef}
+                >
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    aria-label="Search members"
+                    className="h-10 w-full rounded-xl border border-border bg-muted/45 pl-10 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
+                    onChange={(event) => {
+                      setMemberSearchQuery(event.target.value);
+                      setMemberSearchOpen(true);
+                    }}
+                    onFocus={() => setMemberSearchOpen(true)}
+                    placeholder="Search members"
+                    value={memberSearchQuery}
+                  />
+                  {showMemberResults ? (
+                    <div className="absolute left-0 right-0 top-[calc(100%+0.45rem)] overflow-hidden rounded-xl border border-border bg-card shadow-lg">
+                      {memberMatches.length ? (
+                        <div className="py-1.5">
+                          {memberMatches.map((member) => (
+                            <button
+                              className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-accent"
+                              key={member.memberId}
+                              onClick={() => openMember(member.memberId)}
+                              type="button"
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-medium text-foreground">{member.fullName}</div>
+                                <div className="truncate text-xs text-muted-foreground">
+                                  {member.email || member.phone || member.householdName || "Member"}
+                                </div>
+                              </div>
+                              <span className="shrink-0 text-xs text-muted-foreground">Open</span>
+                            </button>
+                          ))}
+                          <button
+                            className="w-full border-t border-border px-3 py-2 text-left text-sm font-medium text-primary transition-colors hover:bg-accent"
+                            type="submit"
+                          >
+                            View all matching members
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="px-3 py-3 text-sm text-muted-foreground">No matching members found.</div>
+                      )}
+                    </div>
+                  ) : null}
+                </form>
                 <Button
                   aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
                   className="hidden sm:flex"

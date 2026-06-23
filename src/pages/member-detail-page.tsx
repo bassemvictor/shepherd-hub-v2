@@ -25,7 +25,9 @@ import type {
   MemberVisitation,
   ReportVisitorOption,
   UpdateManualVisitationInput,
+  VisitationType,
 } from "../../shared/types";
+import { visitationTypes } from "../../shared/types";
 import { ConfirmDialog } from "../components/common/confirm-dialog";
 import { RightSideDrawer } from "../components/common/right-side-drawer";
 import {
@@ -90,28 +92,49 @@ const toLocalDateTimeInput = (value: string) => {
   return adjusted.toISOString().slice(0, 16);
 };
 
-const VISITATION_TITLE_PREFIX = "Visitation: ";
+const DEFAULT_VISITATION_TYPE: VisitationType = "Visitation";
+
+const normalizeVisitationType = (value: string | undefined): VisitationType =>
+  visitationTypes.includes(value as VisitationType) ? value as VisitationType : DEFAULT_VISITATION_TYPE;
 
 const isVisitationTitle = (value: string) => {
   const normalized = value.trim();
-  return normalized === "Visitation" || normalized.startsWith(VISITATION_TITLE_PREFIX.trim());
+  return visitationTypes.some((type) => normalized === type || normalized.startsWith(`${type}: `));
 };
 
-const buildVisitationTitle = (memberIds: string[], memberIndex: MemberIndexItem[]) => {
+const buildVisitationTitle = (
+  memberIds: string[],
+  memberIndex: MemberIndexItem[],
+  visitationType: VisitationType = DEFAULT_VISITATION_TYPE,
+) => {
   const memberNames = emptyMemberSelection(memberIndex, memberIds)
     .map((selectedMember) => selectedMember.fullName)
     .filter(Boolean);
 
-  return memberNames.length ? `${VISITATION_TITLE_PREFIX}${memberNames.join(", ")}` : "Visitation";
+  return memberNames.length ? `${visitationType}: ${memberNames.join(", ")}` : visitationType;
+};
+
+type ManualVisitationFormState = {
+  title: string;
+  visitDate: string;
+  type: VisitationType;
+  location: string;
+  visitStatus: string;
+  notes: string;
+  memberIds: string[];
+  memberQuery: string;
+  visitorUserId: string;
+  visitorDisplayName: string;
 };
 
 const createEmptyManualForm = (
   memberId: string,
   currentUser?: { id: string; name: string } | null,
   memberName?: string,
-) => ({
-  title: memberName ? `${VISITATION_TITLE_PREFIX}${memberName}` : "",
+): ManualVisitationFormState => ({
+  title: memberName ? `${DEFAULT_VISITATION_TYPE}: ${memberName}` : "",
   visitDate: toLocalDateTimeInput(new Date().toISOString()),
+  type: DEFAULT_VISITATION_TYPE,
   location: "",
   visitStatus: "completed",
   notes: "",
@@ -120,8 +143,6 @@ const createEmptyManualForm = (
   visitorUserId: currentUser?.id ?? "",
   visitorDisplayName: currentUser?.name ?? "",
 });
-
-type ManualVisitationFormState = ReturnType<typeof createEmptyManualForm>;
 
 type ManualVisitationErrors = Partial<Record<keyof CreateManualVisitationInput | "memberIds", string>>;
 
@@ -150,6 +171,7 @@ const validateManualForm = (form: ManualVisitationFormState): ManualVisitationEr
 const toManualPayload = (form: ManualVisitationFormState): CreateManualVisitationInput => ({
   title: form.title.trim(),
   visitDate: new Date(form.visitDate).toISOString(),
+  type: normalizeVisitationType(form.type),
   location: form.location.trim() || undefined,
   visitStatus: form.visitStatus,
   notes: form.notes.trim() || undefined,
@@ -164,6 +186,19 @@ const visitationStatusLabel = (value: string) =>
     .filter(Boolean)
     .map((part) => part[0]?.toUpperCase() + part.slice(1))
     .join(" ");
+
+const applyManualVisitationType = (
+  current: ManualVisitationFormState,
+  nextType: VisitationType,
+  memberIndex: MemberIndexItem[],
+): ManualVisitationFormState => ({
+  ...current,
+  title:
+    !current.title.trim() || isVisitationTitle(current.title)
+      ? buildVisitationTitle(current.memberIds, memberIndex, nextType)
+      : current.title,
+  type: nextType,
+});
 
 export const MemberDetailPage = () => {
   const { user } = useAuth();
@@ -320,6 +355,7 @@ export const MemberDetailPage = () => {
     setManualForm({
       title: visitation.title,
       visitDate: toLocalDateTimeInput(getVisitationDateValue(visitation)),
+      type: normalizeVisitationType(visitation.type),
       location: visitation.location ?? "",
       visitStatus: visitation.visitStatus,
       notes: visitation.notes ?? "",
@@ -693,7 +729,11 @@ export const MemberDetailPage = () => {
                       ...current,
                       title:
                         !current.title.trim() || isVisitationTitle(current.title)
-                          ? buildVisitationTitle([...new Set([...current.memberIds, item.memberId])], memberIndex)
+                          ? buildVisitationTitle(
+                            [...new Set([...current.memberIds, item.memberId])],
+                            memberIndex,
+                            normalizeVisitationType(current.type),
+                          )
                           : current.title,
                       memberIds: [...new Set([...current.memberIds, item.memberId])],
                       memberQuery: "",
@@ -719,6 +759,7 @@ export const MemberDetailPage = () => {
                                   ? buildVisitationTitle(
                                     current.memberIds.filter((entry) => entry !== selectedId),
                                     memberIndex,
+                                    normalizeVisitationType(current.type),
                                   )
                                   : current.title,
                               memberIds: current.memberIds.filter((entry) => entry !== selectedId),
@@ -734,6 +775,24 @@ export const MemberDetailPage = () => {
                   )}
                   {manualErrors.memberIds ? <div className="text-xs text-rose-600">{manualErrors.memberIds}</div> : null}
                 </div>
+                {manualForm.memberIds.length ? (
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium text-foreground">Visitation Type</span>
+                    <Select
+                      className={fieldClassName}
+                      onChange={(event) =>
+                        setManualForm((current) => applyManualVisitationType(current, normalizeVisitationType(event.target.value), memberIndex))
+                      }
+                      value={normalizeVisitationType(manualForm.type)}
+                    >
+                      {visitationTypes.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                ) : null}
               </section>
 
               <section className={sectionCardClassName}>
@@ -887,6 +946,7 @@ export const MemberDetailPage = () => {
             <div className="grid gap-2">
               {[
                 ["Visit Date", formatVisitDateTime(selectedManualVisitation)],
+                ["Visitation Type", normalizeVisitationType(selectedManualVisitation.type)],
                 ["Location", selectedManualVisitation.location || "Not set"],
                 ["Visitor", selectedManualVisitation.visitorDisplayName],
                 ["Visit Status", visitationStatusLabel(selectedManualVisitation.visitStatus)],
