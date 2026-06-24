@@ -1129,6 +1129,17 @@ const MobileMonthPicker = ({
   const months = useMemo(() => getMonthPickerMonths(selectedDate), [selectedDate]);
   const selectedMonthKey = `${selectedDate.getFullYear()}-${selectedDate.getMonth()}`;
   const today = new Date();
+  const selectedDayRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      selectedDayRef.current?.scrollIntoView({ behavior: "auto", block: "center" });
+    });
+  }, [open, selectedDate]);
 
   return (
     <Dialog onClose={onClose} open={open} size="lg" title="Choose a day">
@@ -1158,6 +1169,7 @@ const MobileMonthPicker = ({
                       className={`schedule-beta-month-day ${isSelected ? "schedule-beta-month-day-selected" : ""} ${isToday ? "schedule-beta-month-day-today" : ""} ${isCurrentMonth ? "" : "schedule-beta-month-day-muted"}`}
                       key={`${monthKey}-${toDateOnlyValue(day)}`}
                       onClick={() => onSelectDate(day)}
+                      ref={isSelected ? selectedDayRef : null}
                       type="button"
                     >
                       {day.getDate()}
@@ -1403,43 +1415,45 @@ const ScheduleBetaMobileView = ({
             </Card>
           </div>
         ) : (
-          <Card className="overflow-hidden border-border/80 shadow-[0_18px_45px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
-            <CardContent className="space-y-3 p-2.5">
-              <div className="px-1 pt-1 text-sm text-muted-foreground">
-                Tap any empty time to create an event. Existing events remain editable.
-              </div>
-              <div className="schedule-calendar-shell schedule-beta-day-calendar">
-                <FullCalendar
-                  key={`beta-day-${selectedDateValue}`}
-                  ref={calendarRef}
-                  allDaySlot
-                  dateClick={onDateClick}
-                  editable={false}
-                  eventClick={(info) => onOpenEvent(info.event.extendedProps.scheduleEvent as ScheduleEvent)}
-                  eventContent={renderCalendarEvent}
-                  eventDurationEditable={false}
-                  eventMinHeight={40}
-                  eventResizableFromStart={false}
-                  eventShortHeight={40}
-                  eventStartEditable={false}
-                  events={calendarEvents}
-                  headerToolbar={false}
-                  height="auto"
-                  initialDate={selectedDateValue}
-                  initialView="timeGridDay"
-                  nowIndicator
-                  plugins={fullCalendarPlugins}
-                  scrollTime="06:00:00"
-                  select={(info) => onSelectSlot(getDayFromCalendarClick(info.start))}
-                  selectable
-                  slotDuration="00:15:00"
-                  slotMaxTime="24:00:00"
-                  slotMinTime="06:00:00"
-                  weekends
-                />
-              </div>
-            </CardContent>
-          </Card>
+          <div>
+            <Card className="overflow-hidden border-border/80 shadow-[0_18px_45px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
+              <CardContent className="space-y-3 p-2.5">
+                <div className="px-1 pt-1 text-sm text-muted-foreground">
+                  Tap any empty time to create an event. Existing events remain editable.
+                </div>
+                <div className="schedule-calendar-shell schedule-beta-day-calendar">
+                  <FullCalendar
+                    key={`beta-day-${selectedDateValue}`}
+                    ref={calendarRef}
+                    allDaySlot
+                    dateClick={onDateClick}
+                    editable={false}
+                    eventClick={(info) => onOpenEvent(info.event.extendedProps.scheduleEvent as ScheduleEvent)}
+                    eventContent={renderCalendarEvent}
+                    eventDurationEditable={false}
+                    eventMinHeight={40}
+                    eventResizableFromStart={false}
+                    eventShortHeight={40}
+                    eventStartEditable={false}
+                    events={calendarEvents}
+                    headerToolbar={false}
+                    height="auto"
+                    initialDate={selectedDateValue}
+                    initialView="timeGridDay"
+                    nowIndicator
+                    plugins={fullCalendarPlugins}
+                    scrollTime="06:00:00"
+                    select={(info) => onSelectSlot(getDayFromCalendarClick(info.start))}
+                    selectable
+                    slotDuration="00:15:00"
+                    slotMaxTime="24:00:00"
+                    slotMinTime="06:00:00"
+                    weekends
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         )}
       </div>
 
@@ -1536,6 +1550,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
   const [selectedDateValue, setSelectedDateValue] = useState(() => searchParams.get("date") ?? toDateOnlyValue(new Date()));
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [monthPickerReturnTab, setMonthPickerReturnTab] = useState<MobileBetaTab>("list");
   const [newEventDialogOpen, setNewEventDialogOpen] = useState(false);
   const [availableTimesDialogOpen, setAvailableTimesDialogOpen] = useState(false);
   const [mobileBetaTab, setMobileBetaTab] = useState<MobileBetaTab>(() => {
@@ -2301,7 +2316,10 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
           onForceSyncVisible={() => void handleForceSyncVisible()}
           onNewEvent={() => setNewEventDialogOpen(true)}
           onOpenAvailableTimes={() => setAvailableTimesDialogOpen(true)}
-          onOpenMonthPicker={() => setMonthPickerOpen(true)}
+          onOpenMonthPicker={() => {
+            setMonthPickerReturnTab(mobileBetaTab);
+            setMonthPickerOpen(true);
+          }}
           onSelectDay={setSelectedDateValue}
           onSelectSlot={openCreateEditorForDate}
           onSwipeDay={(direction) => setSelectedDateValue((current) => shiftDateOnlyValue(current, direction === "next" ? 1 : -1))}
@@ -2471,6 +2489,7 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
             onClose={() => setMonthPickerOpen(false)}
             onSelectDate={(date) => {
               setSelectedDateValue(toDateOnlyValue(date));
+              setMobileBetaTab(monthPickerReturnTab);
               setMonthPickerOpen(false);
             }}
             open={monthPickerOpen}
