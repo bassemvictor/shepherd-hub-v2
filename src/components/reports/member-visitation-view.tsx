@@ -42,6 +42,8 @@ export const MemberVisitationView = ({
 }) => {
   const navigate = useNavigate();
   const activityCopy = getActivityCopy(visitationType);
+  const caregiverLabel = "Caregiver";
+  const typeLabel = visitationType === "all" ? "Care" : "Activity Type";
 
   return (
     <Card>
@@ -81,10 +83,10 @@ export const MemberVisitationView = ({
                 </div>
                 <div className="mt-3 grid gap-2 text-sm text-slate-700">
                   <div>Group: {row.sectorOrGroup || "Not set"}</div>
-                  <div>Activity Type: {visitationType === "all" ? "All" : visitationType}</div>
+                  <div>{typeLabel}: {visitationType === "all" ? "All" : visitationType}</div>
                   <div>{activityCopy.lastLabel}: {formatReportDate(getLastVisit(row, scope, currentUser))}</div>
                   <div>{activityCopy.countLabel}: {getVisitCountForPeriod(row, period, scope, currentUser)}</div>
-                  <div>Recorded By: {relevant.lastVisitedBy || activityCopy.noneYetLabel}</div>
+                  <div>{caregiverLabel}: {relevant.lastVisitedBy || activityCopy.noneYetLabel}</div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {row.phone ? <a className="inline-flex h-8 items-center rounded-md border border-border bg-white px-2 text-xs" href={`tel:${row.phone}`} onClick={(event) => event.stopPropagation()}><Phone className="mr-1 h-3.5 w-3.5" />Call</a> : null}
@@ -101,7 +103,7 @@ export const MemberVisitationView = ({
           <table className="min-w-full border-separate border-spacing-0">
             <thead>
               <tr className="text-left">
-                {["Member", "Phone", "Group", "Activity Type", activityCopy.lastLabel, activityCopy.countLabel, "Recorded By", "Status", "Actions"].map((header) => (
+                {["Member", "Phone", "Group", typeLabel, activityCopy.lastLabel, activityCopy.countLabel, caregiverLabel, "Status", "Actions"].map((header) => (
                   <th className="border-b border-border px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground" key={header}>
                     {header}
                   </th>

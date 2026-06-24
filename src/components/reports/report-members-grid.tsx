@@ -60,7 +60,7 @@ export const ReportMembersGrid = ({ rows }: { rows: VisitationOverviewRow[] }) =
       cell: (row) => (
         <div className="space-y-1 text-sm">
           <div>{formatDateTime(row.lastVisitDate)}</div>
-          <div className="text-xs text-muted-foreground">{row.lastVisitedBy || "No visitor yet"}</div>
+          <div className="text-xs text-muted-foreground">{row.lastVisitedBy || "No caregiver yet"}</div>
         </div>
       ),
     },

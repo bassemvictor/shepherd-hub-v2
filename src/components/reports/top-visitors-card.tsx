@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 
 export const TopVisitorsCard = ({
-  title = "Top Visitors",
+  title = "Top Caregivers",
   subtitle = "Visits in selected period",
   entries,
 }: {
@@ -24,7 +24,7 @@ export const TopVisitorsCard = ({
         </div>
       )) : (
         <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
-          No visitors match this filter.
+          No caregivers match this filter.
         </div>
       )}
     </CardContent>

@@ -493,6 +493,11 @@ const getSelectedMemberNames = (memberIds: string[], memberIndex: MemberIndexIte
     .map((member) => member.fullName)
     .filter(Boolean);
 
+const getSelectedMemberEmails = (memberIds: string[], memberIndex: MemberIndexItem[]) =>
+  emptyMemberSelection(memberIndex, memberIds)
+    .map((member) => member.email?.trim() ?? "")
+    .filter(Boolean);
+
 const isVisitationSummary = (value: string) => {
   const normalized = value.trim();
   return visitationTypes.some((type) => normalized === type || normalized.startsWith(`${type}: `));
@@ -525,9 +530,10 @@ const applyMemberSelectionToForm = (
   const nextVisitationType = hasMembers
     ? (hadMembers ? normalizeVisitationType(currentForm.visitationType) : DEFAULT_VISITATION_TYPE)
     : DEFAULT_VISITATION_TYPE;
-  const previousFirstMember = emptyMemberSelection(memberIndex, currentForm.memberIds)[0];
-  const nextSelectedMembers = emptyMemberSelection(memberIndex, nextMemberIds);
-  const nextFirstMember = nextSelectedMembers[0];
+  const previousMemberEmails = new Set(getSelectedMemberEmails(currentForm.memberIds, memberIndex));
+  const nextMemberEmails = getSelectedMemberEmails(nextMemberIds, memberIndex);
+  const manualAttendees = parseAttendees(currentForm.attendeesText).filter((email) => !previousMemberEmails.has(email));
+  const attendeesText = [...new Set([...nextMemberEmails, ...manualAttendees])].join(", ");
 
   return {
     ...currentForm,
@@ -540,10 +546,7 @@ const applyMemberSelectionToForm = (
         ? buildVisitationDescription(nextMemberIds, memberIndex)
         : currentForm.description,
     location: currentForm.location,
-    attendeesText:
-      previousFirstMember?.memberId !== nextFirstMember?.memberId
-        ? nextFirstMember?.email ?? ""
-        : currentForm.attendeesText,
+    attendeesText,
     memberIds: nextMemberIds,
     memberQuery: "",
     visitationType: nextVisitationType,

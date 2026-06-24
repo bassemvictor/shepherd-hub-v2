@@ -40,10 +40,10 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
     items: [
       {
         label: "Reports",
+        href: "/reports",
         icon: BarChart3,
         children: [
-          { label: "Reports", href: "/reports" },
-          { label: "Reports Dashboard", href: "/reports/dashboard" },
+          { label: "Reports Overview", href: "/reports/dashboard" },
           { label: "Member Report", href: "/reports/member-visitation" },
         ],
       },
@@ -93,23 +93,46 @@ export const SideMenu = ({ onNavigate, user }: SideMenuProps) => {
             {section.items.map((item) => {
               const Icon = item.icon;
               const activeChild = item.children?.some((child) => pathname === child.href);
+              const isParentActive = item.href ? pathname === item.href : false;
 
               if (item.children) {
                 return (
                   <div className="space-y-1" key={item.label}>
-                    <button
+                    <div
                       className={cn(
-                        "flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-sm text-blue-100/80 transition-colors hover:bg-white/8 hover:text-white",
-                        reportsOpen && "bg-white/8 text-white",
-                        activeChild && "text-white",
+                        "flex h-9 items-center rounded-md transition-colors",
+                        reportsOpen && "bg-white/8",
+                        (activeChild || isParentActive) && "text-white",
                       )}
-                      onClick={() => setReportsOpen((current) => !current)}
-                      type="button"
                     >
-                      <Icon className="h-3.5 w-3.5" />
-                      <span className="flex-1 text-left">{item.label}</span>
-                      <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", reportsOpen && "rotate-180")} />
-                    </button>
+                      <NavLink
+                        className={cn(
+                          "flex h-full min-w-0 flex-1 items-center gap-2 rounded-l-md px-2.5 text-sm text-blue-100/80 transition-colors hover:bg-white/8 hover:text-white",
+                          (reportsOpen || activeChild || isParentActive) && "text-white",
+                          isParentActive && "bg-primary text-white shadow-lg shadow-blue-950/20",
+                        )}
+                        end
+                        onClick={() => {
+                          setReportsOpen(true);
+                          onNavigate?.();
+                        }}
+                        to={item.href ?? "/reports"}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        <span className="flex-1 text-left">{item.label}</span>
+                      </NavLink>
+                      <button
+                        aria-label={reportsOpen ? "Collapse Reports menu" : "Expand Reports menu"}
+                        className={cn(
+                          "flex h-full items-center rounded-r-md px-2.5 text-blue-100/80 transition-colors hover:bg-white/8 hover:text-white",
+                          (reportsOpen || activeChild || isParentActive) && "text-white",
+                        )}
+                        onClick={() => setReportsOpen((current) => !current)}
+                        type="button"
+                      >
+                        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", reportsOpen && "rotate-180")} />
+                      </button>
+                    </div>
                     {reportsOpen ? (
                       <div className="space-y-1 pl-3">
                         {item.children.map((child) => (

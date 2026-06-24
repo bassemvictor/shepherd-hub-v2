@@ -78,7 +78,7 @@ export const CompactFilterBar = ({
 
   return (
   <>
-    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_160px_160px_170px_170px_170px_150px_120px]">
+    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1.2fr)_160px_160px_170px_170px_170px_150px_120px]">
       {onSearchChange ? (
         <FilterField label="Search">
           <label className="relative block">
@@ -111,7 +111,7 @@ export const CompactFilterBar = ({
         </Select>
       </FilterField>
 
-      <FilterField label="Visitor">
+      <FilterField label="Caregiver">
         <Select
           disabled={scope === "me"}
           onChange={(event) => onVisitorChange(event.target.value || undefined)}

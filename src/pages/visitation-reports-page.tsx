@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { Play } from "lucide-react";
 
 import type {
   ReportsSortBy,
@@ -8,10 +9,13 @@ import type {
   VisitationOverviewRow,
   VisitationReportResponse,
 } from "../../shared/types";
+import { visitationTypes } from "../../shared/types";
 import { CompactFilterBar } from "../components/reports/compact-filter-bar";
 import { MemberVisitationView } from "../components/reports/member-visitation-view";
 import { ReportsDashboard } from "../components/reports/reports-dashboard";
 import { ReportsLayout } from "../components/reports/reports-layout";
+import { Button } from "../components/ui/button";
+import { Select } from "../components/ui/select";
 import {
   getActivityCopy,
   buildReportFilters,
@@ -89,7 +93,7 @@ const toCsv = (
   currentUserName?: string,
 ) => {
   const activityCopy = getActivityCopy(activityTypeLabel === "All" ? "all" : activityTypeLabel as ReportsVisitationTypeFilter);
-  const headers = ["Member", "Phone", "Group", "Activity Type", activityCopy.lastLabel, activityCopy.countLabel, "Recorded By", "Status", "Scope"];
+  const headers = ["Member", "Phone", "Group", activityTypeLabel === "All" ? "Care" : "Activity Type", activityCopy.lastLabel, activityCopy.countLabel, "Caregiver", "Status", "Scope"];
   const lines = rows.map((row) => {
     const metrics = getRelevantVisits(row, scope);
     return [
@@ -271,11 +275,12 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     void loadReport();
   }, [loadReport]);
 
-  const applyDashboardFilter = useCallback((filter: { view: "members"; show?: ReportShowFilter; period?: ReportPeriod }) => {
+  const applyDashboardFilter = useCallback((filter: { view: "members"; show?: ReportShowFilter; period?: ReportPeriod; search?: string }) => {
     const nextState = {
       ...searchState,
       show: filter.show ?? searchState.show,
       period: filter.period ?? searchState.period,
+      search: filter.search ?? searchState.search,
       page: 1,
     };
     navigate({
@@ -302,42 +307,118 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
   return (
     <ReportsLayout
       controls={(
-        <div className="space-y-2">
-          <CompactFilterBar
-            customFrom={draftState.customFrom}
-            customTo={draftState.customTo}
-            onCustomFromChange={(customFrom) => setDraftState((current) => ({ ...current, customFrom }))}
-            onCustomToChange={(customTo) => setDraftState((current) => ({ ...current, customTo }))}
-            onExport={exportCsv}
-            onPeriodChange={(period) => setDraftState((current) => ({ ...current, period }))}
-            onRunReport={runReport}
-            runDisabled={loading || !hasPendingChanges}
-            onSearchChange={reportView === "members" ? (search) => setDraftState((current) => ({ ...current, search })) : undefined}
-            onShowFilterChange={(show) => setDraftState((current) => ({ ...current, show }))}
-            onSortChange={({ sortBy, sortDirection }) => setDraftState((current) => ({ ...current, sortBy, sortDirection }))}
-            onVisitorChange={(selectedVisitorUserId) => setDraftState((current) => ({ ...current, selectedVisitorUserId }))}
-            onVisitationTypeChange={(visitationType) => setDraftState((current) => ({ ...current, visitationType }))}
-            period={draftState.period}
-            scope={REPORT_SCOPE}
-            search={reportView === "members" ? draftState.search : ""}
-            selectedVisitorUserId={draftState.selectedVisitorUserId}
-            sortBy={draftState.sortBy}
-            sortDirection={draftState.sortDirection}
-            visitationType={draftState.visitationType}
-            showFilter={draftState.show}
-            visitors={report?.visitors ?? []}
-          />
-          <div className="text-xs text-muted-foreground">
-            {getFilterSummary(searchState.show, searchState.period, searchState.visitationType)}
+        reportView === "dashboard" ? (
+          <div className="space-y-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                <label className="space-y-1">
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Period</span>
+                  <Select
+                    onChange={(event) => setDraftState((current) => ({ ...current, period: event.target.value as ReportPeriod }))}
+                    value={draftState.period}
+                  >
+                    <option value="all_time">All Time</option>
+                    <option value="last_30_days">Last 30 Days</option>
+                    <option value="last_90_days">Last 90 Days</option>
+                    <option value="this_year">This Year</option>
+                    <option value="custom">Custom</option>
+                  </Select>
+                </label>
+                <label className="space-y-1">
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Caregiver</span>
+                  <Select
+                    onChange={(event) => setDraftState((current) => ({ ...current, selectedVisitorUserId: event.target.value || undefined }))}
+                    value={draftState.selectedVisitorUserId ?? ""}
+                  >
+                    <option value="">Everyone</option>
+                    {(report?.visitors ?? []).map((visitor) => (
+                      <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
+                        {visitor.visitorDisplayName}
+                    </option>
+                  ))}
+                  </Select>
+                </label>
+                <label className="space-y-1">
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Type</span>
+                  <Select
+                    onChange={(event) => setDraftState((current) => ({ ...current, visitationType: event.target.value as ReportsVisitationTypeFilter }))}
+                    value={draftState.visitationType}
+                  >
+                    <option value="all">All</option>
+                    {visitationTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              </div>
+              <Button className="w-full lg:w-auto" disabled={loading || !hasPendingChanges} onClick={runReport} type="button">
+                <Play className="h-3.5 w-3.5" />
+                Run Report
+              </Button>
+            </div>
+            {draftState.period === "custom" ? (
+              <div className="grid gap-3 sm:grid-cols-2 xl:max-w-[420px]">
+              <label className="space-y-1">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">From</span>
+                <input
+                  className="h-8 w-full rounded-md border border-border bg-card px-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
+                  onChange={(event) => setDraftState((current) => ({ ...current, customFrom: event.target.value }))}
+                  type="date"
+                  value={draftState.customFrom ?? ""}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">To</span>
+                <input
+                  className="h-8 w-full rounded-md border border-border bg-card px-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
+                  onChange={(event) => setDraftState((current) => ({ ...current, customTo: event.target.value }))}
+                  type="date"
+                  value={draftState.customTo ?? ""}
+                />
+              </label>
+              </div>
+            ) : null}
           </div>
-        </div>
+        ) : (
+          <div className="space-y-2">
+            <CompactFilterBar
+              customFrom={draftState.customFrom}
+              customTo={draftState.customTo}
+              onCustomFromChange={(customFrom) => setDraftState((current) => ({ ...current, customFrom }))}
+              onCustomToChange={(customTo) => setDraftState((current) => ({ ...current, customTo }))}
+              onExport={exportCsv}
+              onPeriodChange={(period) => setDraftState((current) => ({ ...current, period }))}
+              onRunReport={runReport}
+              runDisabled={loading || !hasPendingChanges}
+              onSearchChange={reportView === "members" ? (search) => setDraftState((current) => ({ ...current, search })) : undefined}
+              onShowFilterChange={(show) => setDraftState((current) => ({ ...current, show }))}
+              onSortChange={({ sortBy, sortDirection }) => setDraftState((current) => ({ ...current, sortBy, sortDirection }))}
+              onVisitorChange={(selectedVisitorUserId) => setDraftState((current) => ({ ...current, selectedVisitorUserId }))}
+              onVisitationTypeChange={(visitationType) => setDraftState((current) => ({ ...current, visitationType }))}
+              period={draftState.period}
+              scope={REPORT_SCOPE}
+              search={reportView === "members" ? draftState.search : ""}
+              selectedVisitorUserId={draftState.selectedVisitorUserId}
+              sortBy={draftState.sortBy}
+              sortDirection={draftState.sortDirection}
+              visitationType={draftState.visitationType}
+              showFilter={draftState.show}
+              visitors={report?.visitors ?? []}
+            />
+            <div className="text-xs text-muted-foreground">
+              {getFilterSummary(searchState.show, searchState.period, searchState.visitationType)}
+            </div>
+          </div>
+        )
       )}
       subtitle={
         reportView === "dashboard"
-          ? "Track who needs a visit, who has been visited, and who to follow up with next."
+          ? "Overview of member visits and activities."
           : "See exactly which members match the visitation filters you selected."
       }
-      title={reportView === "dashboard" ? "Reports Dashboard" : "Member Report"}
+      title={reportView === "dashboard" ? "Reports" : "Member Report"}
     >
       {loading ? (
         <div className="rounded-lg border border-border bg-white p-4 text-sm text-muted-foreground">Loading report data...</div>
@@ -350,12 +431,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
       {!loading && report ? (
         reportView === "dashboard" ? (
           <ReportsDashboard
-            currentUser={user}
-            onApplyDashboardFilter={applyDashboardFilter}
-            period={searchState.period}
             report={report}
-            scope={REPORT_SCOPE}
-            showFilter={searchState.show}
             visitationType={searchState.visitationType}
           />
         ) : report.rows.length ? (

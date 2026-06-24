@@ -9,8 +9,8 @@ const routeTitleMap: Record<string, string> = {
   "/admin/user-groups": "User Groups",
   "/admin/tenant-reset": "Tenant Reset",
   "/reports": "Reports",
-  "/reports/visitations": "Reports Dashboard",
-  "/reports/dashboard": "Reports Dashboard",
+  "/reports/visitations": "Reports",
+  "/reports/dashboard": "Reports",
   "/reports/member-visitation": "Member Report",
   "/auth": "Sign In",
 };
@@ -23,7 +23,7 @@ const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
   "/admin/user-groups": [{ label: "Admin" }, { label: "User Groups" }],
   "/admin/tenant-reset": [{ label: "Admin" }, { label: "Tenant Reset" }],
   "/reports": [{ label: "Insights" }, { label: "Reports" }],
-  "/reports/dashboard": [{ label: "Insights" }, { label: "Reports Dashboard" }],
+  "/reports/dashboard": [{ label: "Insights" }, { label: "Reports" }],
   "/reports/member-visitation": [{ label: "Insights" }, { label: "Member Report" }],
   "/auth": [{ label: "Sign In" }],
 };

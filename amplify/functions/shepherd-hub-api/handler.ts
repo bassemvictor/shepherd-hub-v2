@@ -80,6 +80,8 @@ import type {
   TenantUserSummary,
   TenantUsersResponse,
   ActivityTypeDistributionBucket,
+  MonthlyActivityTrendPoint,
+  VisitedMemberBreakdownBucket,
   VisitationDistributionBucket,
   VisitationOverviewRow,
   VisitationReportFilters,
@@ -3969,6 +3971,7 @@ const getVisitationReport = async (
 
     return true;
   });
+  const filteredMemberIds = new Set(filteredMembers.map((member) => member.memberId));
 
   const topVisitorsByUserId = new Map<string, VisitorLeaderboardEntry>();
   const currentUserActivity: CurrentUserVisitationActivity = {
@@ -3977,6 +3980,8 @@ const getVisitationReport = async (
     thisYear: 0,
   };
   const activityTypeCounts = new Map<ActivityTypeDistributionBucket["key"], number>();
+  const latestInRangeTypeByMemberId = new Map<string, { type: VisitationType; visitDate: string }>();
+  const monthlyActivityCounts = new Map<string, number>();
   const everyoneLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
   const filteredLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
   const currentUserLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
@@ -3997,16 +4002,22 @@ const getVisitationReport = async (
       totalLifetimeVisits: 0,
       lastVisitDate: undefined,
       lastVisitedBy: undefined,
+      lastVisitType: undefined,
     };
     current.totalLifetimeVisits += 1;
     if (!current.lastVisitDate || visitation.visitDate > current.lastVisitDate) {
       current.lastVisitDate = visitation.visitDate;
       current.lastVisitedBy = visitation.visitorDisplayName;
+      current.lastVisitType = normalizeVisitationType(visitation.type);
     }
     target.set(visitation.memberId, current);
   };
 
   for (const visitation of reportVisitations) {
+    if (!filteredMemberIds.has(visitation.memberId)) {
+      continue;
+    }
+
     updateScopeMetrics(everyoneLifetimeByMemberId, visitation);
 
     const matchesVisitor = matchesReportVisitorFilter(visitation, filters, context.actorSub);
@@ -4047,6 +4058,15 @@ const getVisitationReport = async (
     incrementCount(filteredRangeCountByMemberId, visitation.memberId);
     const normalizedType = normalizeVisitationType(visitation.type);
     activityTypeCounts.set(normalizedType, (activityTypeCounts.get(normalizedType) ?? 0) + 1);
+    const monthKey = visitation.visitDate.slice(0, 7);
+    monthlyActivityCounts.set(monthKey, (monthlyActivityCounts.get(monthKey) ?? 0) + 1);
+    const latestInRange = latestInRangeTypeByMemberId.get(visitation.memberId);
+    if (!latestInRange || visitation.visitDate > latestInRange.visitDate) {
+      latestInRangeTypeByMemberId.set(visitation.memberId, {
+        type: normalizedType,
+        visitDate: visitation.visitDate,
+      });
+    }
 
     const existingVisitor = topVisitorsByUserId.get(visitation.visitorUserId);
     if (existingVisitor) {
@@ -4126,6 +4146,7 @@ const getVisitationReport = async (
       sectorOrGroup: member.groups?.join(", "),
       lastVisitDate: filteredLifetime?.lastVisitDate,
       lastVisitedBy: filteredLifetime?.lastVisitedBy,
+      lastVisitType: filteredLifetime?.lastVisitType,
       visitCountInRange: matchingCount,
       totalLifetimeVisits: filteredLifetime?.totalLifetimeVisits ?? 0,
       nextScheduledVisit: nextScheduledVisitByMemberId.get(member.memberId),
@@ -4137,12 +4158,14 @@ const getVisitationReport = async (
           totalLifetimeVisits: everyoneLifetime?.totalLifetimeVisits ?? 0,
           lastVisitDate: everyoneLifetime?.lastVisitDate,
           lastVisitedBy: everyoneLifetime?.lastVisitedBy,
+          lastVisitType: everyoneLifetime?.lastVisitType,
         },
         me: {
           visitCountInRange: currentUserRangeCount,
           totalLifetimeVisits: currentUserLifetime?.totalLifetimeVisits ?? 0,
           lastVisitDate: currentUserLifetime?.lastVisitDate,
           lastVisitedBy: currentUserLifetime?.lastVisitedBy,
+          lastVisitType: currentUserLifetime?.lastVisitType,
         },
       },
     };
@@ -4259,6 +4282,45 @@ const getVisitationReport = async (
       };
     }),
   ];
+  const visitedMemberCountsByType = new Map<VisitedMemberBreakdownBucket["key"], number>();
+  for (const row of allRows) {
+    if (row.visitCountInRange === 0) {
+      continue;
+    }
+
+    const latestType = latestInRangeTypeByMemberId.get(row.memberId)?.type;
+    const bucketKey: VisitedMemberBreakdownBucket["key"] = latestType === "Visitation"
+      || latestType === "Confession"
+      || latestType === "Phone Call"
+      ? latestType
+      : "Other";
+    visitedMemberCountsByType.set(bucketKey, (visitedMemberCountsByType.get(bucketKey) ?? 0) + 1);
+  }
+  const visitedBreakdownOrder: VisitedMemberBreakdownBucket["key"][] = ["Visitation", "Confession", "Phone Call", "Other"];
+  const visitedBreakdownByType: VisitedMemberBreakdownBucket[] = visitedBreakdownOrder
+    .map((key) => {
+      const memberCount = visitedMemberCountsByType.get(key) ?? 0;
+      return {
+        key,
+        label: key === "Visitation" ? "Visit" : key,
+        memberCount,
+        percentage: visitedInRangeCount > 0 ? (memberCount / visitedInRangeCount) * 100 : 0,
+      };
+    })
+    .filter((bucket) => bucket.memberCount > 0 || bucket.key !== "Other");
+  const monthlyActivityTrend: MonthlyActivityTrendPoint[] = [...monthlyActivityCounts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([month, count]) => {
+      const [year, monthIndex] = month.split("-");
+      const label = new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric" }).format(
+        new Date(Number(year), Number(monthIndex) - 1, 1),
+      );
+      return {
+        month,
+        label,
+        count,
+      };
+    });
 
   const summary: VisitationReportKpiSummary = {
     totalMembers: filteredMembers.length,
@@ -4303,6 +4365,8 @@ const getVisitationReport = async (
     summary,
     distribution,
     activityTypeDistribution,
+    visitedBreakdownByType,
+    monthlyActivityTrend,
     attentionMembers,
     rows: allRows.slice(startIndex, startIndex + filters.pageSize),
     pagination,

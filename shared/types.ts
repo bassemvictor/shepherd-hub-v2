@@ -329,6 +329,7 @@ export type VisitationOverviewRow = {
   sectorOrGroup?: string;
   lastVisitDate?: string;
   lastVisitedBy?: string;
+  lastVisitType?: VisitationType;
   visitCountInRange: number;
   totalLifetimeVisits: number;
   nextScheduledVisit?: string;
@@ -345,6 +346,20 @@ export type VisitationScopeMetrics = {
   totalLifetimeVisits: number;
   lastVisitDate?: string;
   lastVisitedBy?: string;
+  lastVisitType?: VisitationType;
+};
+
+export type VisitedMemberBreakdownBucket = {
+  key: VisitationType | "Other";
+  label: string;
+  memberCount: number;
+  percentage: number;
+};
+
+export type MonthlyActivityTrendPoint = {
+  month: string;
+  label: string;
+  count: number;
 };
 
 export type VisitorLeaderboardEntry = {
@@ -376,6 +391,8 @@ export type VisitationReportResponse = {
   summary: VisitationReportKpiSummary;
   distribution: VisitationDistributionBucket[];
   activityTypeDistribution: ActivityTypeDistributionBucket[];
+  visitedBreakdownByType: VisitedMemberBreakdownBucket[];
+  monthlyActivityTrend: MonthlyActivityTrendPoint[];
   attentionMembers: VisitationOverviewRow[];
   rows: VisitationOverviewRow[];
   pagination: ReportPagination;

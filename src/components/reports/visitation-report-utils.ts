@@ -15,12 +15,12 @@ const withArticle = (label: string) => (/^[aeiou]/i.test(label) ? `an ${label}` 
 
 export const getActivityCopy = (visitationType: ReportsVisitationTypeFilter) => {
   const singular = visitationType === "all"
-    ? "Activity"
+    ? "Care"
     : visitationType === "Visitation"
       ? "Visit"
       : visitationType;
   const plural = visitationType === "all"
-    ? "Activities"
+    ? "Care"
     : visitationType === "Visitation"
       ? "Visits"
       : visitationType === "Confession"
@@ -40,10 +40,10 @@ export const getActivityCopy = (visitationType: ReportsVisitationTypeFilter) => 
     plural,
     singularLower,
     pluralLower,
-    needsLabel: visitationType === "all" ? "Needs Activity" : `Needs ${withArticle(singular)}`,
-    membersNeedingLabel: visitationType === "all" ? "Needing Activity" : `Needing ${withArticle(singular)}`,
-    hasLabel: visitationType === "all" ? "Has Activity" : `Has ${singular}`,
-    noneYetLabel: visitationType === "all" ? "No activity yet" : `No ${singularLower} yet`,
+    needsLabel: visitationType === "all" ? "Needs Care" : `Needs ${withArticle(singular)}`,
+    membersNeedingLabel: visitationType === "all" ? "Needing Care" : `Needing ${withArticle(singular)}`,
+    hasLabel: visitationType === "all" ? "Has Care" : `Has ${singular}`,
+    noneYetLabel: visitationType === "all" ? "No care yet" : `No ${singularLower} yet`,
     lastLabel: `Last ${singular}`,
     countLabel: `${singular} Count`,
   };

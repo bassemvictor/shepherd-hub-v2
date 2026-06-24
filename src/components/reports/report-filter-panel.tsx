@@ -48,7 +48,7 @@ export const ReportFilterPanel = ({
     <div className="flex items-center justify-between gap-2">
       <div>
         <div className="text-sm font-semibold text-slate-900">Filters</div>
-        <div className="text-xs text-muted-foreground">Date, visitor, and member filters for visitation reports.</div>
+        <div className="text-xs text-muted-foreground">Date, caregiver, and member filters for visitation reports.</div>
       </div>
       <Button onClick={onToggleOpen} size="sm" type="button" variant="outline">
         {open ? "Hide Filters" : "Show Filters"}
@@ -98,25 +98,25 @@ export const ReportFilterPanel = ({
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Visitor filter</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Caregiver filter</span>
             <Select
               onChange={(event) => onChange({ ...draft, visitorMode: event.target.value as ReportsVisitorFilterMode, visitorUserId: undefined })}
               value={draft.visitorMode}
             >
-              <option value="any">Any visitor</option>
+              <option value="any">Any caregiver</option>
               <option value="me_only">Only visits by me</option>
               <option value="exclude_me">Exclude visits by me</option>
-              <option value="specific">Specific visitor</option>
+              <option value="specific">Specific caregiver</option>
             </Select>
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Specific visitor</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Specific caregiver</span>
             <Select
               disabled={draft.visitorMode !== "specific"}
               onChange={(event) => onChange({ ...draft, visitorUserId: event.target.value || undefined })}
               value={draft.visitorUserId ?? ""}
             >
-              <option value="">Choose visitor</option>
+              <option value="">Choose caregiver</option>
               {visitors.map((visitor) => (
                 <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
                   {visitor.visitorDisplayName}
