@@ -68,17 +68,15 @@ export const MemberVisitationView = ({
             const relevant = getRelevantVisits(row, scope, currentUser);
             const status = getVisitStatus(row, period, scope, visitationType, currentUser);
             return (
-              <button
+              <div
                 className="rounded-lg border border-border/80 bg-slate-50 p-3 text-left"
                 key={row.memberId}
-                onClick={() => navigate(`/members/${row.memberId}`)}
-                type="button"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                  <button className="min-w-0 text-left" onClick={() => navigate(`/members/${row.memberId}`)} type="button">
                     <div className="truncate text-sm font-semibold text-slate-950">{row.memberFullName}</div>
                     <div className="text-xs text-muted-foreground">{row.phone || row.email || "No contact info"}</div>
-                  </div>
+                  </button>
                   <Badge variant={statusVariant(status)}>{status}</Badge>
                 </div>
                 <div className="mt-3 grid gap-2 text-sm text-slate-700">
@@ -89,12 +87,12 @@ export const MemberVisitationView = ({
                   <div>{caregiverLabel}: {relevant.lastVisitedBy || activityCopy.noneYetLabel}</div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
-                  {row.phone ? <a className="inline-flex h-8 items-center rounded-md border border-border bg-white px-2 text-xs" href={`tel:${row.phone}`} onClick={(event) => event.stopPropagation()}><Phone className="mr-1 h-3.5 w-3.5" />Call</a> : null}
-                  {row.phone ? <a className="inline-flex h-8 items-center rounded-md border border-border bg-white px-2 text-xs" href={`sms:${row.phone}`} onClick={(event) => event.stopPropagation()}><MessageCircle className="mr-1 h-3.5 w-3.5" />Text</a> : null}
-                  {row.email ? <a className="inline-flex h-8 items-center rounded-md border border-border bg-white px-2 text-xs" href={`mailto:${row.email}`} onClick={(event) => event.stopPropagation()}><Mail className="mr-1 h-3.5 w-3.5" />Email</a> : null}
-                  <Button onClick={(event) => { event.stopPropagation(); navigate(`/calendar/schedule?memberId=${row.memberId}`); }} size="sm" type="button" variant="outline"><CalendarDays className="h-3.5 w-3.5" />Schedule</Button>
+                  {row.phone ? <a className="inline-flex h-8 items-center rounded-md border border-border bg-white px-2 text-xs" href={`tel:${row.phone}`}><Phone className="mr-1 h-3.5 w-3.5" />Call</a> : null}
+                  {row.phone ? <a className="inline-flex h-8 items-center rounded-md border border-border bg-white px-2 text-xs" href={`sms:${row.phone}`}><MessageCircle className="mr-1 h-3.5 w-3.5" />Text</a> : null}
+                  {row.email ? <a className="inline-flex h-8 items-center rounded-md border border-border bg-white px-2 text-xs" href={`mailto:${row.email}`}><Mail className="mr-1 h-3.5 w-3.5" />Email</a> : null}
+                  <Button onClick={() => navigate(`/calendar/schedule?memberId=${row.memberId}`)} size="sm" type="button" variant="outline"><CalendarDays className="h-3.5 w-3.5" />Schedule</Button>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

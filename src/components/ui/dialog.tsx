@@ -1,5 +1,6 @@
 import { useEffect, useId, type ReactNode } from "react";
 
+import { useOverlayHistory } from "../../lib/use-overlay-history";
 import { cn } from "../../lib/utils";
 
 type DialogProps = {
@@ -21,6 +22,7 @@ export const Dialog = ({
 }: DialogProps) => {
   const titleId = useId();
   const descriptionId = useId();
+  const handleClose = useOverlayHistory(open, onClose);
 
   useEffect(() => {
     if (!open) {
@@ -29,13 +31,13 @@ export const Dialog = ({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        handleClose();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, open]);
+  }, [handleClose, open]);
 
   if (!open) {
     return null;
@@ -43,7 +45,7 @@ export const Dialog = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 px-0 py-0 sm:items-start sm:px-4 sm:py-6">
-      <button aria-label="Close dialog overlay" className="absolute inset-0" onClick={onClose} type="button" />
+      <button aria-label="Close dialog overlay" className="absolute inset-0" onClick={handleClose} type="button" />
       <div
         aria-describedby={description ? descriptionId : undefined}
         aria-labelledby={titleId}

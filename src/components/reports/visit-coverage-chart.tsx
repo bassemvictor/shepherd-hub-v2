@@ -22,7 +22,7 @@ export const VisitCoverageChart = ({
       </CardHeader>
       <CardContent className="grid gap-4 sm:grid-cols-[180px_minmax(0,1fr)] sm:items-center">
         <div className="relative h-44 w-full">
-          <ResponsiveContainer height="100%" width="100%">
+          <ResponsiveContainer aspect={1} minHeight={176} minWidth={0} width="100%">
             <PieChart>
               <Pie data={data} dataKey="count" innerRadius={48} outerRadius={72} paddingAngle={2} strokeWidth={0}>
                 {data.map((item) => (

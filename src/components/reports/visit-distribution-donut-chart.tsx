@@ -36,7 +36,7 @@ const Donut = ({
   centerSubLabel: string;
 }) => (
   <div className="relative h-56 w-full">
-    <ResponsiveContainer height="100%" width="100%">
+    <ResponsiveContainer aspect={1} minHeight={224} minWidth={0} width="100%">
       <PieChart>
         <Pie
           cx="50%"
@@ -100,7 +100,7 @@ export const VisitDistributionDonutChart = ({
       <div className="rounded-lg border border-border bg-white p-3 panel-shadow">
         <div className="text-sm font-semibold text-slate-900">Activity Type Mix</div>
         <div className="relative h-56 w-full">
-          <ResponsiveContainer height="100%" width="100%">
+          <ResponsiveContainer aspect={1} minHeight={224} minWidth={0} width="100%">
             <PieChart>
               <Pie
                 cx="50%"

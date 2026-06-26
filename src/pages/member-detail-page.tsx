@@ -8,7 +8,9 @@ import {
   FileText,
   Mail,
   MapPin,
+  MessageCircleCheck,
   MessageCircle,
+  MessagesSquare,
   Phone,
   UserRound,
   Users,
@@ -291,8 +293,8 @@ export const MemberDetailPage = () => {
 
     return [
       { href: member.phone ? `tel:${member.phone}` : undefined, icon: Phone, label: "Call" },
-      { href: member.phone ? `sms:${member.phone}` : undefined, icon: MessageCircle, label: "Text" },
-      { href: member.whatsappPhone ? `https://wa.me/${member.whatsappPhone.replace(/\D/g, "")}` : undefined, icon: MessageCircle, label: "WhatsApp" },
+      { href: member.phone ? `sms:${member.phone}` : undefined, icon: MessagesSquare, label: "Text" },
+      { href: member.whatsappPhone ? `https://wa.me/${member.whatsappPhone.replace(/\D/g, "")}` : undefined, icon: MessageCircleCheck, label: "WhatsApp" },
       { href: member.email ? `mailto:${member.email}` : undefined, icon: Mail, label: "Email" },
     ].filter((item) => item.href);
   }, [member]);

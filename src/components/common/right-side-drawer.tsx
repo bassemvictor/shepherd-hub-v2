@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { useOverlayHistory } from "../../lib/use-overlay-history";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
@@ -37,6 +38,8 @@ export const RightSideDrawer = ({
   titleClassName,
   descriptionClassName,
 }: RightSideDrawerProps) => {
+  const handleClose = useOverlayHistory(open, onClose);
+
   if (!open) {
     return null;
   }
@@ -46,7 +49,7 @@ export const RightSideDrawer = ({
       <button
         aria-label="Close drawer overlay"
         className="absolute inset-0 bg-slate-950/35"
-        onClick={onClose}
+        onClick={handleClose}
         type="button"
       />
       <aside
@@ -64,7 +67,7 @@ export const RightSideDrawer = ({
               {description ? <p className={cn("mt-1 text-xs text-muted-foreground sm:text-sm", descriptionClassName)}>{description}</p> : null}
             </div>
           </div>
-          <Button onClick={onClose} size="icon" type="button" variant="ghost">
+          <Button onClick={handleClose} size="icon" type="button" variant="ghost">
             <X className="h-4 w-4" />
           </Button>
         </div>

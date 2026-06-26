@@ -1,58 +1,46 @@
-import { ArrowRight, ChartColumnBig, UsersRound } from "lucide-react";
+import { ChartColumnBig, UsersRound } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { ReportsLayout } from "../components/reports/reports-layout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 
 const reportDestinations = [
   {
-    title: "Reports Dashboard",
-    description: "See the high-level visitation picture, spot gaps quickly, and jump into follow-up work.",
+    title: "Visitation Dashboard",
     href: "/reports/dashboard",
     icon: ChartColumnBig,
   },
   {
-    title: "Member Report",
-    description: "Review detailed member-level results with filters, sorting, paging, and export-ready data.",
+    title: "Member Visitation Report",
     href: "/reports/member-visitation",
     icon: UsersRound,
   },
 ] as const;
 
 export const ReportsHomePage = () => (
-  <ReportsLayout
-    subtitle="Open the report you need from one simple reporting hub."
-    title="Reports"
-  >
-    <Card className="border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,247,251,0.96)_100%)]">
-      <CardHeader className="gap-2 pb-2">
-        <CardTitle className="text-xl text-foreground">Choose a report</CardTitle>
-        <CardDescription className="max-w-2xl text-sm">
-          Start from the main dashboard for a quick overview, or open the member report for a detailed list.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 pt-2 md:grid-cols-2">
-        {reportDestinations.map((report) => {
-          const Icon = report.icon;
+  <ReportsLayout title="Reports">
+    <div className="min-h-[calc(100vh-15rem)] rounded-[1.5rem] border border-border/60 bg-[linear-gradient(180deg,#f8fafc_0%,#f3f6fb_100%)] px-4 py-5 sm:px-6 sm:py-8 lg:px-10 lg:py-12">
+      <div className="mx-auto flex max-w-5xl justify-center">
+        <div className="grid w-full max-w-xl grid-cols-1 gap-3 sm:max-w-[33rem] sm:grid-cols-2 sm:gap-4">
+          {reportDestinations.map((report) => {
+            const Icon = report.icon;
 
-          return (
-            <Link
-              className="group rounded-lg border border-border/80 bg-white p-4 transition-colors hover:border-primary/35 hover:bg-accent/40"
-              key={report.href}
-              to={report.href}
-            >
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 text-primary">
-                <Icon className="h-5 w-5" />
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-semibold text-foreground">{report.title}</h2>
-                <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
-              </div>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{report.description}</p>
-            </Link>
-          );
-        })}
-      </CardContent>
-    </Card>
+            return (
+              <Link
+                className="group flex min-h-[124px] flex-col items-center justify-center rounded-[1.35rem] border border-slate-200/80 bg-white px-4 py-4 text-center shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-[0_18px_40px_rgba(15,23,42,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 sm:aspect-square sm:min-h-[138px] sm:rounded-[1.3rem] sm:px-4 sm:py-4"
+                key={report.href}
+                to={report.href}
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-[1rem] bg-primary/8 text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] transition-transform duration-200 group-hover:scale-[1.03] sm:h-12 sm:w-12 sm:rounded-[0.95rem]">
+                  <Icon className="h-6 w-6 stroke-[1.8] sm:h-6 sm:w-6" />
+                </div>
+                <h2 className="mt-3 max-w-[11rem] text-[0.98rem] font-semibold tracking-[-0.01em] text-slate-900 sm:mt-3 sm:max-w-[10rem] sm:text-[0.98rem]">
+                  {report.title}
+                </h2>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   </ReportsLayout>
 );

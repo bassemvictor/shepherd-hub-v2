@@ -28,6 +28,7 @@ import {
   RefreshCcw,
   Search,
   Trash2,
+  User,
   Users,
 } from "lucide-react";
 import type { JSX, MutableRefObject, TouchEvent } from "react";
@@ -261,6 +262,22 @@ const formatEventTimeRange = (event: ScheduleEvent) => {
   });
 
   return `${formatter.format(new Date(event.start))} - ${formatter.format(new Date(event.end))}`;
+};
+
+const getMemberAttachmentCount = (event: ScheduleEvent) => event.memberIds?.length ?? 0;
+
+const getMemberAttachmentIcon = (event: ScheduleEvent) => {
+  const memberCount = getMemberAttachmentCount(event);
+
+  if (memberCount === 1) {
+    return User;
+  }
+
+  if (memberCount > 1) {
+    return Users;
+  }
+
+  return null;
 };
 
 const getEventDateRange = (event: ScheduleEvent) => ({
@@ -762,10 +779,7 @@ const EventEditor = ({
                 <MemberChip
                   key={member.memberId}
                   member={member}
-                  onClick={(memberId) => {
-                    onClose();
-                    navigate(`/members/${memberId}`);
-                  }}
+                  onClick={(memberId) => navigate(`/members/${memberId}`)}
                   onRemove={(memberId) =>
                     onChange(
                       applyMemberSelectionToForm(
@@ -1373,10 +1387,19 @@ const ScheduleBetaMobileView = ({
                         className="mt-1 h-3 w-3 shrink-0 rounded-full"
                         style={{ backgroundColor: normalizeHexColor(event.calendarColor) }}
                       />
-                      <div className="min-w-0 flex-1 text-left">
+                      <div className="min-w-0 flex-1 pr-2 text-left">
                         <div className="truncate text-sm font-semibold text-foreground">{event.summary}</div>
                         <div className="text-sm text-muted-foreground">{formatEventTimeRange(event)}</div>
                       </div>
+                      {(() => {
+                        const MemberAttachmentIcon = getMemberAttachmentIcon(event);
+                        return MemberAttachmentIcon ? (
+                          <MemberAttachmentIcon
+                            aria-hidden="true"
+                            className="h-5 w-5 shrink-0 self-center text-slate-500"
+                          />
+                        ) : null;
+                      })()}
                     </button>
                   )) : (
                     <div className="rounded-2xl border border-dashed border-border bg-muted/35 px-4 py-5 text-sm text-muted-foreground">

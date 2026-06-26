@@ -7,6 +7,7 @@ import { useMembersIndex } from "../../lib/members-index";
 import { useTheme } from "../../lib/theme";
 import { APP_NAME, APP_SHORT_VERSION, APP_VERSION } from "../../lib/app-metadata";
 import { getBreadcrumbs, getPageTitle } from "../../lib/route-metadata";
+import { useOverlayHistory } from "../../lib/use-overlay-history";
 import { cn } from "../../lib/utils";
 import { useIsMobile } from "../../pages/calendar-shared";
 import { MobileBottomNav } from "./mobile-bottom-nav";
@@ -24,6 +25,7 @@ export const AppShell = () => {
   const [memberSearchQuery, setMemberSearchQuery] = useState("");
   const [memberSearchOpen, setMemberSearchOpen] = useState(false);
   const isMobile = useIsMobile();
+  const closeSidebar = useOverlayHistory(sidebarOpen, () => setSidebarOpen(false));
   const memberSearchRef = useRef<HTMLFormElement | null>(null);
   const breadcrumbs = useMemo(() => getBreadcrumbs(pathname), [pathname]);
   const title = useMemo(() => getPageTitle(pathname), [pathname]);
@@ -108,7 +110,7 @@ export const AppShell = () => {
               </div>
               <button
                 className="rounded-md p-2 text-blue-100 lg:hidden"
-                onClick={() => setSidebarOpen(false)}
+                onClick={closeSidebar}
                 type="button"
               >
                 <Menu className="h-5 w-5" />
@@ -144,7 +146,7 @@ export const AppShell = () => {
           <button
             aria-label="Close sidebar overlay"
             className="fixed inset-0 z-30 bg-slate-950/35 lg:hidden"
-            onClick={() => setSidebarOpen(false)}
+            onClick={closeSidebar}
             type="button"
           />
         ) : null}

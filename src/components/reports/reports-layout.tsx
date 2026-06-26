@@ -9,7 +9,7 @@ export const ReportsLayout = ({
   children,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   controls?: ReactNode;
   children: ReactNode;
 }) => (
