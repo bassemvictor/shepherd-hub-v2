@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import type { JSX, MutableRefObject, TouchEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import type {
   CreateScheduleEventInput,
@@ -66,6 +66,14 @@ import { Textarea } from "../components/ui/textarea";
 import { api, isApiConfigured } from "../lib/api";
 import { useMembersIndex } from "../lib/members-index";
 import {
+  MOBILE_SCHEDULE_MODE_EVENT,
+  MOBILE_SCHEDULE_MODE_PARAM,
+  MOBILE_SCHEDULE_MODE_STORAGE_KEY,
+  normalizeMobileScheduleMode,
+  readStoredMobileScheduleMode,
+  writeStoredMobileScheduleMode,
+} from "../lib/schedule-mobile-mode";
+import {
   CalendarSourceBadge,
   formatDateTime,
   ToastItem,
@@ -74,7 +82,6 @@ import {
 } from "./calendar-shared";
 
 type EditorMode = "create" | "edit";
-type SchedulePageVariant = "default" | "beta";
 type MobileBetaTab = "list" | "day";
 
 type EventFormState = {
@@ -1538,7 +1545,7 @@ const mergeOverviewWithSyncMetadata = (
   };
 };
 
-const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) => {
+const ScheduleExperiencePage = () => {
   const calendarRef = useRef<FullCalendar | null>(null);
   const requestSequenceRef = useRef(0);
   const mobileScrollFrameRef = useRef<number | null>(null);
@@ -1546,7 +1553,10 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
   const deepLinkedEventRef = useRef<string | null>(null);
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
-  const useBetaMobileExperience = isMobile && variant === "beta";
+  const [mobileScheduleMode, setMobileScheduleMode] = useState(() =>
+    normalizeMobileScheduleMode(searchParams.get(MOBILE_SCHEDULE_MODE_PARAM)) ?? readStoredMobileScheduleMode(),
+  );
+  const useBetaMobileExperience = isMobile && mobileScheduleMode === "beta";
   const [overview, setOverview] = useState<ScheduleOverviewResponse | null>(null);
   const { items: memberIndex } = useMembersIndex();
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -1712,6 +1722,48 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     setViewTitle(formatWeekRange(selectedWeek.start, selectedWeek.end));
   }, [mobileBetaTab, selectedWeek, useBetaMobileExperience]);
 
+  useEffect(() => {
+    writeStoredMobileScheduleMode(mobileScheduleMode);
+  }, [mobileScheduleMode]);
+
+  useEffect(() => {
+    const modeFromQuery = normalizeMobileScheduleMode(searchParams.get(MOBILE_SCHEDULE_MODE_PARAM));
+    if (modeFromQuery) {
+      setMobileScheduleMode(modeFromQuery);
+      return;
+    }
+
+    setMobileScheduleMode(readStoredMobileScheduleMode());
+  }, [searchParams]);
+
+  useEffect(() => {
+    const handleModeEvent = (event: Event) => {
+      const nextMode = normalizeMobileScheduleMode((event as CustomEvent<string>).detail);
+      if (nextMode) {
+        setMobileScheduleMode(nextMode);
+      }
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== MOBILE_SCHEDULE_MODE_STORAGE_KEY) {
+        return;
+      }
+
+      const nextMode = normalizeMobileScheduleMode(event.newValue);
+      if (nextMode) {
+        setMobileScheduleMode(nextMode);
+      }
+    };
+
+    window.addEventListener(MOBILE_SCHEDULE_MODE_EVENT, handleModeEvent);
+    window.addEventListener("storage", handleStorage);
+
+    return () => {
+      window.removeEventListener(MOBILE_SCHEDULE_MODE_EVENT, handleModeEvent);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
+
   const toggleCalendarVisibility = useCallback((calendarId: string, checked: boolean) => {
     setVisibleCalendarIds((current) =>
       checked
@@ -1860,6 +1912,16 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     if (changed) {
       setSearchParams(nextParams, { replace: true });
     }
+  }, [searchParams, setSearchParams]);
+
+  const clearMobileViewSearchParam = useCallback(() => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (!nextParams.has(MOBILE_SCHEDULE_MODE_PARAM)) {
+      return;
+    }
+
+    nextParams.delete(MOBILE_SCHEDULE_MODE_PARAM);
+    setSearchParams(nextParams, { replace: true });
   }, [searchParams, setSearchParams]);
 
   const openCreateEditorForDate = useCallback((date: Date, durationMinutes = 60) => {
@@ -2034,13 +2096,17 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
   }, [clearIntentSearchParams, defaultCalendarId, editorOpen, memberIndex, openCreateEditor, searchParams]);
 
   useEffect(() => {
-    if (!useBetaMobileExperience || editorOpen || searchParams.get("mobileAction") !== "new-event") {
+    if (!isMobile || editorOpen || searchParams.get("mobileAction") !== "new-event") {
       return;
     }
 
-    setNewEventDialogOpen(true);
+    if (useBetaMobileExperience) {
+      setNewEventDialogOpen(true);
+    } else {
+      openCreateEditor(emptyEventForm(defaultCalendarId));
+    }
     clearIntentSearchParams(["mobileAction"]);
-  }, [clearIntentSearchParams, editorOpen, searchParams, useBetaMobileExperience]);
+  }, [clearIntentSearchParams, defaultCalendarId, editorOpen, isMobile, openCreateEditor, searchParams, useBetaMobileExperience]);
 
   useEffect(() => {
     const eventDate = searchParams.get("date");
@@ -2067,6 +2133,12 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
     }
     deepLinkedDateRef.current = `${eventId}:${eventDate}`;
   }, [isMobile, searchParams, useBetaMobileExperience]);
+
+  useEffect(() => {
+    if (!isMobile) {
+      clearMobileViewSearchParam();
+    }
+  }, [clearMobileViewSearchParam, isMobile]);
 
   useEffect(() => {
     const eventId = searchParams.get("eventId");
@@ -2289,8 +2361,6 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
       {!isMobile ? (
         <PageHeader
           className="p-3"
-          description="View, search, create, edit, drag, and resize events for the calendars you’ve chosen to display."
-          descriptionClassName="text-xs sm:text-sm"
           title={pageTitle}
           titleClassName="text-xl"
         >
@@ -2623,6 +2693,10 @@ const ScheduleExperiencePage = ({ variant }: { variant: SchedulePageVariant }) =
   );
 };
 
-export const SchedulePage = () => <ScheduleExperiencePage variant="default" />;
+export const SchedulePage = () => <ScheduleExperiencePage />;
 
-export const ScheduleBetaPage = () => <ScheduleExperiencePage variant="beta" />;
+export const LegacyScheduleBetaRedirectPage = () => {
+  const location = useLocation();
+
+  return <Navigate replace to={{ pathname: "/calendar/schedule", search: location.search }} />;
+};

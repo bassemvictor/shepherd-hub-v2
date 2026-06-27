@@ -18,9 +18,9 @@ export const MobileBottomNav = ({ onOpenMore }: MobileBottomNavProps) => {
     () => [
       {
         label: "Schedule",
-        href: "/calendar/schedule-beta",
+        href: "/calendar/schedule",
         icon: CalendarDays,
-        active: pathname === "/calendar/schedule-beta",
+        active: pathname === "/calendar/schedule" || pathname === "/calendar/schedule-beta",
       },
       {
         label: "Members",
@@ -120,7 +120,7 @@ export const MobileBottomNav = ({ onOpenMore }: MobileBottomNavProps) => {
             className="schedule-beta-action-card"
             onClick={() => {
               setNewMenuOpen(false);
-              navigate("/calendar/schedule-beta?mobileAction=new-event");
+              navigate("/calendar/schedule?mobileAction=new-event");
             }}
             type="button"
           >

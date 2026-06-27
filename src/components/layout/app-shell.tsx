@@ -10,6 +10,7 @@ import { getBreadcrumbs, getPageTitle } from "../../lib/route-metadata";
 import { useOverlayHistory } from "../../lib/use-overlay-history";
 import { cn } from "../../lib/utils";
 import { useIsMobile } from "../../pages/calendar-shared";
+import { AndroidBackButtonHandler } from "../common/android-back-button-handler";
 import { MobileBottomNav } from "./mobile-bottom-nav";
 import { SideMenu } from "./side-menu";
 import { Button } from "../ui/button";
@@ -85,6 +86,7 @@ export const AppShell = () => {
 
   return (
     <div className="min-h-screen bg-transparent">
+      <AndroidBackButtonHandler />
       <div className="flex min-h-screen">
         <aside
           className={cn(
@@ -126,9 +128,7 @@ export const AppShell = () => {
                   {APP_VERSION}
                 </Badge>
               </div>
-              <p className="mt-1 text-xs text-blue-100/70">
-                Coordinate tenant {user?.tenantId ?? "unassigned"} events and member visitations.  
-              </p>
+              <p className="mt-1 text-xs text-blue-100/70">Tenant: {user?.tenantId ?? "unassigned"}</p>
               <Button
                 className="mt-3 w-full justify-center border-white/15 bg-white/8 text-sidebar-foreground hover:bg-white/14 sm:hidden"
                 onClick={toggleTheme}

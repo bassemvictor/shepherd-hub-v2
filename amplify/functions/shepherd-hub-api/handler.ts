@@ -513,6 +513,7 @@ const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
 const isAdminGroup = (group: AppCognitoGroup) => group === "admin";
 const importJobChunkSize = 20;
+const importJobChunksPerRequest = 10;
 const importJobErrorLimit = 100;
 
 const defaultCalendarListRefreshThresholdMinutes = 60 * 24 * 7;
@@ -1893,6 +1894,7 @@ const processImportRow = async (
   context: RequestContext,
   row: ImportWorkbookRow,
   fileName: string,
+  existingMembersByUnityId: Map<string, MemberItem>,
   deps: HandlerDependencies,
 ): Promise<Omit<MemberImportResult, "errorCount">> => {
   const unityId = toOptionalString(row.values["Member ID"]);
@@ -1907,7 +1909,7 @@ const processImportRow = async (
   }
 
   try {
-    const existing = await getMemberByUnityId(context, unityId, deps);
+    const existing = existingMembersByUnityId.get(unityId) ?? null;
     const member = buildMemberItem(
       context,
       {
@@ -1950,6 +1952,7 @@ const processImportRow = async (
     );
     member.notes = existing?.notes;
     await putMember(context, member, deps);
+    existingMembersByUnityId.set(unityId, member);
     await logMemberActivity(
       context,
       member.memberId,
@@ -3673,8 +3676,7 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
   }
 
   const chunks = await listMemberImportChunks(context, jobId, deps);
-  const nextChunk = chunks[0];
-  if (!nextChunk) {
+  if (!chunks.length) {
     const completedAt = deps.now();
     const completedJob: MemberImportJobItem = {
       ...job,
@@ -3688,22 +3690,36 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
     return json(200, toMemberImportJob(completedJob));
   }
 
+  const existingMembersByUnityId = new Map(
+    (await listMembers(context, deps))
+      .filter((member) => member.unityId)
+      .map((member) => [member.unityId as string, member]),
+  );
+  const chunksToProcess = chunks.slice(0, importJobChunksPerRequest);
   let chunkResult = { created: 0, updated: 0, skipped: 0, errors: [] as MemberImportResult["errors"] };
-  for (const row of nextChunk.rows) {
-    const outcome = await processImportRow(context, row, job.fileName, deps);
-    chunkResult = {
-      created: chunkResult.created + outcome.created,
-      updated: chunkResult.updated + outcome.updated,
-      skipped: chunkResult.skipped + outcome.skipped,
-      errors: [...chunkResult.errors, ...outcome.errors],
-    };
+  let processedRowDelta = 0;
+  for (const chunk of chunksToProcess) {
+    processedRowDelta += chunk.rowCount;
+    for (const row of chunk.rows) {
+      const outcome = await processImportRow(context, row, job.fileName, existingMembersByUnityId, deps);
+      chunkResult = {
+        created: chunkResult.created + outcome.created,
+        updated: chunkResult.updated + outcome.updated,
+        skipped: chunkResult.skipped + outcome.skipped,
+        errors: [...chunkResult.errors, ...outcome.errors],
+      };
+    }
   }
 
-  await deleteKeysInBatches(deps.documentClient, context.tableName, [{ PK: nextChunk.PK, SK: nextChunk.SK }]);
+  await deleteKeysInBatches(
+    deps.documentClient,
+    context.tableName,
+    chunksToProcess.map((chunk) => ({ PK: chunk.PK, SK: chunk.SK })),
+  );
 
   const updatedAt = deps.now();
-  const processedRows = Math.min(job.totalRows, job.processedRows + nextChunk.rowCount);
-  const processedChunks = Math.min(job.totalChunks, job.processedChunks + 1);
+  const processedRows = Math.min(job.totalRows, job.processedRows + processedRowDelta);
+  const processedChunks = Math.min(job.totalChunks, job.processedChunks + chunksToProcess.length);
   const result: MemberImportResult = {
     created: job.result.created + chunkResult.created,
     updated: job.result.updated + chunkResult.updated,

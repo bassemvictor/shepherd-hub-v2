@@ -334,7 +334,7 @@ test("creates an async Unity import job when headers start below a title row", a
   assert.equal(commands[1]?.name, "BatchWriteCommand");
 });
 
-test("processes a member import job chunk and completes the job", async () => {
+test("processes multiple member import job chunks in one request and completes the job", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const uuids = ["member-1", "activity-1"];
@@ -356,9 +356,9 @@ test("processes a member import job chunk and completes the job", async () => {
               jobId: "import-job-1",
               fileName: "Adel.xlsx",
               status: "queued",
-              totalRows: 1,
+              totalRows: 2,
               processedRows: 0,
-              totalChunks: 1,
+              totalChunks: 2,
               processedChunks: 0,
               result: {
                 created: 0,
@@ -373,6 +373,10 @@ test("processes a member import job chunk and completes the job", async () => {
 
         if (command.constructor.name === "QueryCommand") {
           if (command.input.IndexName === "GSI2") {
+            return { Items: [] };
+          }
+
+          if (command.input.IndexName === "GSI1") {
             return { Items: [] };
           }
 
@@ -398,6 +402,30 @@ test("processes a member import job chunk and completes the job", async () => {
                       "Member Name": "Adel Abraham",
                       "Phone Number": "(613) 606-4114",
                       Email: "adel@example.com",
+                    },
+                  },
+                ],
+              },
+              {
+                PK: "TENANT#tenant-abc",
+                SK: "MEMBER_IMPORT_JOB#import-job-1#CHUNK#000001",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "MEMBER_IMPORT_CHUNK",
+                tenantId: "tenant-abc",
+                jobId: "import-job-1",
+                chunkIndex: 1,
+                rowCount: 1,
+                rows: [
+                  {
+                    rowNumber: 4,
+                    values: {
+                      "Family ID": "family-2",
+                      "Household Name": "Ibrahim Household",
+                      "Member ID": "17318",
+                      "Member Name": "Mina Ibrahim",
+                      "Phone Number": "(613) 555-1212",
+                      Email: "mina@example.com",
                     },
                   },
                 ],
@@ -448,14 +476,14 @@ test("processes a member import job chunk and completes the job", async () => {
     jobId: "import-job-1",
     fileName: "Adel.xlsx",
     status: "completed",
-    totalRows: 1,
-    processedRows: 1,
-    totalChunks: 1,
-    processedChunks: 1,
+    totalRows: 2,
+    processedRows: 2,
+    totalChunks: 2,
+    processedChunks: 2,
     startedAt: "2026-06-03T12:00:00.000Z",
     completedAt: "2026-06-03T12:00:00.000Z",
     result: {
-      created: 1,
+      created: 2,
       updated: 0,
       skipped: 0,
       errorCount: 0,

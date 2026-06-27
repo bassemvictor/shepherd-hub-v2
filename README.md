@@ -249,6 +249,32 @@ Some low-level Amplify/CDK stack and construct identifiers still use legacy name
 - `npm run test:lambda`
 - `npm run build`
 
+## Deploying Android Capacitor changes
+
+When you change the React app and want the Android app to pick it up, use this flow:
+
+1. Install dependencies if needed with `npm ci`.
+2. Build the web app with `npm run build`.
+3. Copy the built web assets into the Android project with `npx cap sync android`.
+4. Open the native Android project with `npx cap open android`.
+5. In Android Studio, run the app on a device/emulator or build a release from `Build > Generate Signed Bundle / APK`.
+
+Quick command sequence:
+
+```bash
+npm run build
+npx cap sync android
+npx cap open android
+```
+
+Notes:
+
+- `npm run build` updates the `dist/` folder that Capacitor uses.
+- `npx cap sync android` copies `dist/` into `android/app/src/main/assets/public`.
+- If you only changed web code, you usually do not need to recreate the Android project, just rebuild and sync.
+- If you changed Capacitor config or added a native plugin, always run `npx cap sync android` again before opening or building in Android Studio.
+- For Play Store delivery, generate a signed `.aab` from Android Studio rather than using a debug APK.
+
 ### DynamoDB shape
 
 The app uses a tenant-aware single-table layout:

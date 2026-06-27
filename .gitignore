@@ -1,7 +1,7 @@
 node_modules
 .amplify
 .test-dist
-amplify_outputs.json
+amplify_outputs*
 npm-debug.log*
 .DS_Store
 .npm
