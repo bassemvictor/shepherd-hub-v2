@@ -158,6 +158,9 @@ type EventItem = BaseItem & {
   status: string;
   source: SyncSource;
   htmlLink?: string;
+  autoLinkedMemberIds?: string[];
+  autoLinkedMemberNames?: string[];
+  autoLinkedVisitationType?: VisitationType;
   memberIds?: string[];
   memberNames?: string[];
   visitationType?: VisitationType;
@@ -298,6 +301,11 @@ type HandlerDependencies = {
   uuid: () => string;
   randomState: () => string;
   fetchImpl: typeof fetch;
+};
+
+type AutoLinkedInteractionResult = {
+  interactionType?: VisitationType;
+  matchedMembers: MemberItem[];
 };
 
 type SyncResult = {
@@ -607,12 +615,37 @@ const normalizeName = (value: unknown) =>
     .replace(/[^a-z0-9 ]+/g, "")
     .trim();
 
+const normalizeEmail = (value: unknown) => normalizeWhitespace(value).toLowerCase();
+
+const extractEmails = (...values: Array<unknown>) => {
+  const found = new Set<string>();
+
+  for (const value of values) {
+    const matches = String(value ?? "").match(emailPattern) ?? [];
+    for (const match of matches) {
+      const normalized = normalizeEmail(match);
+      if (normalized) {
+        found.add(normalized);
+      }
+    }
+  }
+
+  return [...found];
+};
+
 const toOptionalString = (value: unknown) => {
   const normalized = normalizeWhitespace(value);
   return normalized || undefined;
 };
 
 const defaultVisitationType: VisitationType = "Visitation";
+const autoLinkInteractionPrefixes: Array<{ prefix: string; type: VisitationType }> = [
+  { prefix: "visitation:", type: "Visitation" },
+  { prefix: "phone call:", type: "Phone Call" },
+  { prefix: "confession:", type: "Confession" },
+  { prefix: "meeting:", type: "Meeting" },
+];
+const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 
 const normalizeVisitationType = (value: unknown): VisitationType => {
   const normalized = toOptionalString(value);
@@ -742,6 +775,9 @@ const toScheduleEvent = (item: EventItem): ScheduleEvent => ({
   ownerUserId: item.userId,
   allDay: item.allDay,
   attendees: item.attendees,
+  autoLinkedMemberIds: item.autoLinkedMemberIds,
+  autoLinkedMemberNames: item.autoLinkedMemberNames,
+  autoLinkedVisitationType: item.autoLinkedVisitationType,
   calendarColor: item.calendarColor,
   calendarId: item.calendarId,
   calendarName: item.calendarName,
@@ -1774,12 +1810,19 @@ const persistEventWithMemberAssignments = async (
   context: RequestContext,
   event: EventItem,
   deps: HandlerDependencies,
+  options: {
+    autoLinkedMembers?: MemberItem[];
+    visitationTypeOverride?: VisitationType;
+  } = {},
 ) => {
   const normalizedEvent: EventItem = {
     ...event,
     updatedAt: deps.now(),
   };
   const assignedMembers = await syncEventMembers(context, normalizedEvent, normalizedEvent.memberIds ?? [], deps);
+  const visitationMembers = [...new Map(
+    [...assignedMembers, ...(options.autoLinkedMembers ?? [])].map((member) => [member.memberId, member]),
+  ).values()];
   const persistedEvent: EventItem = {
     ...normalizedEvent,
     memberIds: assignedMembers.map((member) => member.memberId),
@@ -1787,7 +1830,13 @@ const persistEventWithMemberAssignments = async (
     visitationType: assignedMembers.length ? normalizeVisitationType(normalizedEvent.visitationType) : undefined,
   };
   await putEvent(context, persistedEvent, deps);
-  await syncVisitationRecords(context, persistedEvent, assignedMembers, deps);
+  await syncVisitationRecords(
+    context,
+    persistedEvent,
+    visitationMembers,
+    options.visitationTypeOverride,
+    deps,
+  );
   return persistedEvent;
 };
 
@@ -1999,6 +2048,40 @@ const listMembers = async (context: RequestContext, deps: HandlerDependencies) =
   });
 
   return items as MemberItem[];
+};
+
+const resolveAutoLinkedInteractionMembers = async (
+  context: RequestContext,
+  event: Pick<EventItem, "calendarId" | "eventId" | "googleEventId" | "summary" | "attendees">,
+  deps: HandlerDependencies,
+): Promise<AutoLinkedInteractionResult> => {
+  const normalizedTitle = normalizeWhitespace(event.summary).toLowerCase();
+  const matchedPrefix = autoLinkInteractionPrefixes.find(({ prefix }) => normalizedTitle.startsWith(prefix));
+  if (!matchedPrefix) {
+    return { matchedMembers: [] };
+  }
+
+  const extractedEmails = extractEmails(event.summary, ...(event.attendees ?? []));
+  const extractedEmailSet = new Set(extractedEmails);
+  const matchedMembers = (await listMembers(context, deps)).filter((member) => {
+    const email = normalizeEmail(member.email);
+    return email ? extractedEmailSet.has(email) : false;
+  });
+
+  if (!matchedMembers.length) {
+    await logAuditEvent(context, "AUTO_LINK_FAILED", "failed", deps, {
+      metadata: {
+        calendarId: event.calendarId,
+        extractedEmails,
+        googleEventId: event.googleEventId ?? event.eventId,
+      },
+    });
+  }
+
+  return {
+    interactionType: matchedPrefix.type,
+    matchedMembers,
+  };
 };
 
 const listMemberActivities = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
@@ -2410,6 +2493,7 @@ const syncVisitationRecords = async (
   context: RequestContext,
   event: EventItem,
   members: MemberItem[],
+  visitationTypeOverride: VisitationType | undefined,
   deps: HandlerDependencies,
 ) => {
   const existingRecords = await listVisitationsForEvent(context, event.calendarId, event.eventId, deps);
@@ -2419,7 +2503,7 @@ const syncVisitationRecords = async (
   const visitationId = eventVisitationId(event.calendarId, event.eventId);
   const memberIds = nextMembers.map((item) => item.memberId);
   const memberNames = nextMembers.map((item) => item.fullName);
-  const visitationType = normalizeVisitationType(event.visitationType);
+  const visitationType = normalizeVisitationType(visitationTypeOverride ?? event.visitationType);
 
   for (const record of existingRecords) {
     if (nextMemberIds.has(record.memberId)) {
@@ -3119,6 +3203,17 @@ const upsertGoogleEventIntoCache = async (
   const existingItem = existingOverride ?? (existing.Item as EventItem | undefined);
   const metadataMemberIds = parseGoogleMemberIds(googleEvent.extendedProperties?.private?.memberIds);
   const memberIds = metadataMemberIds.length ? metadataMemberIds : normalizeMemberIds(existingItem?.memberIds);
+  const autoLinkedInteraction = await resolveAutoLinkedInteractionMembers(
+    context,
+    {
+      calendarId: calendar.calendarId,
+      eventId: googleEvent.id,
+      googleEventId: googleEvent.id,
+      summary: googleEvent.summary ?? "(Untitled event)",
+      attendees: normalizeAttendees((googleEvent.attendees ?? []).map((entry) => entry.email ?? "")),
+    },
+    deps,
+  );
   const item: EventItem = {
     PK: userPk(context.actorSub),
     SK: eventSk(calendar.calendarId, googleEvent.id),
@@ -3144,6 +3239,9 @@ const upsertGoogleEventIntoCache = async (
     status: googleEvent.status ?? "confirmed",
     source,
     htmlLink: googleEvent.htmlLink,
+    autoLinkedMemberIds: autoLinkedInteraction.matchedMembers.map((member) => member.memberId),
+    autoLinkedMemberNames: autoLinkedInteraction.matchedMembers.map((member) => member.fullName),
+    autoLinkedVisitationType: autoLinkedInteraction.interactionType,
     memberIds,
     visitationType: memberIds.length ? normalizeVisitationType(existingItem?.visitationType) : undefined,
   };
@@ -3154,6 +3252,10 @@ const upsertGoogleEventIntoCache = async (
       createdAt: existingItem?.createdAt ?? item.createdAt,
     },
     deps,
+    {
+      autoLinkedMembers: autoLinkedInteraction.matchedMembers,
+      visitationTypeOverride: autoLinkedInteraction.interactionType,
+    },
   );
 };
 

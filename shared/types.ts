@@ -87,6 +87,9 @@ export type ScheduleEvent = EntityEnvelope & {
   htmlLink?: string;
   assignedMemberIds?: string[];
   assignedMemberNames?: string[];
+  autoLinkedMemberIds?: string[];
+  autoLinkedMemberNames?: string[];
+  autoLinkedVisitationType?: VisitationType;
   memberIds?: string[];
   memberNames?: string[];
   visitationType?: VisitationType;

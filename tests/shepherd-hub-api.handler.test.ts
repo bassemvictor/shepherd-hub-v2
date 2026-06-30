@@ -1705,6 +1705,364 @@ test("full sync restores member links from Google event private metadata", async
   assert.match(JSON.stringify(memberLinkWrite?.input), /"GSI3PK":"TENANT#tenant-abc#EVENT_ASSIGNMENTS"/);
 });
 
+test("full Google sync auto-links meeting-prefixed events to matching members by email", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "GOOGLE_CONNECTION",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account-1",
+                email: "owner@example.com",
+                accessToken: "access-token",
+                refreshToken: "refresh-token",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-03T12:00:00.000Z",
+                lastConnectedAt: "2026-06-03T12:00:00.000Z",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":calendarPrefix"] === "CALENDAR#") {
+            return {
+              Items: [
+                {
+                  PK: "USER#user-123",
+                  SK: "CALENDAR#calendar-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "schedule_calendar",
+                  userId: "user-123",
+                  tenantId: "tenant-abc",
+                  calendarId: "calendar-1",
+                  summary: "Main Calendar",
+                  primary: true,
+                  enabled: true,
+                  selected: true,
+                  backgroundColor: "#2563eb",
+                  sync: {
+                    syncMode: "ALWAYS_GOOGLE",
+                    refreshIntervalMinutes: 15,
+                    initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                    lastSyncStatus: "idle",
+                    requiresFullSync: true,
+                  },
+                },
+              ],
+            };
+          }
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":eventPrefix"] === "EVENT#calendar-1#") {
+            return { Items: [] };
+          }
+
+          if (command.input.IndexName === "GSI1" && values?.[":gsiPk"] === "TENANT#tenant-abc#MEMBERS") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#mary mina#MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  fullName: "Mary Mina",
+                  initials: "MM",
+                  email: "mary@example.com",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "mary mina mary@example.com",
+                },
+              ],
+            };
+          }
+
+          if (values?.[":pk"] === "TENANT#tenant-abc#EVENT#event-1") {
+            return { Items: [] };
+          }
+
+          if (values?.[":pk"] === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1") {
+            return { Items: [] };
+          }
+
+          if (command.input.IndexName === "GSI1") {
+            return { Items: [] };
+          }
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () =>
+      ({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              id: "event-1",
+              summary: "  Meeting: Reach Mary at MARY@example.com  ",
+              attendees: [
+                { email: "mary@example.com" },
+                { email: "MARY@example.com" },
+              ],
+              start: { dateTime: "2026-06-04T15:00:00.000Z" },
+              end: { dateTime: "2026-06-04T16:00:00.000Z" },
+            },
+          ],
+          nextSyncToken: "sync-token-1",
+        }),
+      }) as Response,
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+      queryStringParameters: {
+        forceSync: "true",
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const visitationPut = commands.find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string; memberId?: string } | undefined)?.entityType === "VISITATION" &&
+      (command.input.Item as { memberId?: string } | undefined)?.memberId === "member-1",
+  );
+  assert.ok(visitationPut);
+  assert.equal((visitationPut?.input.Item as { type?: string }).type, "Meeting");
+  assert.equal((visitationPut?.input.Item as { eventId?: string }).eventId, "event-1");
+  assert.equal((visitationPut?.input.Item as { calendarEventId?: string }).calendarEventId, "event-1");
+  const eventPut = commands.find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string } | undefined)?.entityType === "schedule_event",
+  );
+  assert.deepEqual((eventPut?.input.Item as { autoLinkedMemberIds?: string[] }).autoLinkedMemberIds, ["member-1"]);
+  assert.equal((eventPut?.input.Item as { autoLinkedVisitationType?: string }).autoLinkedVisitationType, "Meeting");
+  assert.deepEqual((eventPut?.input.Item as { memberIds?: string[] }).memberIds, []);
+  assert.equal(commands.some((command) => command.name === "TransactWriteCommand"), false);
+});
+
+test("incremental Google sync logs AUTO_LINK_FAILED when a prefixed interaction event has no matching member", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-07T12:00:00.000Z",
+                updatedAt: "2026-06-07T12:00:00.000Z",
+                entityType: "GOOGLE_CONNECTION",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account-1",
+                email: "owner@example.com",
+                accessToken: "access-token",
+                refreshToken: "refresh-token",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-07T12:00:00.000Z",
+                lastConnectedAt: "2026-06-07T12:00:00.000Z",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":calendarPrefix"] === "CALENDAR#") {
+            return {
+              Items: [
+                {
+                  PK: "USER#user-123",
+                  SK: "CALENDAR#calendar-1",
+                  createdAt: "2026-06-07T12:00:00.000Z",
+                  updatedAt: "2026-06-07T12:00:00.000Z",
+                  entityType: "schedule_calendar",
+                  userId: "user-123",
+                  tenantId: "tenant-abc",
+                  calendarId: "calendar-1",
+                  summary: "Main Calendar",
+                  primary: true,
+                  enabled: true,
+                  selected: true,
+                  backgroundColor: "#2563eb",
+                  sync: {
+                    syncMode: "ALWAYS_GOOGLE",
+                    refreshIntervalMinutes: 15,
+                    initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                    lastSyncedAt: "2026-06-06T10:00:00.000Z",
+                    lastSyncStatus: "success",
+                    requiresFullSync: false,
+                    syncToken: "sync-token-0",
+                  },
+                },
+              ],
+            };
+          }
+
+          if (command.input.IndexName === "GSI1" && values?.[":gsiPk"] === "TENANT#tenant-abc#MEMBERS") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-2",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#other member#MEMBER#member-2",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-2",
+                  fullName: "Other Member",
+                  initials: "OM",
+                  email: "other@example.com",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "other member other@example.com",
+                },
+              ],
+            };
+          }
+
+          if (values?.[":pk"] === "TENANT#tenant-abc#EVENT#event-2") {
+            return { Items: [] };
+          }
+
+          if (values?.[":pk"] === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-2") {
+            return { Items: [] };
+          }
+
+          if (command.input.IndexName === "GSI1") {
+            return { Items: [] };
+          }
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () =>
+      ({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              id: "event-2",
+              summary: " Confession: Follow up with MISSING@example.com ",
+              attendees: [{ email: "missing@example.com" }],
+              start: { dateTime: "2026-06-07T15:00:00.000Z" },
+              end: { dateTime: "2026-06-07T16:00:00.000Z" },
+            },
+          ],
+          nextSyncToken: "sync-token-1",
+        }),
+      }) as Response,
+    now: () => "2026-06-07T12:00:00.000Z",
+    uuid: () => "audit-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const auditPut = commands.find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string; actionType?: string } | undefined)?.entityType === "AUDIT_LOG" &&
+      (command.input.Item as { actionType?: string } | undefined)?.actionType === "AUTO_LINK_FAILED",
+  );
+  assert.ok(auditPut);
+  assert.deepEqual((auditPut?.input.Item as { metadata?: { extractedEmails?: string[] } }).metadata?.extractedEmails, [
+    "missing@example.com",
+  ]);
+  assert.equal((auditPut?.input.Item as { metadata?: { googleEventId?: string } }).metadata?.googleEventId, "event-2");
+  assert.equal(
+    commands.some(
+      (command) =>
+        command.name === "PutCommand" &&
+        (command.input.Item as { entityType?: string } | undefined)?.entityType === "VISITATION",
+    ),
+    false,
+  );
+});
+
 test("refreshed calendars return events only for the requested schedule range", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
 

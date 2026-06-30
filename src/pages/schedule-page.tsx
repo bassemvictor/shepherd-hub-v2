@@ -93,6 +93,8 @@ type EventFormState = {
   start: string;
   end: string;
   allDay: boolean;
+  autoLinkedMemberIds: string[];
+  autoLinkedVisitationType?: VisitationType;
   memberIds: string[];
   memberQuery: string;
   visitationType: VisitationType;
@@ -271,7 +273,13 @@ const formatEventTimeRange = (event: ScheduleEvent) => {
   return `${formatter.format(new Date(event.start))} - ${formatter.format(new Date(event.end))}`;
 };
 
-const getMemberAttachmentCount = (event: ScheduleEvent) => event.memberIds?.length ?? 0;
+const getEventLinkedMemberIds = (event: Pick<ScheduleEvent, "memberIds" | "autoLinkedMemberIds">) =>
+  [...new Set([...(event.memberIds ?? []), ...(event.autoLinkedMemberIds ?? [])])];
+
+const getEventLinkedMemberNames = (event: Pick<ScheduleEvent, "memberNames" | "autoLinkedMemberNames">) =>
+  [...new Set([...(event.memberNames ?? []), ...(event.autoLinkedMemberNames ?? [])])];
+
+const getMemberAttachmentCount = (event: ScheduleEvent) => getEventLinkedMemberIds(event).length;
 
 const getMemberAttachmentIcon = (event: ScheduleEvent) => {
   const memberCount = getMemberAttachmentCount(event);
@@ -571,6 +579,7 @@ const applyMemberSelectionToForm = (
         : currentForm.description,
     location: currentForm.location,
     attendeesText,
+    autoLinkedMemberIds: currentForm.autoLinkedMemberIds,
     memberIds: nextMemberIds,
     memberQuery: "",
     visitationType: nextVisitationType,
@@ -604,6 +613,8 @@ const emptyEventForm = (calendarId = ""): EventFormState => {
     start: toLocalDateTimeInputFromDate(start),
     end: toLocalDateTimeInputFromDate(end),
     allDay: false,
+    autoLinkedMemberIds: [],
+    autoLinkedVisitationType: undefined,
     memberIds: [],
     memberQuery: "",
     visitationType: DEFAULT_VISITATION_TYPE,
@@ -619,9 +630,14 @@ const eventToFormState = (event: ScheduleEvent): EventFormState => ({
   start: event.allDay ? normalizeAllDayStartValue(event.start) : toLocalDateTimeInput(event.start),
   end: event.allDay ? shiftDateOnlyValue(normalizeAllDayEndValue(event.end), -1) : toLocalDateTimeInput(event.end),
   allDay: event.allDay,
+  autoLinkedMemberIds: event.autoLinkedMemberIds ?? [],
+  autoLinkedVisitationType: event.autoLinkedVisitationType,
   memberIds: event.memberIds ?? [],
   memberQuery: "",
-  visitationType: event.memberIds?.length ? normalizeVisitationType(event.visitationType) : DEFAULT_VISITATION_TYPE,
+  visitationType:
+    event.memberIds?.length
+      ? normalizeVisitationType(event.visitationType)
+      : normalizeVisitationType(event.autoLinkedVisitationType),
 });
 
 const createFormFromSelection = (
@@ -638,6 +654,8 @@ const createFormFromSelection = (
   start: allDay ? toDateOnlyValue(startValue) : toLocalDateTimeInputFromDate(snapDateToQuarterHour(startValue)),
   end: allDay ? shiftDateOnlyValue(toDateOnlyValue(endValue), -1) : toLocalDateTimeInputFromDate(snapDateToQuarterHour(endValue)),
   allDay,
+  autoLinkedMemberIds: [],
+  autoLinkedVisitationType: undefined,
   memberIds: [],
   memberQuery: "",
   visitationType: DEFAULT_VISITATION_TYPE,
@@ -662,6 +680,8 @@ const createIntentFormFromSearchParams = (
     description: memberName ? `Members: ${memberName}` : "",
     location: memberAddress,
     attendeesText: memberEmail,
+    autoLinkedMemberIds: [],
+    autoLinkedVisitationType: undefined,
     memberIds: [memberId],
     visitationType: DEFAULT_VISITATION_TYPE,
   };
@@ -719,6 +739,11 @@ const EventEditor = ({
   }
 
   const selectedMembers = emptyMemberSelection(memberIndex, form.memberIds);
+  const autoLinkedMembers = emptyMemberSelection(
+    memberIndex,
+    form.autoLinkedMemberIds.filter((memberId) => !form.memberIds.includes(memberId)),
+  );
+  const totalLinkedMembers = selectedMembers.length + autoLinkedMembers.length;
   const editorTitle = mode === "create" ? "New Event" : "Edit Event";
   const editorDescription = mode === "create" ? "Create a new calendar event." : "Update the calendar event details.";
   const primaryActionLabel = mode === "create" ? "Create Event" : "Save Changes";
@@ -779,8 +804,8 @@ const EventEditor = ({
           selectedIds={form.memberIds}
         />
         <div className="space-y-1.5">
-          <div className="text-sm font-semibold text-muted-foreground">Selected ({selectedMembers.length})</div>
-          {selectedMembers.length ? (
+          <div className="text-sm font-semibold text-muted-foreground">Selected ({totalLinkedMembers})</div>
+          {totalLinkedMembers ? (
             <div className="flex flex-wrap gap-1.5">
               {selectedMembers.map((member) => (
                 <MemberChip
@@ -797,6 +822,15 @@ const EventEditor = ({
                     )
                   }
                 />
+              ))}
+              {autoLinkedMembers.map((member) => (
+                <div key={member.memberId} className="space-y-1">
+                  <MemberChip
+                    member={member}
+                    onClick={(memberId) => navigate(`/members/${memberId}`)}
+                  />
+                  <div className="px-1 text-[11px] text-muted-foreground">Auto-linked from the event title or attendees.</div>
+                </div>
               ))}
             </div>
           ) : (
@@ -819,6 +853,13 @@ const EventEditor = ({
                 </option>
               ))}
             </Select>
+          </label>
+        ) : autoLinkedMembers.length && form.autoLinkedVisitationType ? (
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium text-foreground">Activity Type</span>
+            <div className="rounded-xl border border-border bg-muted/35 px-3 py-2.5 text-sm text-foreground">
+              {normalizeVisitationType(form.autoLinkedVisitationType)}
+            </div>
           </label>
         ) : null}
       </section>
@@ -1863,7 +1904,7 @@ const ScheduleExperiencePage = () => {
     const filteredEvents = !query
       ? rawEvents
       : rawEvents.filter((event) =>
-          [event.summary, event.location, event.description, event.calendarName, ...(event.memberNames ?? [])]
+          [event.summary, event.location, event.description, event.calendarName, ...getEventLinkedMemberNames(event)]
             .filter(Boolean)
             .some((value) => value?.toLowerCase().includes(query)),
         );
@@ -1972,9 +2013,9 @@ const ScheduleExperiencePage = () => {
           <span className="fc-card-event-title">{info.event.title}</span>
           {!scheduleEvent.allDay ? <span className="fc-card-event-time">{info.timeText}</span> : null}
         </div>
-        {scheduleEvent.location || scheduleEvent.memberNames?.length ? (
+        {scheduleEvent.location || getEventLinkedMemberNames(scheduleEvent).length ? (
           <div className="fc-card-event-meta">
-            <span>{scheduleEvent.location ?? scheduleEvent.memberNames?.join(", ")}</span>
+            <span>{scheduleEvent.location ?? getEventLinkedMemberNames(scheduleEvent).join(", ")}</span>
           </div>
         ) : null}
       </div>
