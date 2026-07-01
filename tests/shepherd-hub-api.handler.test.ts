@@ -2615,6 +2615,29 @@ test("visitation reports default to all visitors and support only-my-visits filt
                 ownerUserId: "user-456",
                 status: "confirmed",
               },
+              {
+                PK: "TENANT#tenant-abc#CALENDAR#calendar-3#EVENT#event-3",
+                SK: "VISIT#member-1",
+                GSI1PK: "TENANT#tenant-abc",
+                GSI1SK: "VISIT#2026-06-06T15:00:00.000Z#VISITOR#user-456#MEMBER#member-1#VISITATION#calendar-3:event-3:member-1",
+                GSI2PK: "TENANT#tenant-abc#MEMBER#member-1",
+                GSI2SK: "VISIT#2026-06-06T15:00:00.000Z#VISITATION#calendar-3:event-3:member-1",
+                createdAt: "2026-06-06T15:00:00.000Z",
+                updatedAt: "2026-06-06T16:00:00.000Z",
+                entityType: "VISITATION",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-3",
+                visitationId: "calendar-3:event-3:member-1",
+                memberId: "member-1",
+                memberNameSnapshot: "Adel Abraham",
+                memberSourceSnapshot: "UNITY",
+                visitorUserId: "user-456",
+                visitorDisplayName: "Visitor B",
+                visitDate: "2026-06-06T15:00:00.000Z",
+                sourceEventId: "event-3",
+                ownerUserId: "user-456",
+                status: "confirmed",
+              },
             ],
           };
         }
@@ -2659,6 +2682,7 @@ test("visitation reports default to all visitors and support only-my-visits filt
     { visitorUserId: "user-123", visitorDisplayName: "Viewer A" },
     { visitorUserId: "user-456", visitorDisplayName: "Visitor B" },
   ]);
+  assert.deepEqual(allBody.rows.find((row) => row.memberId === "member-1")?.caregiverNames, ["Viewer A", "Visitor B"]);
 
   const myResponse = await handler(
     createEvent({
@@ -2688,6 +2712,7 @@ test("visitation reports default to all visitors and support only-my-visits filt
   const myBody = JSON.parse(String(myResponse.body)) as VisitationReportResponse;
   assert.equal(myBody.rows.length, 2);
   assert.equal(myBody.rows.find((row) => row.memberId === "member-1")?.visitCountInRange, 1);
+  assert.deepEqual(myBody.rows.find((row) => row.memberId === "member-1")?.caregiverNames, ["Viewer A"]);
   assert.equal(myBody.rows.find((row) => row.memberId === "member-2")?.visitCountInRange, 0);
 
   const visitedResponse = await handler(
@@ -2721,7 +2746,7 @@ test("visitation reports default to all visitors and support only-my-visits filt
   assert.equal(visitedResponse.statusCode, 200);
   const visitedBody = JSON.parse(String(visitedResponse.body)) as VisitationReportResponse;
   assert.equal(visitedBody.rows.length, 2);
-  assert.equal(visitedBody.rows.find((row) => row.memberId === "member-1")?.visitCountInRange, 1);
+  assert.equal(visitedBody.rows.find((row) => row.memberId === "member-1")?.visitCountInRange, 2);
   assert.equal(visitedBody.rows.find((row) => row.memberId === "member-2")?.visitCountInRange, 1);
 });
 

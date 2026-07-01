@@ -4120,6 +4120,7 @@ const getVisitationReport = async (
       totalLifetimeVisits: 0,
       lastVisitDate: undefined,
       lastVisitedBy: undefined,
+      caregiverNames: [],
       lastVisitType: undefined,
     };
     current.totalLifetimeVisits += 1;
@@ -4127,6 +4128,9 @@ const getVisitationReport = async (
       current.lastVisitDate = visitation.visitDate;
       current.lastVisitedBy = visitation.visitorDisplayName;
       current.lastVisitType = normalizeVisitationType(visitation.type);
+    }
+    if (!current.caregiverNames.includes(visitation.visitorDisplayName)) {
+      current.caregiverNames.push(visitation.visitorDisplayName);
     }
     target.set(visitation.memberId, current);
   };
@@ -4238,6 +4242,9 @@ const getVisitationReport = async (
     return "visited";
   };
 
+  const sortCaregiverNames = (caregiverNames?: string[]) =>
+    [...(caregiverNames ?? [])].sort((left, right) => left.localeCompare(right));
+
   const allRows: VisitationOverviewRow[] = [];
   for (const member of filteredMembers) {
     const everyoneLifetime = everyoneLifetimeByMemberId.get(member.memberId);
@@ -4264,6 +4271,7 @@ const getVisitationReport = async (
       sectorOrGroup: member.groups?.join(", "),
       lastVisitDate: filteredLifetime?.lastVisitDate,
       lastVisitedBy: filteredLifetime?.lastVisitedBy,
+      caregiverNames: sortCaregiverNames(filteredLifetime?.caregiverNames),
       lastVisitType: filteredLifetime?.lastVisitType,
       visitCountInRange: matchingCount,
       totalLifetimeVisits: filteredLifetime?.totalLifetimeVisits ?? 0,
@@ -4276,6 +4284,7 @@ const getVisitationReport = async (
           totalLifetimeVisits: everyoneLifetime?.totalLifetimeVisits ?? 0,
           lastVisitDate: everyoneLifetime?.lastVisitDate,
           lastVisitedBy: everyoneLifetime?.lastVisitedBy,
+          caregiverNames: sortCaregiverNames(everyoneLifetime?.caregiverNames),
           lastVisitType: everyoneLifetime?.lastVisitType,
         },
         me: {
@@ -4283,6 +4292,7 @@ const getVisitationReport = async (
           totalLifetimeVisits: currentUserLifetime?.totalLifetimeVisits ?? 0,
           lastVisitDate: currentUserLifetime?.lastVisitDate,
           lastVisitedBy: currentUserLifetime?.lastVisitedBy,
+          caregiverNames: sortCaregiverNames(currentUserLifetime?.caregiverNames),
           lastVisitType: currentUserLifetime?.lastVisitType,
         },
       },

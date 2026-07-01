@@ -127,7 +127,11 @@ export const getRelevantVisits = (
     totalLifetimeVisits: member.totalLifetimeVisits,
     lastVisitDate: member.lastVisitDate,
     lastVisitedBy: member.lastVisitedBy,
+    caregiverNames: member.caregiverNames,
   });
+
+export const formatCaregiverNames = (metrics: VisitationScopeMetrics, fallback: string) =>
+  metrics.caregiverNames.length ? metrics.caregiverNames.join(", ") : fallback;
 
 export const getVisitCountForPeriod = (
   member: VisitationOverviewRow,

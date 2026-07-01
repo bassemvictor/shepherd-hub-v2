@@ -19,6 +19,7 @@ import { Select } from "../components/ui/select";
 import {
   getActivityCopy,
   buildReportFilters,
+  formatCaregiverNames,
   formatReportDate,
   getFilterSummary,
   getLastVisit,
@@ -93,7 +94,18 @@ const toCsv = (
   currentUserName?: string,
 ) => {
   const activityCopy = getActivityCopy(activityTypeLabel === "All" ? "all" : activityTypeLabel as ReportsVisitationTypeFilter);
-  const headers = ["Member", "Phone", "Group", activityTypeLabel === "All" ? "Care" : "Activity Type", activityCopy.lastLabel, activityCopy.countLabel, "Caregiver", "Status", "Scope"];
+  const headers = [
+    "Member",
+    "Phone",
+    "Group",
+    activityTypeLabel === "All" ? "Care" : "Activity Type",
+    "Date of Last Care",
+    activityCopy.countLabel,
+    "All Caregivers",
+    "Last Caregiver",
+    "Status",
+    "Scope",
+  ];
   const lines = rows.map((row) => {
     const metrics = getRelevantVisits(row, scope);
     return [
@@ -103,6 +115,7 @@ const toCsv = (
       activityTypeLabel,
       formatReportDate(getLastVisit(row, scope)),
       getVisitCountForPeriod(row, period, scope),
+      formatCaregiverNames(metrics, ""),
       metrics.lastVisitedBy ?? "",
       getVisitStatus(row, period, scope, activityTypeLabel === "All" ? "all" : activityTypeLabel as ReportsVisitationTypeFilter),
       scope === "me" ? `Me${currentUserName ? ` (${currentUserName})` : ""}` : "Everyone",

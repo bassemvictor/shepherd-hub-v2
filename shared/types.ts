@@ -332,6 +332,7 @@ export type VisitationOverviewRow = {
   sectorOrGroup?: string;
   lastVisitDate?: string;
   lastVisitedBy?: string;
+  caregiverNames: string[];
   lastVisitType?: VisitationType;
   visitCountInRange: number;
   totalLifetimeVisits: number;
@@ -349,6 +350,7 @@ export type VisitationScopeMetrics = {
   totalLifetimeVisits: number;
   lastVisitDate?: string;
   lastVisitedBy?: string;
+  caregiverNames: string[];
   lastVisitType?: VisitationType;
 };
 
