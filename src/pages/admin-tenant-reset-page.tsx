@@ -160,7 +160,7 @@ export const AdminTenantResetPage = () => {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-400/35 dark:bg-amber-500/12 dark:text-amber-200">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>{item.warning}</span>
@@ -171,7 +171,7 @@ export const AdminTenantResetPage = () => {
                   Tenant scope: {user?.tenantId ?? "Unassigned"}
                 </div>
                 <Button
-                  className="w-full bg-rose-600 hover:bg-rose-700"
+                  className="w-full bg-rose-600 text-white hover:bg-rose-700"
                   disabled={runningAction !== null}
                   onClick={() => {
                     setActiveAction(item.action);
@@ -201,7 +201,7 @@ export const AdminTenantResetPage = () => {
         title={selectedAction?.title ?? "Tenant Reset"}
       >
         <div className="space-y-4">
-          <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">
+          <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900 dark:border-rose-400/35 dark:bg-rose-500/12 dark:text-rose-100">
             {selectedAction?.warning}
           </div>
           <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
@@ -231,7 +231,7 @@ export const AdminTenantResetPage = () => {
               Cancel
             </Button>
             <Button
-              className="bg-rose-600 hover:bg-rose-700"
+              className="bg-rose-600 text-white hover:bg-rose-700"
               disabled={confirmation !== confirmationText || runningAction !== null}
               onClick={() => void runReset()}
               type="button"

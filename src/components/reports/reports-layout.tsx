@@ -15,7 +15,7 @@ export const ReportsLayout = ({
 }) => (
   <div className="space-y-3">
     <PageHeader
-      className="overflow-hidden rounded-lg border border-border bg-white p-3"
+      className="overflow-hidden rounded-lg border border-border bg-card p-3"
       description={subtitle}
       title={title}
     >
