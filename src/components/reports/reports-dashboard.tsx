@@ -236,10 +236,10 @@ export const ReportsDashboard = ({
               <div className="text-sm text-muted-foreground">Total activity by type.</div>
             </div>
           </CardHeader>
-          <CardContent className="grid flex-1 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_190px] lg:items-center">
+          <CardContent className="grid flex-1 justify-items-center gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_190px] lg:items-center lg:justify-items-stretch">
             {activityMix.length ? (
               <>
-                <MeasuredChartFrame aspect={1} className="relative h-72 w-full min-w-0" minHeight={288}>
+                <MeasuredChartFrame aspect={1} className="relative h-72 w-full max-w-[20rem] min-w-0 lg:max-w-none" minHeight={288}>
                   {({ width, height }) => (
                     <>
                       <PieChart height={height} width={width}>
@@ -267,7 +267,7 @@ export const ReportsDashboard = ({
                     </>
                   )}
                 </MeasuredChartFrame>
-                <div className="space-y-2">
+                <div className="w-full max-w-sm space-y-2 lg:max-w-none">
                   {activityMix.map((bucket) => (
                     <div className="rounded-lg border border-border/80 px-3 py-2.5" key={bucket.key}>
                       <div className="flex items-center justify-between gap-3">
