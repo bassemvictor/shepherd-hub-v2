@@ -1627,6 +1627,7 @@ const ScheduleExperiencePage = () => {
   const [monthPickerReturnTab, setMonthPickerReturnTab] = useState<MobileBetaTab>("list");
   const [newEventDialogOpen, setNewEventDialogOpen] = useState(false);
   const [availableTimesDialogOpen, setAvailableTimesDialogOpen] = useState(false);
+  const deferredEditorOpenRef = useRef<number | null>(null);
   const [mobileBetaTab, setMobileBetaTab] = useState<MobileBetaTab>(() => {
     if (typeof window === "undefined") {
       return "list";
@@ -1674,6 +1675,12 @@ const ScheduleExperiencePage = () => {
   useEffect(() => () => {
     clearSyncProgressTimer();
   }, [clearSyncProgressTimer]);
+
+  useEffect(() => () => {
+    if (deferredEditorOpenRef.current !== null) {
+      window.clearTimeout(deferredEditorOpenRef.current);
+    }
+  }, []);
 
   const pushToast = useCallback((tone: ToastItem["tone"], message: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1922,15 +1929,35 @@ const ScheduleExperiencePage = () => {
   }, [rawEvents, searchQuery]);
 
   const openCreateEditor = useCallback((nextForm?: EventFormState) => {
+    if (deferredEditorOpenRef.current !== null) {
+      window.clearTimeout(deferredEditorOpenRef.current);
+      deferredEditorOpenRef.current = null;
+    }
+
     setEditorMode("create");
     setEditingEvent(null);
     setForm(nextForm ?? emptyEventForm(defaultCalendarId));
+    const closingNestedDialog = newEventDialogOpen || availableTimesDialogOpen;
     setNewEventDialogOpen(false);
     setAvailableTimesDialogOpen(false);
+
+    if (closingNestedDialog) {
+      deferredEditorOpenRef.current = window.setTimeout(() => {
+        setEditorOpen(true);
+        deferredEditorOpenRef.current = null;
+      }, 0);
+      return;
+    }
+
     setEditorOpen(true);
-  }, [defaultCalendarId]);
+  }, [availableTimesDialogOpen, defaultCalendarId, newEventDialogOpen]);
 
   const openEditEditor = useCallback((event: ScheduleEvent) => {
+    if (deferredEditorOpenRef.current !== null) {
+      window.clearTimeout(deferredEditorOpenRef.current);
+      deferredEditorOpenRef.current = null;
+    }
+
     setEditorMode("edit");
     setEditingEvent(event);
     setForm(eventToFormState(event));

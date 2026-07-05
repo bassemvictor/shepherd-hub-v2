@@ -231,7 +231,7 @@ export const AppShell = () => {
                 </form>
                 <Button
                   aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-                  className="hidden sm:flex"
+                  className="flex"
                   onClick={toggleTheme}
                   size="icon"
                   type="button"
