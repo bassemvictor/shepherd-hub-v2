@@ -524,7 +524,7 @@ const importJobChunkSize = 20;
 const importJobChunksPerRequest = 10;
 const importJobErrorLimit = 100;
 
-const defaultCalendarListRefreshThresholdMinutes = 60 * 24 * 7;
+const defaultCalendarListRefreshThresholdMinutes = 0;
 
 const defaultInitialSyncRange = (nowIso: string): InitialSyncRange => {
   const now = new Date(nowIso);
@@ -540,6 +540,19 @@ const normalizeRefreshInterval = (value: unknown) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return 60;
+  }
+
+  return Math.round(parsed);
+};
+
+const normalizeCalendarListRefreshThreshold = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return defaultCalendarListRefreshThresholdMinutes;
+  }
+
+  if (parsed <= 0) {
+    return 0;
   }
 
   return Math.round(parsed);
@@ -958,9 +971,9 @@ const validateCalendarSettings = (input: Partial<UpdateCalendarSettingsInput>) =
 const validateScheduleSettings = (input: Partial<SaveScheduleSettingsInput>) => {
   if (
     !Number.isFinite(Number(input.calendarListRefreshThresholdMinutes)) ||
-    Number(input.calendarListRefreshThresholdMinutes) <= 0
+    Number(input.calendarListRefreshThresholdMinutes) < 0
   ) {
-    return "Calendar list refresh threshold must be greater than zero.";
+    return "Calendar list refresh threshold must be zero or greater.";
   }
 
   if (!Array.isArray(input.calendars)) {
@@ -4790,7 +4803,7 @@ const saveScheduleSettings = async (
       entityType: "schedule_settings",
       userId: context.actorSub,
       tenantId: context.tenantId,
-      calendarListRefreshThresholdMinutes: normalizeRefreshInterval(
+      calendarListRefreshThresholdMinutes: normalizeCalendarListRefreshThreshold(
         input.calendarListRefreshThresholdMinutes,
       ),
     },

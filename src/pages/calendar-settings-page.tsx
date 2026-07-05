@@ -32,7 +32,8 @@ import {
 
 type CalendarSettingsDraft = UpdateCalendarSettingsInput & { calendarId: string };
 
-const defaultCalendarListRefreshThresholdMinutes = 10080;
+const manualCalendarListRefreshThresholdMinutes = 0;
+const defaultCalendarListRefreshThresholdMinutes = manualCalendarListRefreshThresholdMinutes;
 
 const toDraft = (calendar: ScheduleCalendar): CalendarSettingsDraft => ({
   calendarId: calendar.calendarId,
@@ -152,7 +153,12 @@ export const CalendarSettingsPage = () => {
   }, [overview]);
 
   useEffect(() => {
-    if (!overview?.connection || !latestCalendarListSync || autoRefreshCheckedRef.current) {
+    if (
+      !overview?.connection ||
+      !latestCalendarListSync ||
+      autoRefreshCheckedRef.current ||
+      calendarListRefreshThresholdMinutes <= manualCalendarListRefreshThresholdMinutes
+    ) {
       return;
     }
 
@@ -288,6 +294,10 @@ export const CalendarSettingsPage = () => {
 
     if (refreshingList) {
       return "Syncing";
+    }
+
+    if (calendarListRefreshThresholdMinutes <= manualCalendarListRefreshThresholdMinutes) {
+      return "Manual";
     }
 
     if (!latestCalendarListSync) {
@@ -437,9 +447,12 @@ export const CalendarSettingsPage = () => {
               Check for updates if last sync from Google was older than
             </span>
             <Select
-              onChange={(event) => setCalendarListRefreshThresholdMinutes(Number(event.target.value))}
+              onChange={(event) => {
+                setCalendarListRefreshThresholdMinutes(Number(event.target.value));
+              }}
               value={calendarListRefreshThresholdMinutes}
             >
+              <option value={manualCalendarListRefreshThresholdMinutes}>Do not auto sync</option>
               {calendarListThresholdOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
