@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Bar, BarChart, Cell, Pie, PieChart, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import type { ReportsVisitationTypeFilter, VisitationReportResponse } from "../../../shared/types";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
@@ -84,47 +83,6 @@ const donutColors: Record<string, string> = {
 
 const formatPercent = (value: number) => `${Math.round(value)}%`;
 
-const MeasuredChartFrame = ({
-  aspect,
-  className,
-  minHeight,
-  children,
-}: {
-  aspect: number;
-  className?: string;
-  minHeight: number;
-  children: (size: { width: number; height: number }) => ReactNode;
-}) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState(0);
-
-  useEffect(() => {
-    const element = containerRef.current;
-    if (!element || typeof window === "undefined") {
-      return;
-    }
-
-    const updateWidth = () => {
-      setWidth(element.getBoundingClientRect().width);
-    };
-
-    updateWidth();
-
-    const observer = new ResizeObserver(() => updateWidth());
-    observer.observe(element);
-
-    return () => observer.disconnect();
-  }, []);
-
-  const height = width > 0 ? Math.max(minHeight, width / aspect) : minHeight;
-
-  return (
-    <div className={className} ref={containerRef}>
-      {width > 0 ? children({ width, height }) : null}
-    </div>
-  );
-};
-
 export const ReportsDashboard = ({
   report,
   visitationType,
@@ -206,9 +164,9 @@ export const ReportsDashboard = ({
           </CardHeader>
           <CardContent className="flex flex-1 p-4">
             {report.monthlyActivityTrend.length ? (
-              <MeasuredChartFrame aspect={1.7} className="h-72 w-full min-w-0 self-stretch" minHeight={288}>
-                {({ width, height }) => (
-                  <BarChart data={report.monthlyActivityTrend} height={height} margin={{ top: 8, right: 8, left: -16, bottom: 0 }} width={width}>
+              <div className="h-72 w-full min-w-0 self-stretch xl:h-[19rem]">
+                <ResponsiveContainer height="100%" minWidth={0} width="100%">
+                  <BarChart data={report.monthlyActivityTrend} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
                     <XAxis axisLine={false} dataKey="label" tick={{ fill: "#64748b", fontSize: 12 }} tickLine={false} />
                     <YAxis allowDecimals={false} axisLine={false} tick={{ fill: "#64748b", fontSize: 12 }} tickLine={false} />
                     <Tooltip
@@ -219,8 +177,8 @@ export const ReportsDashboard = ({
                     />
                     <Bar dataKey="count" fill="#2563eb" radius={[10, 10, 0, 0]} />
                   </BarChart>
-                )}
-              </MeasuredChartFrame>
+                </ResponsiveContainer>
+              </div>
             ) : (
               <div className="rounded-lg border border-dashed border-border px-3 py-10 text-center text-sm text-muted-foreground">
                 {labels.emptyTrendLabel}
@@ -239,10 +197,9 @@ export const ReportsDashboard = ({
           <CardContent className="grid flex-1 justify-items-center gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_190px] lg:items-center lg:justify-items-stretch">
             {activityMix.length ? (
               <>
-                <MeasuredChartFrame aspect={1} className="relative h-72 w-full max-w-[20rem] min-w-0 lg:max-w-none" minHeight={288}>
-                  {({ width, height }) => (
-                    <>
-                      <PieChart height={height} width={width}>
+                <div className="relative h-72 w-full max-w-[20rem] min-w-0 lg:max-w-none xl:h-[19rem]">
+                  <ResponsiveContainer height="100%" minWidth={0} width="100%">
+                    <PieChart>
                         <Pie
                           cx="50%"
                           cy="50%"
@@ -257,16 +214,15 @@ export const ReportsDashboard = ({
                             <Cell fill={donutColors[bucket.key] ?? donutColors.Other} key={bucket.key} />
                           ))}
                         </Pie>
-                      </PieChart>
-                      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-                        <div className="text-3xl font-semibold text-slate-900">
-                          {report.activityTypeDistribution.find((bucket) => bucket.key === "all")?.count ?? 0}
-                        </div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{labels.centerMetricLabel}</div>
-                      </div>
-                    </>
-                  )}
-                </MeasuredChartFrame>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+                    <div className="text-3xl font-semibold text-slate-900">
+                      {report.activityTypeDistribution.find((bucket) => bucket.key === "all")?.count ?? 0}
+                    </div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{labels.centerMetricLabel}</div>
+                  </div>
+                </div>
                 <div className="w-full max-w-sm space-y-2 lg:max-w-none">
                   {activityMix.map((bucket) => (
                     <div className="rounded-lg border border-border/80 px-3 py-2.5" key={bucket.key}>
