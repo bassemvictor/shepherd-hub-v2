@@ -14,6 +14,23 @@ export class ApiError extends Error {
   }
 }
 
+const googleCalendarReconnectUiMessage =
+  "Reconnect Google Calendar: Google Calendar connection has expired because the app is currently in TEST mode. Google requires TEST applications to reconnect every 7 days. Once the app is released, this will no longer be required.";
+
+const isExpiredGoogleRefreshTokenMessage = (message: string) => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("unable to refresh google token") ||
+    normalized.includes("google calendar connection expired or was revoked") ||
+    (normalized.includes("invalid_grant") && normalized.includes("expired or revoked"))
+  );
+};
+
+export const getDisplayErrorMessage = (reason: unknown, fallback: string) => {
+  const message = reason instanceof Error ? reason.message : fallback;
+  return isExpiredGoogleRefreshTokenMessage(message) ? googleCalendarReconnectUiMessage : message;
+};
+
 type AmplifyOutputs = {
   custom?: {
     API?: {

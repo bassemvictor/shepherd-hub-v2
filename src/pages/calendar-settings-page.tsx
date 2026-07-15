@@ -20,7 +20,7 @@ import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { api, isApiConfigured } from "../lib/api";
+import { api, getDisplayErrorMessage, isApiConfigured } from "../lib/api";
 import {
   cacheThresholdOptions,
   CalendarSourceBadge,
@@ -88,7 +88,7 @@ export const CalendarSettingsPage = () => {
       const response = await api.get<ScheduleOverviewResponse>("/schedule/overview");
       hydrateOverview(response);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load calendar settings.");
+      setError(getDisplayErrorMessage(reason, "Unable to load calendar settings."));
     } finally {
       setLoading(false);
     }
@@ -177,7 +177,7 @@ export const CalendarSettingsPage = () => {
         hydrateOverview(response);
         pushToast("success", "Calendar list refreshed from Google.");
       } catch (reason) {
-        pushToast("error", reason instanceof Error ? reason.message : "Unable to refresh calendar list.");
+        pushToast("error", getDisplayErrorMessage(reason, "Unable to refresh calendar list."));
       } finally {
         setRefreshingList(false);
       }
@@ -196,7 +196,7 @@ export const CalendarSettingsPage = () => {
       const response = await api.post<ConnectGoogleResponse>("/schedule/google/connect");
       window.location.assign(response.authUrl);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to start Google OAuth.");
+      setError(getDisplayErrorMessage(reason, "Unable to start Google OAuth."));
       setConnecting(false);
     }
   }, []);
@@ -209,7 +209,7 @@ export const CalendarSettingsPage = () => {
       setDisconnectOpen(false);
       pushToast("success", "Google Calendar disconnected.");
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to disconnect Google Calendar.";
+      const message = getDisplayErrorMessage(reason, "Unable to disconnect Google Calendar.");
       setError(message);
       pushToast("error", message);
     } finally {
@@ -224,7 +224,7 @@ export const CalendarSettingsPage = () => {
       await loadOverview();
       pushToast("success", "Calendar list refreshed from Google.");
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to refresh calendar list.";
+      const message = getDisplayErrorMessage(reason, "Unable to refresh calendar list.");
       setError(message);
       pushToast("error", message);
     } finally {
@@ -240,7 +240,7 @@ export const CalendarSettingsPage = () => {
       hydrateOverview(response);
       pushToast("success", "Calendar configuration saved.");
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to save calendar settings.";
+      const message = getDisplayErrorMessage(reason, "Unable to save calendar settings.");
       setError(message);
       pushToast("error", message);
     } finally {
@@ -256,7 +256,7 @@ export const CalendarSettingsPage = () => {
         await loadOverview();
         pushToast("success", "Calendar synced from Google.");
       } catch (reason) {
-        const message = reason instanceof Error ? reason.message : "Unable to sync calendar.";
+        const message = getDisplayErrorMessage(reason, "Unable to sync calendar.");
         setError(message);
         pushToast("error", message);
       } finally {
@@ -278,7 +278,7 @@ export const CalendarSettingsPage = () => {
       pushToast("success", "Calendar cache deleted.");
       setDeleteCacheCalendar(null);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to delete calendar cache.";
+      const message = getDisplayErrorMessage(reason, "Unable to delete calendar cache.");
       setError(message);
       pushToast("error", message);
     } finally {

@@ -758,6 +758,8 @@ const hasRequiredGoogleScopes = (scopes: string[] | undefined) => {
 
 const googleReconnectMessage =
   "Google Calendar access is missing the required calendar scope. Disconnect and reconnect Google Calendar, then approve calendar access.";
+const googleReauthMessage =
+  "Google Calendar connection expired or was revoked. Disconnect and reconnect Google Calendar to continue.";
 
 const toScheduleSettings = (item?: ScheduleSettingsItem | null): ScheduleSettings => ({
   calendarListRefreshThresholdMinutes:
@@ -1685,6 +1687,27 @@ const markGoogleConnectionScopeError = async (
   await putGoogleConnection(context, failedConnection, deps);
   return failedConnection;
 };
+
+const markGoogleConnectionError = async (
+  context: RequestContext,
+  connection: GoogleConnectionItem,
+  deps: HandlerDependencies,
+  status: GoogleConnectionItem["status"] = "error",
+) => {
+  const failedConnection: GoogleConnectionItem = {
+    ...connection,
+    status,
+    updatedAt: deps.now(),
+  };
+
+  await putGoogleConnection(context, failedConnection, deps);
+  return failedConnection;
+};
+
+const isGoogleRefreshTokenInvalid = (details: string) =>
+  details.includes("invalid_grant") ||
+  details.includes("expired or revoked") ||
+  details.includes("Token has been expired or revoked");
 
 const deleteGoogleConnection = async (context: RequestContext, deps: HandlerDependencies) => {
   await deps.documentClient.send(
@@ -2989,13 +3012,8 @@ const refreshGoogleAccessTokenIfNeeded = async (
   }
 
   if (!connection.refreshToken) {
-    const expiredConnection: GoogleConnectionItem = {
-      ...connection,
-      status: "expired",
-      updatedAt: deps.now(),
-    };
-    await putGoogleConnection(context, expiredConnection, deps);
-    throw new Error("Google connection expired and no refresh token is available.");
+    await markGoogleConnectionError(context, connection, deps, "expired");
+    throw new HttpError(400, googleReauthMessage);
   }
 
   const body = new URLSearchParams({
@@ -3015,12 +3033,11 @@ const refreshGoogleAccessTokenIfNeeded = async (
 
   if (!response.ok) {
     const details = await response.text();
-    const failedConnection: GoogleConnectionItem = {
-      ...connection,
-      status: "error",
-      updatedAt: deps.now(),
-    };
-    await putGoogleConnection(context, failedConnection, deps);
+    await markGoogleConnectionError(context, connection, deps);
+    if (isGoogleRefreshTokenInvalid(details)) {
+      throw new HttpError(400, googleReauthMessage);
+    }
+
     throw new Error(`Unable to refresh Google token: ${details}`);
   }
 

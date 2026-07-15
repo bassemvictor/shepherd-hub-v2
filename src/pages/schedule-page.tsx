@@ -63,7 +63,7 @@ import { Dialog } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
-import { api, isApiConfigured } from "../lib/api";
+import { api, getDisplayErrorMessage, isApiConfigured } from "../lib/api";
 import { useMembersIndex } from "../lib/members-index";
 import {
   MOBILE_SCHEDULE_MODE_EVENT,
@@ -1703,7 +1703,7 @@ const ScheduleExperiencePage = () => {
 
       setVisibleCalendarIds(defaultVisible);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load schedule.");
+      setError(getDisplayErrorMessage(reason, "Unable to load schedule."));
     } finally {
       setLoadingOverview(false);
     }
@@ -1887,7 +1887,7 @@ const ScheduleExperiencePage = () => {
         setRawEvents([]);
       }
 
-      const message = reason instanceof Error ? reason.message : "Unable to load calendar events.";
+      const message = getDisplayErrorMessage(reason, "Unable to load calendar events.");
       setError(message);
       pushToast("error", message);
     } finally {
@@ -2078,7 +2078,7 @@ const ScheduleExperiencePage = () => {
       setOverview((current) => mergeOverviewWithSyncMetadata(current, response.calendars));
       pushToast("success", "Visible calendars synced from Google.");
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to sync visible calendars.";
+      const message = getDisplayErrorMessage(reason, "Unable to sync visible calendars.");
       setError(message);
       pushToast("error", message);
     } finally {
@@ -2140,7 +2140,7 @@ const ScheduleExperiencePage = () => {
         void loadEvents(visibleRange.timeMin, visibleRange.timeMax, activeCalendarIds);
       }
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to save event.";
+      const message = getDisplayErrorMessage(reason, "Unable to save event.");
       setError(message);
       pushToast("error", message);
     } finally {
@@ -2245,7 +2245,7 @@ const ScheduleExperiencePage = () => {
           return;
         }
 
-        const message = reason instanceof Error ? reason.message : "Unable to load event details.";
+        const message = getDisplayErrorMessage(reason, "Unable to load event details.");
         setError(message);
         pushToast("error", message);
       }
@@ -2271,7 +2271,7 @@ const ScheduleExperiencePage = () => {
       }
       pushToast("success", "Event deleted.");
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Unable to delete event.";
+      const message = getDisplayErrorMessage(reason, "Unable to delete event.");
       setError(message);
       pushToast("error", message);
     } finally {
@@ -2327,7 +2327,7 @@ const ScheduleExperiencePage = () => {
       pushToast("success", "Event moved.");
     } catch (reason) {
       info.revert();
-      pushToast("error", reason instanceof Error ? reason.message : "Unable to move event.");
+      pushToast("error", getDisplayErrorMessage(reason, "Unable to move event."));
     }
   }, [activeCalendarIds, getMovedEventBoundary, handleEventMove, loadEvents, pushToast, visibleRange]);
 
@@ -2347,7 +2347,7 @@ const ScheduleExperiencePage = () => {
       pushToast("success", "Event duration updated.");
     } catch (reason) {
       info.revert();
-      pushToast("error", reason instanceof Error ? reason.message : "Unable to resize event.");
+      pushToast("error", getDisplayErrorMessage(reason, "Unable to resize event."));
     }
   }, [activeCalendarIds, getMovedEventBoundary, handleEventMove, loadEvents, pushToast, visibleRange]);
 

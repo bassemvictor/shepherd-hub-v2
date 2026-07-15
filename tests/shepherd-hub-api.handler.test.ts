@@ -3073,7 +3073,7 @@ test("schedule overview excludes user-owned records from a different tenant", as
     calendars: [],
     oauthConfigured: false,
     settings: {
-      calendarListRefreshThresholdMinutes: 10080,
+      calendarListRefreshThresholdMinutes: 0,
     },
   });
 });
@@ -3206,6 +3206,91 @@ test("refreshing calendars maps Google scope 403 errors to a reconnect message",
                 },
               ],
             },
+          }),
+      }) as Response,
+    now: () => "2026-06-09T12:00:00.000Z",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/calendars/refresh",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 400);
+  assert.match(String(response.body), /Disconnect and reconnect Google Calendar/);
+  const failedConnectionWrite = [...commands]
+    .reverse()
+    .find(
+      (command) =>
+        command.name === "PutCommand" &&
+        (command.input.Item as { entityType?: string; status?: string } | undefined)?.entityType === "google_connection",
+    );
+  assert.equal((failedConnectionWrite?.input.Item as { status?: string } | undefined)?.status, "error");
+});
+
+test("refreshing calendars returns a reconnect message when the Google refresh token was revoked", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          return {
+            Item: {
+              PK: "USER#user-123",
+              SK: "GOOGLE_CONNECTION",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "google_connection",
+              userId: "user-123",
+              tenantId: "tenant-abc",
+              googleAccountId: "google-account",
+              email: "owner@example.com",
+              accessToken: "token-123",
+              refreshToken: "refresh-123",
+              tokenExpiresAt: "2026-06-09T11:59:00.000Z",
+              scopes: ["https://www.googleapis.com/auth/calendar"],
+              status: "connected",
+              connectedAt: "2026-06-03T12:00:00.000Z",
+              lastConnectedAt: "2026-06-03T12:00:00.000Z",
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () =>
+      ({
+        ok: false,
+        text: async () =>
+          JSON.stringify({
+            error: "invalid_grant",
+            error_description: "Token has been expired or revoked.",
           }),
       }) as Response,
     now: () => "2026-06-09T12:00:00.000Z",
