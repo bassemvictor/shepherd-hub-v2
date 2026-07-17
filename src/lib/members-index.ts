@@ -28,13 +28,14 @@ export const membersIndexQueryOptions = (cacheScope: string, enabled: boolean) =
 
 export const toCachedMemberIndexItem = (member: Pick<
   Member,
-  "memberId" | "fullName" | "initials" | "phone" | "email" | "householdName" | "unityId" | "source" | "normalizedSearchText" | "updatedAt"
+  "memberId" | "fullName" | "initials" | "phone" | "email" | "householdId" | "householdName" | "unityId" | "source" | "normalizedSearchText" | "updatedAt"
 >): MemberIndexItem => ({
   memberId: member.memberId,
   fullName: member.fullName,
   initials: member.initials,
   phone: member.phone,
   email: member.email,
+  householdId: member.householdId,
   householdName: member.householdName,
   unityId: member.unityId,
   isUnityImported: member.source === "UNITY",

@@ -15,11 +15,14 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import type {
+  CreateHouseholdInput,
   CreateManualVisitationInput,
+  HouseholdSummary,
   Member,
   MemberActivity,
   MemberDetailResponse,
@@ -32,6 +35,10 @@ import type {
 import { visitationTypes } from "../../shared/types";
 import { ConfirmDialog } from "../components/common/confirm-dialog";
 import { RightSideDrawer } from "../components/common/right-side-drawer";
+import {
+  HouseholdFormDialog,
+  HouseholdSearchAutocomplete,
+} from "../components/members/household-ui";
 import {
   MemberAvatar,
   MemberChip,
@@ -50,6 +57,7 @@ import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
+import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
 
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -204,9 +212,11 @@ const applyManualVisitationType = (
 
 export const MemberDetailPage = () => {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { memberId = "" } = useParams();
   const [member, setMember] = useState<Member | null>(null);
+  const [household, setHousehold] = useState<HouseholdSummary | null>(null);
   const [activity, setActivity] = useState<MemberActivity[]>([]);
   const [visitations, setVisitations] = useState<MemberVisitation[]>([]);
   const {
@@ -216,6 +226,10 @@ export const MemberDetailPage = () => {
     refresh: refreshMemberIndex,
     tenantId,
   } = useMembersIndex();
+  const {
+    cacheScope: householdCacheScope,
+    items: households,
+  } = useHouseholdsIndex();
   const [activeTab, setActiveTab] = useState<"details" | "visitations" | "activity">("details");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -231,6 +245,10 @@ export const MemberDetailPage = () => {
   const [selectedManualVisitation, setSelectedManualVisitation] = useState<MemberVisitation | null>(null);
   const [editingManualVisitation, setEditingManualVisitation] = useState<MemberVisitation | null>(null);
   const [manualDeleteOpen, setManualDeleteOpen] = useState(false);
+  const [attachHouseholdOpen, setAttachHouseholdOpen] = useState(false);
+  const [createHouseholdOpen, setCreateHouseholdOpen] = useState(false);
+  const [householdQuery, setHouseholdQuery] = useState("");
+  const [householdSaving, setHouseholdSaving] = useState(false);
 
   const loadMember = useCallback(async () => {
     setLoading(true);
@@ -241,6 +259,7 @@ export const MemberDetailPage = () => {
         api.get<{ items: MemberVisitation[] }>(`/members/${memberId}/events`),
       ]);
       setMember(details.member);
+      setHousehold(details.household ?? null);
       setActivity(details.activity);
       setVisitations(memberEvents.items);
     } catch (reason) {
@@ -339,6 +358,65 @@ export const MemberDetailPage = () => {
       setError(reason instanceof Error ? reason.message : "Unable to delete member.");
     }
   }, [memberId, navigate, refreshMemberIndex]);
+
+  const refreshHouseholdData = useCallback(async () => {
+    await Promise.all([
+      loadMember(),
+      refreshMemberIndex(),
+      refreshHouseholdsIndexCache(queryClient, householdCacheScope),
+    ]);
+  }, [householdCacheScope, loadMember, queryClient, refreshMemberIndex]);
+
+  const handleAttachHousehold = useCallback(async (nextHousehold: HouseholdSummary) => {
+    setHouseholdSaving(true);
+    setError(null);
+    try {
+      if (member?.householdId && member.householdId !== nextHousehold.householdId) {
+        const confirmed = window.confirm(
+          "This member already belongs to another household. Continue and move them to the selected household?",
+        );
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      await api.post(`/members/${memberId}/household`, { householdId: nextHousehold.householdId });
+      setAttachHouseholdOpen(false);
+      setHouseholdQuery("");
+      await refreshHouseholdData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to attach member to household.");
+    } finally {
+      setHouseholdSaving(false);
+    }
+  }, [member?.householdId, memberId, refreshHouseholdData]);
+
+  const handleCreateHousehold = useCallback(async (value: CreateHouseholdInput) => {
+    setHouseholdSaving(true);
+    setError(null);
+    try {
+      await api.post("/households", value);
+      setCreateHouseholdOpen(false);
+      await refreshHouseholdData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to create household.");
+    } finally {
+      setHouseholdSaving(false);
+    }
+  }, [refreshHouseholdData]);
+
+  const handleRemoveFromHousehold = useCallback(async () => {
+    setHouseholdSaving(true);
+    setError(null);
+    try {
+      await api.delete(`/members/${memberId}/household`);
+      await refreshHouseholdData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to remove member from household.");
+    } finally {
+      setHouseholdSaving(false);
+    }
+  }, [memberId, refreshHouseholdData]);
 
   const openCreateManualVisitation = useCallback(() => {
     setManualEditorMode("create");
@@ -545,18 +623,80 @@ export const MemberDetailPage = () => {
         <div className="mt-2.5 rounded-lg border border-border bg-background/50 p-3">
           {activeTab === "details" ? (
             <div className="grid gap-2">
-              {[
-                [member.unityId ? "UNITY ID" : "MEMBER ID", member.unityId ?? member.memberId],
-                ["Phone", member.phone || "Not set"],
-                ["Email", member.email || "Not set"],
-                ["Address", member.address || "Not set"],
-                ["Notes", member.notes || "Not set"],
-              ].map(([label, value]) => (
-                <div className="rounded-md border border-border bg-white px-3 py-2.5" key={label}>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
-                  <div className="mt-1 text-sm text-slate-900">{value}</div>
-                </div>
-              ))}
+              <div className="rounded-md border border-border bg-white px-3 py-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{member.unityId ? "UNITY ID" : "MEMBER ID"}</div>
+                <div className="mt-1 text-sm text-slate-900">{member.unityId ?? member.memberId}</div>
+              </div>
+              <div className="rounded-md border border-border bg-white px-3 py-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Phone</div>
+                <div className="mt-1 text-sm text-slate-900">{member.phone || "Not set"}</div>
+              </div>
+              <div className="rounded-md border border-border bg-white px-3 py-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Email</div>
+                <div className="mt-1 text-sm text-slate-900">{member.email || "Not set"}</div>
+              </div>
+              <div className="rounded-md border border-border bg-white px-3 py-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Address</div>
+                <div className="mt-1 text-sm text-slate-900">{member.address || "Not set"}</div>
+              </div>
+              <div className="rounded-md border border-border bg-white px-3 py-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Household</div>
+                {household ? (
+                  <div className="mt-1 space-y-2">
+                    <div className="text-sm font-semibold text-slate-900">{household.householdName}</div>
+                    <div className="text-xs text-muted-foreground">{household.memberCount} members</div>
+                    <div className="space-y-2">
+                      <Button
+                        className="h-10 w-full text-sm sm:w-auto"
+                        onClick={() => navigate(`/households/${household.householdId}`)}
+                        type="button"
+                      >
+                        View Household
+                      </Button>
+                      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                        <Button
+                          className="h-10 w-full border-primary/40 text-primary hover:bg-primary/5 sm:w-auto"
+                          onClick={() => setAttachHouseholdOpen(true)}
+                          type="button"
+                          variant="outline"
+                        >
+                          Change
+                        </Button>
+                        <Button
+                          className="h-10 w-full border-rose-300 text-rose-500 hover:bg-rose-50 hover:text-rose-600 sm:w-auto"
+                          disabled={householdSaving}
+                          onClick={() => void handleRemoveFromHousehold()}
+                          type="button"
+                          variant="outline"
+                        >
+                          {householdSaving ? "Working..." : "Remove"}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-1 space-y-2">
+                    <div className="text-sm text-slate-900">Not assigned to any household</div>
+                    <div className="space-y-2">
+                      <Button className="h-10 w-full text-sm sm:w-auto" onClick={() => setAttachHouseholdOpen(true)} type="button">
+                        Attach to Household
+                      </Button>
+                      <Button
+                        className="h-10 w-full border-primary/40 text-primary hover:bg-primary/5 sm:w-auto"
+                        onClick={() => setCreateHouseholdOpen(true)}
+                        type="button"
+                        variant="outline"
+                      >
+                        Create Household
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="rounded-md border border-border bg-white px-3 py-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Notes</div>
+                <div className="mt-1 text-sm text-slate-900">{member.notes || "Not set"}</div>
+              </div>
             </div>
           ) : null}
 
@@ -986,6 +1126,42 @@ export const MemberDetailPage = () => {
         onConfirm={() => void handleManualDelete()}
         open={manualDeleteOpen}
         title="Delete Manual Activity?"
+      />
+      <ConfirmDialog
+        busy={householdSaving}
+        confirmLabel="Close"
+        description="Search for an existing household to attach this member."
+        onClose={() => {
+          setAttachHouseholdOpen(false);
+          setHouseholdQuery("");
+        }}
+        onConfirm={() => {
+          setAttachHouseholdOpen(false);
+          setHouseholdQuery("");
+        }}
+        open={attachHouseholdOpen}
+        title={household ? "Change Household" : "Attach to Household"}
+      >
+        <HouseholdSearchAutocomplete
+          items={households.filter((item) => item.householdId !== member.householdId)}
+          onQueryChange={setHouseholdQuery}
+          onSelect={(item) => void handleAttachHousehold(item)}
+          placeholder="Search households"
+          query={householdQuery}
+        />
+      </ConfirmDialog>
+      <HouseholdFormDialog
+        busy={householdSaving}
+        initialValue={{
+          householdName: member.lastName ? `${member.lastName} Household` : `${member.fullName} Household`,
+          address: member.address,
+          memberIds: [member.memberId],
+        }}
+        members={memberIndex}
+        onClose={() => setCreateHouseholdOpen(false)}
+        onSubmit={handleCreateHousehold}
+        open={createHouseholdOpen}
+        title="Create Household"
       />
     </div>
   );

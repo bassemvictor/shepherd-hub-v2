@@ -38,7 +38,10 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
   },
   {
     label: "Congregation",
-    items: [{ label: "Members", href: "/members", icon: Users }],
+    items: [
+      { label: "Members", href: "/members", icon: Users },
+      { label: "Households", href: "/households", icon: Users },
+    ],
   },
   {
     label: "Insights",

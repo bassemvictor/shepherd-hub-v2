@@ -7,6 +7,8 @@ import { AuthPage } from "../pages/auth-page";
 import { AdminTenantResetPage } from "../pages/admin-tenant-reset-page";
 import { AdminUserGroupsPage } from "../pages/admin-user-groups-page";
 import { CalendarSettingsPage } from "../pages/calendar-settings-page";
+import { HouseholdDetailPage } from "../pages/household-detail-page";
+import { HouseholdsPage } from "../pages/households-page";
 import { MemberDetailPage } from "../pages/member-detail-page";
 import { MembersPage } from "../pages/members-page";
 import { NotFoundPage } from "../pages/not-found-page";
@@ -46,6 +48,14 @@ export const router = createBrowserRouter([
       {
         path: "members",
         element: <MembersPage />,
+      },
+      {
+        path: "households",
+        element: <HouseholdsPage />,
+      },
+      {
+        path: "households/:householdId",
+        element: <HouseholdDetailPage />,
       },
       {
         path: "reports/visitations",

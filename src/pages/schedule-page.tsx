@@ -37,6 +37,7 @@ import { Navigate, useLocation, useNavigate, useSearchParams } from "react-route
 
 import type {
   CreateScheduleEventInput,
+  HouseholdSummary,
   MemberIndexItem,
   ScheduleCalendar,
   ScheduleEvent,
@@ -51,6 +52,7 @@ import {
   MemberSearchAutocomplete,
   emptyMemberSelection,
 } from "../components/members/member-ui";
+import { HouseholdSearchAutocomplete } from "../components/members/household-ui";
 import { ConfirmDialog } from "../components/common/confirm-dialog";
 import { PageHeader } from "../components/common/page-header";
 import { RightSideDrawer } from "../components/common/right-side-drawer";
@@ -64,6 +66,7 @@ import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import { api, getDisplayErrorMessage, isApiConfigured } from "../lib/api";
+import { useHouseholdsIndex } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
 import {
   MOBILE_SCHEDULE_MODE_EVENT,
@@ -97,6 +100,8 @@ type EventFormState = {
   autoLinkedVisitationType?: VisitationType;
   memberIds: string[];
   memberQuery: string;
+  householdIds: string[];
+  householdQuery: string;
   visitationType: VisitationType;
 };
 
@@ -516,6 +521,7 @@ const buildOptionalEventFields = (form: EventFormState) => {
     ...(location ? { location } : {}),
     ...(attendees.length ? { attendees } : {}),
     ...(form.memberIds.length ? { memberIds: form.memberIds } : {}),
+    ...(form.householdIds.length ? { householdIds: form.householdIds } : {}),
     ...(form.memberIds.length ? { type: normalizeVisitationType(form.visitationType) } : {}),
   };
 };
@@ -582,6 +588,8 @@ const applyMemberSelectionToForm = (
     autoLinkedMemberIds: currentForm.autoLinkedMemberIds,
     memberIds: nextMemberIds,
     memberQuery: "",
+    householdIds: currentForm.householdIds,
+    householdQuery: currentForm.householdQuery,
     visitationType: nextVisitationType,
   };
 };
@@ -617,6 +625,8 @@ const emptyEventForm = (calendarId = ""): EventFormState => {
     autoLinkedVisitationType: undefined,
     memberIds: [],
     memberQuery: "",
+    householdIds: [],
+    householdQuery: "",
     visitationType: DEFAULT_VISITATION_TYPE,
   };
 };
@@ -634,6 +644,8 @@ const eventToFormState = (event: ScheduleEvent): EventFormState => ({
   autoLinkedVisitationType: event.autoLinkedVisitationType,
   memberIds: event.memberIds ?? [],
   memberQuery: "",
+  householdIds: [],
+  householdQuery: "",
   visitationType:
     event.memberIds?.length
       ? normalizeVisitationType(event.visitationType)
@@ -658,6 +670,8 @@ const createFormFromSelection = (
   autoLinkedVisitationType: undefined,
   memberIds: [],
   memberQuery: "",
+  householdIds: [],
+  householdQuery: "",
   visitationType: DEFAULT_VISITATION_TYPE,
 });
 
@@ -683,6 +697,8 @@ const createIntentFormFromSearchParams = (
     autoLinkedMemberIds: [],
     autoLinkedVisitationType: undefined,
     memberIds: [memberId],
+    householdIds: [],
+    householdQuery: "",
     visitationType: DEFAULT_VISITATION_TYPE,
   };
 
@@ -700,6 +716,7 @@ type EventEditorProps = {
   busy: boolean;
   canDelete: boolean;
   memberIndex: MemberIndexItem[];
+  households: HouseholdSummary[];
   onChange: (next: EventFormState) => void;
   onClose: () => void;
   onSave: () => void;
@@ -715,6 +732,7 @@ const EventEditor = ({
   busy,
   canDelete,
   memberIndex,
+  households,
   onChange,
   onClose,
   onSave,
@@ -862,6 +880,57 @@ const EventEditor = ({
             </div>
           </label>
         ) : null}
+        <div className="space-y-1.5">
+          <div className="text-sm font-semibold text-muted-foreground">Households</div>
+          <HouseholdSearchAutocomplete
+            items={households.filter((item) => !form.householdIds.includes(item.householdId))}
+            onQueryChange={(value) => onChange({ ...form, householdQuery: value })}
+            onSelect={(household) => onChange(
+              applyMemberSelectionToForm(
+                {
+                  ...form,
+                  householdIds: [...new Set([...form.householdIds, household.householdId])],
+                  householdQuery: "",
+                },
+                [...new Set([...form.memberIds, ...household.members.map((member) => member.memberId)])],
+                memberIndex,
+              ),
+            )}
+            placeholder="Search households..."
+            query={form.householdQuery}
+          />
+          {form.householdIds.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {form.householdIds.map((householdId) => {
+                const household = households.find((item) => item.householdId === householdId);
+                if (!household) {
+                  return null;
+                }
+
+                return (
+                  <div className="inline-flex items-center gap-2 rounded-md border border-border bg-white px-2 py-1 text-xs" key={householdId}>
+                    <span className="font-medium">{household.householdName}</span>
+                    <span className="text-muted-foreground">{household.memberCount} members</span>
+                    <button
+                      className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      onClick={() => onChange({
+                        ...form,
+                        householdIds: form.householdIds.filter((currentId) => currentId !== householdId),
+                      })}
+                      type="button"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border bg-muted/35 px-3 py-2.5 text-sm text-muted-foreground">
+              No households selected.
+            </div>
+          )}
+        </div>
       </section>
 
       <section className={sectionCardClassName}>
@@ -1600,6 +1669,7 @@ const ScheduleExperiencePage = () => {
   const useBetaMobileExperience = isMobile && mobileScheduleMode === "beta";
   const [overview, setOverview] = useState<ScheduleOverviewResponse | null>(null);
   const { items: memberIndex } = useMembersIndex();
+  const { items: households } = useHouseholdsIndex();
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -2634,6 +2704,7 @@ const ScheduleExperiencePage = () => {
         calendars={availableEditorCalendars}
         canDelete={editorMode === "edit"}
         form={form}
+        households={households}
         memberIndex={memberIndex}
         mobile={isMobile}
         mode={editorMode}

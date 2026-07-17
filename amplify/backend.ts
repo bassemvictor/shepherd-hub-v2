@@ -68,6 +68,18 @@ recordsTable.addGlobalSecondaryIndex({
   },
 });
 
+recordsTable.addGlobalSecondaryIndex({
+  indexName: "GSI4",
+  partitionKey: {
+    name: "GSI4PK",
+    type: AttributeType.STRING,
+  },
+  sortKey: {
+    name: "GSI4SK",
+    type: AttributeType.STRING,
+  },
+});
+
 backend.shepherdHubApi.addEnvironment("SHEPHERD_HUB_RECORDS_TABLE", recordsTable.tableName);
 backend.shepherdHubApi.addEnvironment("COGNITO_USER_POOL_ID", backend.auth.resources.userPool.userPoolId);
 backend.shepherdHubApi.addEnvironment("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID ?? "");
@@ -153,9 +165,14 @@ httpApi.addRoutes({
   authorizer,
 });
 addProtectedRoutes("/members/{memberId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/members/{memberId}/household", [HttpMethod.POST, HttpMethod.DELETE]);
 addProtectedRoutes("/members/{memberId}/events", [HttpMethod.GET]);
 addProtectedRoutes("/members/{memberId}/visitations", [HttpMethod.POST]);
 addProtectedRoutes("/members/{memberId}/visitations/{visitationId}", [HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/households", [HttpMethod.GET, HttpMethod.POST]);
+addProtectedRoutes("/households/{householdId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/households/{householdId}/members", [HttpMethod.POST]);
+addProtectedRoutes("/households/{householdId}/members/{memberId}", [HttpMethod.DELETE]);
 addProtectedRoutes("/events/{eventId}/members", [HttpMethod.GET, HttpMethod.PUT]);
 addProtectedRoutes("/reports/visitations", [HttpMethod.GET]);
 addProtectedRoutes("/schedule/overview", [HttpMethod.GET]);

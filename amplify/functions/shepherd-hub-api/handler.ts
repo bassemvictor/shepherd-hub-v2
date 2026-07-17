@@ -31,6 +31,7 @@ import type {
   AdminResetSummary,
   CalendarSyncConfig,
   CalendarSyncSnapshot,
+  CreateHouseholdInput,
   CreateMemberInput,
   CreateManualVisitationInput,
   ConnectGoogleResponse,
@@ -40,6 +41,11 @@ import type {
   GoogleConnectionStatus,
   GoogleConnectionSummary,
   InitialSyncRange,
+  Household,
+  HouseholdDetailResponse,
+  HouseholdDirectoryResponse,
+  HouseholdMemberSummary,
+  HouseholdSummary,
   Member,
   MemberActivity,
   MemberDetailResponse,
@@ -70,7 +76,9 @@ import type {
   ReportsVisitorFilterMode,
   SyncSource,
   SyncStatus,
+  AttachMemberToHouseholdInput,
   UpdateEventMembersInput,
+  UpdateHouseholdInput,
   UpdateMemberInput,
   UpdateScheduleEventInput,
   UpdateCalendarSettingsInput,
@@ -106,6 +114,8 @@ type BaseItem = {
   GSI2SK?: string;
   GSI3PK?: string;
   GSI3SK?: string;
+  GSI4PK?: string;
+  GSI4SK?: string;
 };
 
 type GoogleConnectionItem = BaseItem & {
@@ -194,6 +204,25 @@ type VisitationItem = BaseItem & {
 
 type MemberItem = BaseItem & Omit<Member, keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"> & {
   tenantId: string;
+};
+
+type HouseholdItem = BaseItem & Omit<Household, keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"> & {
+  tenantId: string;
+};
+
+type HouseholdMemberItem = BaseItem & {
+  tenantId: string;
+  householdId: string;
+  memberId: string;
+  memberName: string;
+  memberInitials: string;
+};
+
+type MemberHouseholdItem = BaseItem & {
+  tenantId: string;
+  householdId: string;
+  memberId: string;
+  householdName: string;
 };
 
 type EventMemberItem = BaseItem & {
@@ -374,6 +403,7 @@ const GOOGLE_CALENDAR_EVENTS_URL = (calendarId: string) =>
   `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
 const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 const GSI1_NAME = "GSI1";
+const GSI4_NAME = "GSI4";
 
 class HttpError extends Error {
   statusCode: number;
@@ -492,6 +522,10 @@ const eventSk = (calendarId: string, eventId: string) => `EVENT#${calendarId}#${
 const eventGsiPk = (userId: string, calendarId: string) => `USER#${userId}#CALENDAR#${calendarId}`;
 const eventGsiSk = (start: string, eventId: string) => `EVENT#${start}#${eventId}`;
 const memberSk = (memberId: string) => `MEMBER#${memberId}`;
+const householdSk = (householdId: string) => `HOUSEHOLD#${householdId}`;
+const tenantHouseholdPk = (tenantId: string, householdId: string) => `TENANT#${tenantId}#HOUSEHOLD#${householdId}`;
+const householdMemberSk = (memberId: string) => `MEMBER#${memberId}`;
+const memberHouseholdSk = () => "HOUSEHOLD";
 const memberImportJobSk = (jobId: string) => `MEMBER_IMPORT_JOB#${jobId}`;
 const memberImportChunkSk = (jobId: string, chunkIndex: number) =>
   `MEMBER_IMPORT_JOB#${jobId}#CHUNK#${String(chunkIndex).padStart(6, "0")}`;
@@ -500,6 +534,8 @@ const memberGsiPk = (tenantId: string) => `TENANT#${tenantId}#MEMBERS`;
 const memberGsiSk = (normalizedName: string, memberId: string) => `NAME#${normalizedName}#MEMBER#${memberId}`;
 const memberUnityGsiPk = (tenantId: string) => `TENANT#${tenantId}#UNITY`;
 const memberUnityGsiSk = (unityId: string) => `UNITY#${unityId}`;
+const householdGsiPk = (tenantId: string) => `TENANT#${tenantId}#HOUSEHOLDS`;
+const householdGsiSk = (normalizedName: string, householdId: string) => `NAME#${normalizedName}#HOUSEHOLD#${householdId}`;
 const tenantEventPk = (tenantId: string, eventId: string) => `TENANT#${tenantId}#EVENT#${eventId}`;
 const tenantVisitationPk = (tenantId: string, visitationId: string) => `TENANT#${tenantId}#VISITATION#${visitationId}`;
 const eventMemberSk = (memberId: string) => `MEMBER#${memberId}`;
@@ -827,6 +863,7 @@ const toMember = (item: MemberItem): Member => ({
   source: item.source,
   isUnityMember: item.isUnityMember,
   familyId: item.familyId,
+  householdId: item.householdId,
   householdName: item.householdName,
   fullName: item.fullName,
   firstName: item.firstName,
@@ -868,12 +905,39 @@ const toMemberIndexItem = (item: MemberItem): MemberIndexItem => ({
   initials: item.initials,
   phone: item.phone,
   email: item.email,
+  householdId: item.householdId,
   householdName: item.householdName,
   unityId: item.unityId,
   isUnityImported: item.source === "UNITY",
   source: item.source,
   normalizedSearchText: item.normalizedSearchText,
   updatedAt: item.updatedAt,
+});
+
+const toHouseholdMemberSummary = (item: HouseholdMemberItem): HouseholdMemberSummary => ({
+  memberId: item.memberId,
+  fullName: item.memberName,
+  initials: item.memberInitials,
+  householdId: item.householdId,
+  householdName: undefined,
+});
+
+const toHouseholdSummary = (
+  item: HouseholdItem,
+  members: HouseholdMemberSummary[] = item.members ?? [],
+): HouseholdSummary => ({
+  createdAt: item.createdAt,
+  entityType: item.entityType,
+  tenantId: item.tenantId,
+  updatedAt: item.updatedAt,
+  householdId: item.householdId,
+  householdName: item.householdName,
+  address: item.address,
+  notes: item.notes,
+  memberCount: item.memberCount,
+  primaryContactMemberId: item.primaryContactMemberId,
+  members,
+  normalizedSearchText: item.normalizedSearchText,
 });
 
 const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({
@@ -1047,6 +1111,42 @@ const validateEventUpdateInput = (input: Partial<UpdateScheduleEventInput>) => {
 const validateMemberInput = (input: Partial<CreateMemberInput>) => {
   if (!normalizeWhitespace(input.fullName)) {
     return "Member full name is required.";
+  }
+
+  return null;
+};
+
+const householdNameMaxLength = 120;
+const householdAddressMaxLength = 240;
+const householdNotesMaxLength = 2000;
+
+const validateHouseholdInput = (input: Partial<CreateHouseholdInput | UpdateHouseholdInput>) => {
+  const householdName = normalizeWhitespace(input.householdName);
+  if (!householdName) {
+    return "Household name is required.";
+  }
+
+  if (householdName.length > householdNameMaxLength) {
+    return `Household name must be ${householdNameMaxLength} characters or fewer.`;
+  }
+
+  const address = normalizeWhitespace(input.address);
+  if (address.length > householdAddressMaxLength) {
+    return `Address must be ${householdAddressMaxLength} characters or fewer.`;
+  }
+
+  const notes = normalizeWhitespace(input.notes);
+  if (notes.length > householdNotesMaxLength) {
+    return `Notes must be ${householdNotesMaxLength} characters or fewer.`;
+  }
+
+  const memberIds = normalizeMemberIds(input.memberIds);
+  if (Array.isArray(input.memberIds) && memberIds.length !== input.memberIds.filter(Boolean).length) {
+    return "Duplicate household member IDs are not allowed.";
+  }
+
+  if (input.primaryContactMemberId && !memberIds.includes(String(input.primaryContactMemberId).trim())) {
+    return "Primary contact must be a household member.";
   }
 
   return null;
@@ -1341,6 +1441,27 @@ const queryAll = async (
 
   return items;
 };
+
+const encodeCursor = (value: Record<string, unknown> | undefined) =>
+  value ? Buffer.from(JSON.stringify(value), "utf8").toString("base64") : undefined;
+
+const decodeCursor = (value: string | undefined) => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(Buffer.from(normalized, "base64").toString("utf8")) as Record<string, unknown>;
+  } catch {
+    throw new HttpError(400, "Invalid pagination cursor.");
+  }
+};
+
+const queryPage = async (
+  documentClient: Pick<DynamoDBDocumentClient, "send">,
+  input: ConstructorParameters<typeof QueryCommand>[0],
+) => documentClient.send(new QueryCommand(input));
 
 const scanAll = async (
   documentClient: Pick<DynamoDBDocumentClient, "send">,
@@ -1944,6 +2065,126 @@ const listMembersByUnityId = async (context: RequestContext, unityId: string, de
   return response as MemberItem[];
 };
 
+const getHousehold = async (context: RequestContext, householdId: string, deps: HandlerDependencies) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: householdSk(householdId),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  return (response.Item as HouseholdItem | undefined) ?? null;
+};
+
+const listHouseholdMembers = async (context: RequestContext, householdId: string, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantHouseholdPk(context.tenantId, householdId),
+      ":memberPrefix": "MEMBER#",
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :memberPrefix)",
+    TableName: context.tableName,
+  });
+
+  return items as HouseholdMemberItem[];
+};
+
+const getMemberHouseholdLink = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: tenantMemberPk(context.tenantId, memberId),
+        SK: memberHouseholdSk(),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  return (response.Item as MemberHouseholdItem | undefined) ?? null;
+};
+
+const listHouseholds = async (context: RequestContext, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#gsiPk": "GSI4PK",
+      "#gsiSk": "GSI4SK",
+    },
+    ExpressionAttributeValues: {
+      ":gsiPk": householdGsiPk(context.tenantId),
+      ":from": "NAME#",
+      ":to": "NAME#~",
+    },
+    IndexName: GSI4_NAME,
+    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
+    TableName: context.tableName,
+  });
+
+  return items as HouseholdItem[];
+};
+
+const buildHouseholdSearchText = (
+  householdName: string,
+  address: string | undefined,
+  notes: string | undefined,
+  members: Array<Pick<MemberItem, "fullName">> | Array<Pick<HouseholdMemberItem, "memberName">>,
+) => normalizeSearchText(
+  householdName,
+  address,
+  notes,
+  ...members.map((member) => "fullName" in member ? member.fullName : member.memberName),
+);
+
+const buildHouseholdItem = (
+  context: RequestContext,
+  householdId: string,
+  input: Pick<CreateHouseholdInput, "householdName" | "address" | "notes" | "primaryContactMemberId">,
+  members: MemberItem[],
+  deps: HandlerDependencies,
+  existing?: HouseholdItem | null,
+): HouseholdItem => {
+  const householdName = normalizeWhitespace(input.householdName);
+  const address = toOptionalString(input.address);
+  const notes = toOptionalString(input.notes);
+  const memberSummaries: HouseholdMemberSummary[] = members
+    .map((member) => ({
+      memberId: member.memberId,
+      fullName: member.fullName,
+      initials: member.initials,
+      phone: member.phone,
+      email: member.email,
+      householdId,
+      householdName,
+    }))
+    .sort((left, right) => left.fullName.localeCompare(right.fullName));
+  const timestamp = deps.now();
+
+  return {
+    PK: tenantPk(context.tenantId),
+    SK: householdSk(householdId),
+    GSI4PK: householdGsiPk(context.tenantId),
+    GSI4SK: householdGsiSk(normalizeName(householdName), householdId),
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+    entityType: "HOUSEHOLD",
+    tenantId: context.tenantId,
+    householdId,
+    householdName,
+    address,
+    notes,
+    memberCount: memberSummaries.length,
+    primaryContactMemberId: toOptionalString(input.primaryContactMemberId),
+    members: memberSummaries,
+    normalizedSearchText: buildHouseholdSearchText(householdName, address, notes, members),
+  };
+};
+
 const getMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
   const response = await deps.documentClient.send(
     new GetCommand({
@@ -2334,6 +2575,7 @@ const buildMemberItem = (
   deps: HandlerDependencies,
   existing?: MemberItem | null,
 ): MemberItem => {
+  const hasInputField = (field: keyof CreateMemberInput) => Object.prototype.hasOwnProperty.call(input, field);
   const timestamp = deps.now();
   const memberId = existing?.memberId ?? deps.uuid();
   const fullName = normalizeWhitespace(input.fullName ?? existing?.fullName);
@@ -2357,7 +2599,12 @@ const buildMemberItem = (
     source,
     isUnityMember: source === "UNITY",
     familyId: toOptionalString(input.familyId ?? existing?.familyId),
-    householdName: toOptionalString(input.householdName ?? existing?.householdName),
+    householdId: hasInputField("householdId")
+      ? toOptionalString(input.householdId)
+      : toOptionalString(existing?.householdId),
+    householdName: hasInputField("householdName")
+      ? toOptionalString(input.householdName)
+      : toOptionalString(existing?.householdName),
     fullName,
     firstName: toOptionalString(input.firstName ?? existing?.firstName ?? firstName),
     lastName: toOptionalString(input.lastName ?? existing?.lastName ?? lastName),
@@ -2656,6 +2903,227 @@ const loadMembersByIds = async (context: RequestContext, memberIds: string[], de
   return normalizedIds.map((memberId) => membersById.get(memberId)).filter(Boolean) as MemberItem[];
 };
 
+const resolveHouseholdMemberIds = async (context: RequestContext, householdIds: string[] | undefined, deps: HandlerDependencies) => {
+  const normalizedIds = normalizeMemberIds(householdIds);
+  const memberIds = new Set<string>();
+
+  for (const householdId of normalizedIds) {
+    const household = await getHousehold(context, householdId, deps);
+    if (!household) {
+      throw new HttpError(404, "Household not found.");
+    }
+
+    const members = await listHouseholdMembers(context, householdId, deps);
+    members.forEach((member) => memberIds.add(member.memberId));
+  }
+
+  return [...memberIds];
+};
+
+const updateHouseholdMembership = async (
+  context: RequestContext,
+  householdId: string,
+  input: CreateHouseholdInput,
+  deps: HandlerDependencies,
+  existing?: HouseholdItem | null,
+  options: {
+    allowReassign?: boolean;
+  } = {},
+) => {
+  const memberIds = normalizeMemberIds(input.memberIds);
+  const members = await loadMembersByIds(context, memberIds, deps);
+  if (members.length !== memberIds.length) {
+    throw new HttpError(400, "One or more household members were not found.");
+  }
+
+  const currentLinks = await Promise.all(members.map((member) => getMemberHouseholdLink(context, member.memberId, deps)));
+  const reassignedLinks = new Map<string, MemberHouseholdItem>();
+  for (const [index, link] of currentLinks.entries()) {
+    if (!link || link.householdId === householdId) {
+      continue;
+    }
+    if (!options.allowReassign) {
+      throw new HttpError(409, `${members[index]?.fullName ?? "Member"} already belongs to another household.`);
+    }
+    reassignedLinks.set(link.memberId, link);
+  }
+
+  const household = buildHouseholdItem(context, householdId, input, members, deps, existing);
+  const existingMembers = existing ? await listHouseholdMembers(context, householdId, deps) : [];
+  const nextIds = new Set(memberIds);
+  const transactItems: Array<Record<string, unknown>> = [
+    {
+      Put: {
+        Item: household,
+        TableName: context.tableName,
+      },
+    },
+  ];
+
+  const priorHouseholdIds = [...new Set([...reassignedLinks.values()].map((link) => link.householdId))];
+  for (const priorHouseholdId of priorHouseholdIds) {
+    const priorHousehold = await getHousehold(context, priorHouseholdId, deps);
+    if (!priorHousehold) {
+      continue;
+    }
+
+    const priorMembership = await listHouseholdMembers(context, priorHouseholdId, deps);
+    const movedMemberIds = new Set(
+      [...reassignedLinks.values()]
+        .filter((link) => link.householdId === priorHouseholdId)
+        .map((link) => link.memberId),
+    );
+    const remainingMemberIds = priorMembership
+      .map((item) => item.memberId)
+      .filter((memberId) => !movedMemberIds.has(memberId));
+    const remainingMembers = await loadMembersByIds(context, remainingMemberIds, deps);
+    const updatedPriorHousehold = buildHouseholdItem(
+      context,
+      priorHouseholdId,
+      {
+        householdName: priorHousehold.householdName,
+        address: priorHousehold.address,
+        notes: priorHousehold.notes,
+        primaryContactMemberId:
+          priorHousehold.primaryContactMemberId && movedMemberIds.has(priorHousehold.primaryContactMemberId)
+            ? undefined
+            : priorHousehold.primaryContactMemberId,
+      },
+      remainingMembers,
+      deps,
+      priorHousehold,
+    );
+
+    transactItems.push({
+      Put: {
+        Item: updatedPriorHousehold,
+        TableName: context.tableName,
+      },
+    });
+
+    for (const movedMemberId of movedMemberIds) {
+      transactItems.push({
+        Delete: {
+          Key: {
+            PK: tenantHouseholdPk(context.tenantId, priorHouseholdId),
+            SK: householdMemberSk(movedMemberId),
+          },
+          TableName: context.tableName,
+        },
+      });
+    }
+  }
+
+  for (const member of members) {
+    const updatedMember = buildMemberItem(
+      context,
+      {
+        ...member,
+        householdId,
+        householdName: household.householdName,
+      },
+      deps,
+      member,
+    );
+
+    transactItems.push(
+      {
+        Put: {
+          Item: updatedMember,
+          TableName: context.tableName,
+        },
+      },
+      {
+        Put: {
+          Item: {
+            PK: tenantHouseholdPk(context.tenantId, householdId),
+            SK: householdMemberSk(member.memberId),
+            createdAt: existingMembers.find((item) => item.memberId === member.memberId)?.createdAt ?? deps.now(),
+            updatedAt: deps.now(),
+            entityType: "HOUSEHOLD_MEMBER",
+            tenantId: context.tenantId,
+            householdId,
+            memberId: member.memberId,
+            memberName: member.fullName,
+            memberInitials: member.initials,
+          } satisfies HouseholdMemberItem,
+          TableName: context.tableName,
+        },
+      },
+      {
+        Put: {
+          Item: {
+            PK: tenantMemberPk(context.tenantId, member.memberId),
+            SK: memberHouseholdSk(),
+            createdAt: currentLinks.find((link) => link?.memberId === member.memberId)?.createdAt ?? deps.now(),
+            updatedAt: deps.now(),
+            entityType: "MEMBER_HOUSEHOLD",
+            tenantId: context.tenantId,
+            householdId,
+            memberId: member.memberId,
+            householdName: household.householdName,
+          } satisfies MemberHouseholdItem,
+          TableName: context.tableName,
+        },
+      },
+    );
+  }
+
+  for (const existingMember of existingMembers) {
+    if (nextIds.has(existingMember.memberId)) {
+      continue;
+    }
+
+    const member = await getMember(context, existingMember.memberId, deps);
+    if (member) {
+      transactItems.push({
+        Put: {
+          Item: buildMemberItem(
+            context,
+            {
+              ...member,
+              householdId: undefined,
+              householdName: undefined,
+            },
+            deps,
+            member,
+          ),
+          TableName: context.tableName,
+        },
+      });
+    }
+
+    transactItems.push(
+      {
+        Delete: {
+          Key: {
+            PK: tenantHouseholdPk(context.tenantId, householdId),
+            SK: householdMemberSk(existingMember.memberId),
+          },
+          TableName: context.tableName,
+        },
+      },
+      {
+        Delete: {
+          Key: {
+            PK: tenantMemberPk(context.tenantId, existingMember.memberId),
+            SK: memberHouseholdSk(),
+          },
+          TableName: context.tableName,
+        },
+      },
+    );
+  }
+
+  await deps.documentClient.send(
+    new TransactWriteCommand({
+      TransactItems: transactItems,
+    }),
+  );
+
+  return household;
+};
+
 const putVisitationRecord = async (context: RequestContext, record: VisitationItem, deps: HandlerDependencies) => {
   await deps.documentClient.send(
     new PutCommand({
@@ -2937,14 +3405,25 @@ const resetVisitations = async (context: RequestContext, deps: HandlerDependenci
 };
 
 const resetMembers = async (context: RequestContext, deps: HandlerDependencies) => {
-  const records = await scanTenantItemsByEntityTypes(context, ["MEMBER", "MEMBER_ACTIVITY"], deps);
+  const records = await scanTenantItemsByEntityTypes(
+    context,
+    ["MEMBER", "MEMBER_ACTIVITY", "HOUSEHOLD", "HOUSEHOLD_MEMBER", "MEMBER_HOUSEHOLD"],
+    deps,
+  );
   const members = records.filter((item): item is MemberItem => item.entityType === "MEMBER");
   const memberActivities = records.filter((item): item is MemberActivityItem => item.entityType === "MEMBER_ACTIVITY");
+  const households = records.filter((item): item is HouseholdItem => item.entityType === "HOUSEHOLD");
+  const householdMembers = records.filter((item): item is HouseholdMemberItem => item.entityType === "HOUSEHOLD_MEMBER");
+  const memberHouseholds = records.filter((item): item is MemberHouseholdItem => item.entityType === "MEMBER_HOUSEHOLD");
   await deleteItemsInBatches(context, [...toDeleteKeys(members), ...toDeleteKeys(memberActivities)], deps);
+  await deleteItemsInBatches(context, [...toDeleteKeys(households), ...toDeleteKeys(householdMembers), ...toDeleteKeys(memberHouseholds)], deps);
 
   return buildResetSummary("members", {
     MEMBER: members.length,
     MEMBER_ACTIVITY: memberActivities.length,
+    HOUSEHOLD: households.length,
+    HOUSEHOLD_MEMBER: householdMembers.length,
+    MEMBER_HOUSEHOLD: memberHouseholds.length,
   });
 };
 
@@ -3626,11 +4105,194 @@ const getMemberDetails = async (context: RequestContext, memberId: string, deps:
   }
 
   const activity = await listMemberActivities(context, memberId, deps);
+  const household = member.householdId ? await getHousehold(context, member.householdId, deps) : null;
   const response: MemberDetailResponse = {
     member: toMember(member),
+    household: household ? toHouseholdSummary(household) : undefined,
     activity: activity.map(toMemberActivity),
   };
   return json(200, response);
+};
+
+const getHouseholds = async (
+  context: RequestContext,
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  deps: HandlerDependencies,
+) => {
+  const query = normalizeName(event.queryStringParameters?.q);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(String(event.queryStringParameters?.limit ?? "25"), 10) || 25));
+
+  if (query) {
+    const items = (await listHouseholds(context, deps))
+      .filter((item) => item.normalizedSearchText.includes(query));
+    return json(200, {
+      items: items.slice(0, limit).map((item) => toHouseholdSummary(item)),
+      total: items.length,
+    } satisfies HouseholdDirectoryResponse);
+  }
+
+  const page = await queryPage(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#gsiPk": "GSI4PK",
+      "#gsiSk": "GSI4SK",
+    },
+    ExpressionAttributeValues: {
+      ":gsiPk": householdGsiPk(context.tenantId),
+      ":from": "NAME#",
+      ":to": "NAME#~",
+    },
+    ExclusiveStartKey: decodeCursor(event.queryStringParameters?.cursor),
+    IndexName: GSI4_NAME,
+    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
+    Limit: limit,
+    TableName: context.tableName,
+  });
+
+  const all = await listHouseholds(context, deps);
+  return json(200, {
+    items: ((page.Items ?? []) as HouseholdItem[]).map((item) => toHouseholdSummary(item)),
+    nextCursor: encodeCursor(page.LastEvaluatedKey as Record<string, unknown> | undefined),
+    total: all.length,
+  } satisfies HouseholdDirectoryResponse);
+};
+
+const getHouseholdDetails = async (context: RequestContext, householdId: string, deps: HandlerDependencies) => {
+  const household = await getHousehold(context, householdId, deps);
+  if (!household) {
+    return json(404, { message: "Household not found." });
+  }
+
+  const membership = await listHouseholdMembers(context, householdId, deps);
+  const members = await loadMembersByIds(context, membership.map((member) => member.memberId), deps);
+  return json(200, {
+    household: toHouseholdSummary(
+      household,
+      members.map((member) => ({
+        memberId: member.memberId,
+        fullName: member.fullName,
+        initials: member.initials,
+        phone: member.phone,
+        email: member.email,
+        householdId: member.householdId,
+        householdName: member.householdName,
+      })),
+    ),
+  } satisfies HouseholdDetailResponse);
+};
+
+const createHousehold = async (context: RequestContext, input: CreateHouseholdInput, deps: HandlerDependencies) => {
+  const validationError = validateHouseholdInput(input);
+  if (validationError) {
+    return json(400, { message: validationError });
+  }
+
+  const household = await updateHouseholdMembership(context, deps.uuid(), input, deps, null);
+  return json(201, toHouseholdSummary(household));
+};
+
+const updateHousehold = async (
+  context: RequestContext,
+  householdId: string,
+  input: UpdateHouseholdInput,
+  deps: HandlerDependencies,
+) => {
+  const existing = await getHousehold(context, householdId, deps);
+  if (!existing) {
+    return json(404, { message: "Household not found." });
+  }
+  const membership = await listHouseholdMembers(context, householdId, deps);
+
+  const merged: CreateHouseholdInput = {
+    householdName: input.householdName ?? existing.householdName,
+    address: input.address ?? existing.address,
+    notes: input.notes ?? existing.notes,
+    memberIds: input.memberIds ?? membership.map((member) => member.memberId),
+    primaryContactMemberId: input.primaryContactMemberId ?? existing.primaryContactMemberId,
+  };
+  const validationError = validateHouseholdInput(merged);
+  if (validationError) {
+    return json(400, { message: validationError });
+  }
+
+  const household = await updateHouseholdMembership(context, householdId, merged, deps, existing);
+  return json(200, toHouseholdSummary(household));
+};
+
+const deleteHousehold = async (context: RequestContext, householdId: string, deps: HandlerDependencies) => {
+  const household = await getHousehold(context, householdId, deps);
+  if (!household) {
+    return json(404, { message: "Household not found." });
+  }
+
+  if (household.memberCount > 0) {
+    return json(400, { message: "Only empty households can be deleted." });
+  }
+
+  await deps.documentClient.send(
+    new DeleteCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: householdSk(householdId),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  return json(200, { deleted: true, householdId });
+};
+
+const attachMemberToHousehold = async (
+  context: RequestContext,
+  memberId: string,
+  householdId: string,
+  deps: HandlerDependencies,
+) => {
+  const member = await getMember(context, memberId, deps);
+  if (!member) {
+    return json(404, { message: "Member not found." });
+  }
+
+  const household = await getHousehold(context, householdId, deps);
+  if (!household) {
+    return json(404, { message: "Household not found." });
+  }
+  const membership = await listHouseholdMembers(context, householdId, deps);
+
+  const memberIds = [...new Set([...membership.map((entry) => entry.memberId), memberId])];
+  const updated = await updateHouseholdMembership(context, householdId, {
+    householdName: household.householdName,
+    address: household.address,
+    notes: household.notes,
+    memberIds,
+    primaryContactMemberId: household.primaryContactMemberId,
+  }, deps, household, { allowReassign: true });
+
+  return json(200, toHouseholdSummary(updated));
+};
+
+const removeMemberFromHousehold = async (
+  context: RequestContext,
+  memberId: string,
+  householdId: string,
+  deps: HandlerDependencies,
+) => {
+  const household = await getHousehold(context, householdId, deps);
+  if (!household) {
+    return json(404, { message: "Household not found." });
+  }
+  const membership = await listHouseholdMembers(context, householdId, deps);
+
+  const nextIds = membership.map((entry) => entry.memberId).filter((id) => id !== memberId);
+  const updated = await updateHouseholdMembership(context, householdId, {
+    householdName: household.householdName,
+    address: household.address,
+    notes: household.notes,
+    memberIds: nextIds,
+    primaryContactMemberId:
+      household.primaryContactMemberId === memberId ? undefined : household.primaryContactMemberId,
+  }, deps, household);
+
+  return json(200, toHouseholdSummary(updated));
 };
 
 const createMember = async (context: RequestContext, input: CreateMemberInput, deps: HandlerDependencies) => {
@@ -3687,6 +4349,22 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
   const member = await getMember(context, memberId, deps);
   if (!member) {
     return json(404, { message: "Member not found." });
+  }
+
+  if (member.householdId) {
+    const household = await getHousehold(context, member.householdId, deps);
+    if (household) {
+      await updateHouseholdMembership(context, household.householdId, {
+        householdName: household.householdName,
+        address: household.address,
+        notes: household.notes,
+        memberIds: (await listHouseholdMembers(context, household.householdId, deps))
+          .map((item) => item.memberId)
+          .filter((id) => id !== memberId),
+        primaryContactMemberId:
+          household.primaryContactMemberId === memberId ? undefined : household.primaryContactMemberId,
+      }, deps, household);
+    }
   }
 
   const eventLinks = await listMemberEvents(context, memberId, deps);
@@ -5022,6 +5700,13 @@ const createScheduleEvent = async (
     return json(404, { message: "Calendar not found." });
   }
 
+  const resolvedHouseholdMemberIds = await resolveHouseholdMemberIds(context, input.householdIds, deps);
+  const resolvedMemberIds = [...new Set([...normalizeMemberIds(input.memberIds), ...resolvedHouseholdMemberIds])];
+  const nextInput: CreateScheduleEventInput = {
+    ...input,
+    memberIds: resolvedMemberIds,
+  };
+
   const response = await googleFetch(
     context,
     connection,
@@ -5029,7 +5714,7 @@ const createScheduleEvent = async (
     deps,
     {
       method: "POST",
-      body: JSON.stringify(buildGoogleEventBody(input)),
+      body: JSON.stringify(buildGoogleEventBody(nextInput)),
     },
   );
 
@@ -5038,7 +5723,7 @@ const createScheduleEvent = async (
   const stored = await upsertGoogleEventIntoCache(context, calendar, created, "GOOGLE", undefined, deps);
   const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
-    memberIds: input.memberIds ?? [],
+    memberIds: resolvedMemberIds,
     visitationType: input.type,
   }, deps);
   return json(201, toScheduleEvent(updatedStored));
@@ -5080,12 +5765,16 @@ const updateScheduleEvent = async (
     end: input.end ?? existing.end,
     allDay: input.allDay ?? existing.allDay,
     memberIds: input.memberIds ?? existing.memberIds,
+    householdIds: input.householdIds,
     type: input.type ?? existing.visitationType,
   };
 
   if (new Date(nextEvent.end).getTime() <= new Date(nextEvent.start).getTime()) {
     return json(400, { message: "End time must be after start time." });
   }
+
+  const resolvedHouseholdMemberIds = await resolveHouseholdMemberIds(context, nextEvent.householdIds, deps);
+  nextEvent.memberIds = [...new Set([...normalizeMemberIds(nextEvent.memberIds), ...resolvedHouseholdMemberIds])];
 
   const response = await googleFetch(
     context,
@@ -5320,8 +6009,57 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         }
       }
 
+      if (path === `/members/${memberId}/household` && memberId) {
+        if (method === "POST") {
+          const input = parseBody<AttachMemberToHouseholdInput>(typedEvent.body);
+          return await attachMemberToHousehold(context, memberId, input.householdId, deps);
+        }
+
+        if (method === "DELETE") {
+          const member = await getMember(context, memberId, deps);
+          if (!member?.householdId) {
+            return json(400, { message: "Member is not assigned to a household." });
+          }
+
+          return await removeMemberFromHousehold(context, memberId, member.householdId, deps);
+        }
+      }
+
       if (path === `/members/${memberId}/events` && memberId && method === "GET") {
         return await getMemberEventsResponse(context, memberId, deps);
+      }
+
+      if (method === "GET" && path === "/households") {
+        return await getHouseholds(context, typedEvent, deps);
+      }
+
+      if (method === "POST" && path === "/households") {
+        return await createHousehold(context, parseBody<CreateHouseholdInput>(typedEvent.body), deps);
+      }
+
+      const householdId = typedEvent.pathParameters?.householdId;
+      const householdMemberId = typedEvent.pathParameters?.memberId;
+      if (path === `/households/${householdId}` && householdId) {
+        if (method === "GET") {
+          return await getHouseholdDetails(context, householdId, deps);
+        }
+
+        if (method === "PUT") {
+          return await updateHousehold(context, householdId, parseBody<UpdateHouseholdInput>(typedEvent.body), deps);
+        }
+
+        if (method === "DELETE") {
+          return await deleteHousehold(context, householdId, deps);
+        }
+      }
+
+      if (path === `/households/${householdId}/members` && householdId && method === "POST") {
+        const input = parseBody<{ memberId: string }>(typedEvent.body);
+        return await attachMemberToHousehold(context, input.memberId, householdId, deps);
+      }
+
+      if (path === `/households/${householdId}/members/${householdMemberId}` && householdId && householdMemberId && method === "DELETE") {
+        return await removeMemberFromHousehold(context, householdMemberId, householdId, deps);
       }
 
       if (path === `/members/${memberId}/visitations` && memberId && method === "POST") {

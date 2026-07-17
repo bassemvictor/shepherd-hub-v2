@@ -145,6 +145,7 @@ export type CreateScheduleEventInput = {
   end: string;
   allDay?: boolean;
   memberIds?: string[];
+  householdIds?: string[];
   type?: VisitationType;
 };
 
@@ -158,6 +159,7 @@ export type UpdateScheduleEventInput = {
   end?: string;
   allDay?: boolean;
   memberIds?: string[];
+  householdIds?: string[];
   type?: VisitationType;
 };
 
@@ -175,6 +177,7 @@ export type MemberIndexItem = {
   initials: string;
   phone?: string;
   email?: string;
+  householdId?: string;
   householdName?: string;
   unityId?: string;
   isUnityImported: boolean;
@@ -189,6 +192,7 @@ export type Member = EntityEnvelope & {
   source: MemberSource;
   isUnityMember: boolean;
   familyId?: string;
+  householdId?: string;
   householdName?: string;
   fullName: string;
   firstName?: string;
@@ -420,7 +424,50 @@ export type MemberActivity = {
 
 export type MemberDetailResponse = {
   member: Member;
+  household?: HouseholdSummary;
   activity: MemberActivity[];
+};
+
+export type HouseholdMemberSummary = Pick<
+  Member,
+  "memberId" | "fullName" | "initials" | "phone" | "email" | "householdId" | "householdName"
+>;
+
+export type HouseholdSummary = EntityEnvelope & {
+  householdId: string;
+  householdName: string;
+  address?: string;
+  notes?: string;
+  memberCount: number;
+  primaryContactMemberId?: string;
+  members: HouseholdMemberSummary[];
+  normalizedSearchText: string;
+};
+
+export type Household = HouseholdSummary;
+
+export type HouseholdDirectoryResponse = {
+  items: HouseholdSummary[];
+  nextCursor?: string;
+  total: number;
+};
+
+export type HouseholdDetailResponse = {
+  household: Household;
+};
+
+export type CreateHouseholdInput = {
+  householdName: string;
+  address?: string;
+  notes?: string;
+  memberIds?: string[];
+  primaryContactMemberId?: string;
+};
+
+export type UpdateHouseholdInput = Partial<CreateHouseholdInput>;
+
+export type AttachMemberToHouseholdInput = {
+  householdId: string;
 };
 
 export type MemberImportResult = {

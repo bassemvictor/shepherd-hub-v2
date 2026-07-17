@@ -6,6 +6,7 @@ const routeTitleMap: Record<string, string> = {
   "/calendar/schedule": "Schedule",
   "/calendar/schedule-beta": "Schedule",
   "/members": "Congregation",
+  "/households": "Households",
   "/admin/user-groups": "User Groups",
   "/admin/tenant-reset": "Tenant Reset",
   "/reports": "Reports",
@@ -20,6 +21,7 @@ const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
   "/calendar/schedule": [{ label: "Calendar" }, { label: "Schedule" }],
   "/calendar/schedule-beta": [{ label: "Calendar" }, { label: "Schedule" }],
   "/members": [{ label: "Congregation" }],
+  "/households": [{ label: "Congregation" }, { label: "Households" }],
   "/admin/user-groups": [{ label: "Admin" }, { label: "User Groups" }],
   "/admin/tenant-reset": [{ label: "Admin" }, { label: "Tenant Reset" }],
   "/reports": [{ label: "Insights" }, { label: "Reports" }],
@@ -29,10 +31,13 @@ const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
 };
 
 const isMemberDetailPath = (pathname: string) => /^\/members\/[^/]+$/.test(pathname);
+const isHouseholdDetailPath = (pathname: string) => /^\/households\/[^/]+$/.test(pathname);
 
 export const getPageTitle = (pathname: string) =>
   isMemberDetailPath(pathname)
     ? "Member Details"
+    : isHouseholdDetailPath(pathname)
+    ? "Household Details"
     :
   routeTitleMap[pathname] ??
   formatTitle(pathname.split("/").filter(Boolean).slice(-1)[0] ?? "Members");
@@ -59,6 +64,10 @@ export const getBreadcrumbs = (pathname: string): Array<{ label: string; href?: 
       && index === segments.length - 1
       && segments.length === 2
         ? "Member Details"
+        : pathname.startsWith("/households/")
+        && index === segments.length - 1
+        && segments.length === 2
+          ? "Household Details"
         : formatTitle(segment),
     href: index === segments.length - 1 ? undefined : `/${segments.slice(0, index + 1).join("/")}`,
   }));
