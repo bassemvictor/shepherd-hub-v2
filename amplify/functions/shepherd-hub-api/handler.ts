@@ -3712,17 +3712,28 @@ const upsertGoogleEventIntoCache = async (
   const existingItem = existingOverride ?? (existing.Item as EventItem | undefined);
   const metadataMemberIds = parseGoogleMemberIds(googleEvent.extendedProperties?.private?.memberIds);
   const memberIds = metadataMemberIds.length ? metadataMemberIds : normalizeMemberIds(existingItem?.memberIds);
-  const autoLinkedInteraction = await resolveAutoLinkedInteractionMembers(
-    context,
-    {
-      calendarId: calendar.calendarId,
-      eventId: googleEvent.id,
-      googleEventId: googleEvent.id,
-      summary: googleEvent.summary ?? "(Untitled event)",
-      attendees: normalizeAttendees((googleEvent.attendees ?? []).map((entry) => entry.email ?? "")),
-    },
-    deps,
-  );
+  const existingVisitations = await listVisitationsForEvent(context, calendar.calendarId, googleEvent.id, deps);
+  const existingVisitationMemberIds = [...new Set(existingVisitations.map((record) => record.memberId))];
+  const autoLinkedInteraction = existingVisitations.length
+    ? {
+        interactionType:
+          existingItem?.autoLinkedVisitationType
+          ?? (existingVisitations[0] ? normalizeVisitationType(existingVisitations[0].type) : undefined),
+        matchedMembers: (await listMembers(context, deps)).filter((member) =>
+          existingVisitationMemberIds.includes(member.memberId)
+        ),
+      }
+    : await resolveAutoLinkedInteractionMembers(
+        context,
+        {
+          calendarId: calendar.calendarId,
+          eventId: googleEvent.id,
+          googleEventId: googleEvent.id,
+          summary: googleEvent.summary ?? "(Untitled event)",
+          attendees: normalizeAttendees((googleEvent.attendees ?? []).map((entry) => entry.email ?? "")),
+        },
+        deps,
+      );
   const item: EventItem = {
     PK: userPk(context.actorSub),
     SK: eventSk(calendar.calendarId, googleEvent.id),

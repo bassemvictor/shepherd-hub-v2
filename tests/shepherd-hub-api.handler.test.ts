@@ -1890,6 +1890,204 @@ test("full Google sync auto-links meeting-prefixed events to matching members by
   assert.equal(commands.some((command) => command.name === "TransactWriteCommand"), false);
 });
 
+test("Google sync skips auto-link when the event already has a visitation entry", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "GOOGLE_CONNECTION",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account-1",
+                email: "owner@example.com",
+                accessToken: "access-token",
+                refreshToken: "refresh-token",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-03T12:00:00.000Z",
+                lastConnectedAt: "2026-06-03T12:00:00.000Z",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":calendarPrefix"] === "CALENDAR#") {
+            return {
+              Items: [
+                {
+                  PK: "USER#user-123",
+                  SK: "CALENDAR#calendar-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "schedule_calendar",
+                  userId: "user-123",
+                  tenantId: "tenant-abc",
+                  calendarId: "calendar-1",
+                  summary: "Main Calendar",
+                  primary: true,
+                  enabled: true,
+                  selected: true,
+                  backgroundColor: "#2563eb",
+                  sync: {
+                    syncMode: "ALWAYS_GOOGLE",
+                    refreshIntervalMinutes: 15,
+                    initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                    lastSyncStatus: "idle",
+                    requiresFullSync: true,
+                  },
+                },
+              ],
+            };
+          }
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":eventPrefix"] === "EVENT#calendar-1#") {
+            return { Items: [] };
+          }
+
+          if (values?.[":pk"] === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+                  SK: "MEMBER#member-9",
+                  createdAt: "2026-06-02T12:00:00.000Z",
+                  updatedAt: "2026-06-02T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
+                  type: "Meeting",
+                  memberId: "member-9",
+                  memberIds: ["member-9"],
+                  memberNames: ["Existing Member"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Owner Example",
+                  createdByUserId: "user-123",
+                  createdByName: "Owner Example",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  title: "Meeting: Existing visitation",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  allDay: false,
+                  visitStatus: "scheduled",
+                  eventId: "event-1",
+                  calendarEventId: "event-1",
+                  calendarId: "calendar-1",
+                  calendarOwnerUserId: "user-123",
+                  calendarOwnerName: "Owner Example",
+                },
+              ],
+            };
+          }
+
+          if (command.input.IndexName === "GSI1") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-9",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#existing member#MEMBER#member-9",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-9",
+                  fullName: "Existing Member",
+                  initials: "EM",
+                  email: "existing@example.com",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "existing member existing@example.com",
+                },
+              ],
+            };
+          }
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () =>
+      ({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              id: "event-1",
+              summary: "Meeting: Reach Mary at mary@example.com",
+              attendees: [{ email: "mary@example.com" }],
+              start: { dateTime: "2026-06-04T15:00:00.000Z" },
+              end: { dateTime: "2026-06-04T16:00:00.000Z" },
+            },
+          ],
+          nextSyncToken: "sync-token-1",
+        }),
+      }) as Response,
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+      queryStringParameters: {
+        forceSync: "true",
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const eventPut = commands.find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string } | undefined)?.entityType === "schedule_event",
+  );
+  assert.ok(eventPut);
+  assert.deepEqual((eventPut?.input.Item as { autoLinkedMemberIds?: string[] }).autoLinkedMemberIds, ["member-9"]);
+  assert.equal((eventPut?.input.Item as { autoLinkedVisitationType?: string }).autoLinkedVisitationType, "Meeting");
+  const visitationPuts = commands.filter(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string } | undefined)?.entityType === "VISITATION",
+  );
+  assert.equal(visitationPuts.length, 1);
+});
+
 test("incremental Google sync logs AUTO_LINK_FAILED when a prefixed interaction event has no matching member", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
