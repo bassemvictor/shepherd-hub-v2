@@ -89,6 +89,7 @@ export type ScheduleEvent = EntityEnvelope & {
   assignedMemberNames?: string[];
   autoLinkedMemberIds?: string[];
   autoLinkedMemberNames?: string[];
+  dismissedAutoLinkedMemberIds?: string[];
   autoLinkedVisitationType?: VisitationType;
   memberIds?: string[];
   memberNames?: string[];
@@ -145,6 +146,7 @@ export type CreateScheduleEventInput = {
   end: string;
   allDay?: boolean;
   memberIds?: string[];
+  dismissedAutoLinkedMemberIds?: string[];
   householdIds?: string[];
   type?: VisitationType;
 };
@@ -159,6 +161,7 @@ export type UpdateScheduleEventInput = {
   end?: string;
   allDay?: boolean;
   memberIds?: string[];
+  dismissedAutoLinkedMemberIds?: string[];
   householdIds?: string[];
   type?: VisitationType;
 };

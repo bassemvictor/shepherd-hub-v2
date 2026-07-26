@@ -1,4 +1,5 @@
 import { Check, Loader2, Search, Upload, UserPlus, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -56,10 +57,12 @@ export const MemberChip = ({
   member,
   onRemove,
   onClick,
+  accessory,
 }: {
   member: Pick<EventMemberSummary, "memberId" | "fullName" | "initials">;
   onRemove?: (memberId: string) => void;
   onClick?: (memberId: string) => void;
+  accessory?: ReactNode;
 }) => (
   <div className="inline-flex items-center gap-1 rounded-md border border-border bg-white px-1.5 py-1 text-xs text-foreground">
     <button
@@ -75,6 +78,7 @@ export const MemberChip = ({
       </span>
       <span className="truncate font-medium">{member.fullName}</span>
     </button>
+    {accessory ? <span className="flex shrink-0 items-center">{accessory}</span> : null}
     {onRemove ? (
       <button
         className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"

@@ -586,6 +586,254 @@ test("member responses ignore legacy role and status fields from stored items", 
   assert.doesNotMatch(String(response.body), /Legacy Role|Legacy Status|profession|accountStatus/);
 });
 
+test("deleting a member preserves other auto-linked members on the same event", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "TENANT#tenant-abc" && key.SK === "MEMBER#member-1") {
+            return {
+              Item: {
+                PK: "TENANT#tenant-abc",
+                SK: "MEMBER#member-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "MEMBER",
+                tenantId: "tenant-abc",
+                memberId: "member-1",
+                source: "UNITY",
+                isUnityMember: true,
+                fullName: "Adel Abraham",
+                firstName: "Adel",
+                lastName: "Abraham",
+                initials: "AA",
+                email: "adel@example.com",
+                normalizedSearchText: "adel abraham adel@example.com",
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "EVENT#calendar-1#event-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "EVENT#calendar-1#event-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_event",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                eventId: "event-1",
+                googleEventId: "event-1",
+                calendarName: "Main Calendar",
+                summary: "Meeting with adel@example.com and mary@example.com",
+                attendees: ["adel@example.com", "mary@example.com"],
+                start: "2026-06-04T15:00:00.000Z",
+                end: "2026-06-04T16:00:00.000Z",
+                allDay: false,
+                status: "confirmed",
+                source: "GOOGLE",
+                autoLinkedMemberIds: ["member-1", "member-2"],
+                autoLinkedMemberNames: ["Adel Abraham", "Mary Smith"],
+                dismissedAutoLinkedMemberIds: [],
+                autoLinkedVisitationType: "Meeting",
+                memberIds: [],
+                memberNames: [],
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+
+          if (values[":gsiPk"] === "TENANT#tenant-abc#MEMBER#member-1") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
+                  type: "Meeting",
+                  memberId: "member-1",
+                  memberIds: ["member-1", "member-2"],
+                  memberNames: ["Adel Abraham", "Mary Smith"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Owner Example",
+                  createdByUserId: "user-123",
+                  createdByName: "Owner Example",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  title: "Meeting with adel@example.com and mary@example.com",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  allDay: false,
+                  visitStatus: "scheduled",
+                  eventId: "event-1",
+                  calendarEventId: "event-1",
+                  calendarId: "calendar-1",
+                  calendarOwnerUserId: "user-123",
+                  calendarOwnerName: "Owner Example",
+                },
+              ],
+            };
+          }
+
+          if (values[":pk"] === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
+                  type: "Meeting",
+                  memberId: "member-1",
+                  memberIds: ["member-1", "member-2"],
+                  memberNames: ["Adel Abraham", "Mary Smith"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Owner Example",
+                  createdByUserId: "user-123",
+                  createdByName: "Owner Example",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  title: "Meeting with adel@example.com and mary@example.com",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  allDay: false,
+                  visitStatus: "scheduled",
+                  eventId: "event-1",
+                  calendarEventId: "event-1",
+                  calendarId: "calendar-1",
+                  calendarOwnerUserId: "user-123",
+                  calendarOwnerName: "Owner Example",
+                },
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+                  SK: "MEMBER#member-2",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
+                  type: "Meeting",
+                  memberId: "member-2",
+                  memberIds: ["member-1", "member-2"],
+                  memberNames: ["Adel Abraham", "Mary Smith"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Owner Example",
+                  createdByUserId: "user-123",
+                  createdByName: "Owner Example",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  title: "Meeting with adel@example.com and mary@example.com",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  allDay: false,
+                  visitStatus: "scheduled",
+                  eventId: "event-1",
+                  calendarEventId: "event-1",
+                  calendarId: "calendar-1",
+                  calendarOwnerUserId: "user-123",
+                  calendarOwnerName: "Owner Example",
+                },
+              ],
+            };
+          }
+
+          return { Items: [] };
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          const requestItems = command.input.RequestItems as Record<string, { Keys?: Array<{ PK: string; SK: string }> }>;
+          const keys = requestItems["records-table"]?.Keys ?? [];
+          const responses = keys
+            .filter((key) => key.SK === "MEMBER#member-2")
+            .map(() => ({
+              PK: "TENANT#tenant-abc",
+              SK: "MEMBER#member-2",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "MEMBER",
+              tenantId: "tenant-abc",
+              memberId: "member-2",
+              source: "UNITY",
+              isUnityMember: true,
+              fullName: "Mary Smith",
+              firstName: "Mary",
+              lastName: "Smith",
+              initials: "MS",
+              email: "mary@example.com",
+              normalizedSearchText: "mary smith mary@example.com",
+            }));
+
+          return { Responses: { "records-table": responses } };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-03T13:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/members/member-1",
+      pathParameters: { memberId: "member-1" },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "DELETE",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(JSON.parse(String(response.body)), { deleted: true, memberId: "member-1" });
+
+  const eventPut = commands.find(
+    (command) =>
+      command.name === "PutCommand"
+      && (command.input.Item as { entityType?: string } | undefined)?.entityType === "schedule_event",
+  );
+  assert.deepEqual((eventPut?.input.Item as { autoLinkedMemberIds?: string[] }).autoLinkedMemberIds, ["member-2"]);
+  assert.deepEqual((eventPut?.input.Item as { autoLinkedMemberNames?: string[] }).autoLinkedMemberNames, ["Mary Smith"]);
+
+  const visitationPut = commands.find(
+    (command) =>
+      command.name === "PutCommand"
+      && (command.input.Item as { entityType?: string; memberId?: string } | undefined)?.entityType === "VISITATION"
+      && (command.input.Item as { memberId?: string } | undefined)?.memberId === "member-2",
+  );
+  assert.deepEqual((visitationPut?.input.Item as { memberIds?: string[] }).memberIds, ["member-2"]);
+  assert.deepEqual((visitationPut?.input.Item as { memberNames?: string[] }).memberNames, ["Mary Smith"]);
+});
+
 test("members index returns only lightweight list fields for the tenant", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const handler = createHandler({
@@ -1485,6 +1733,547 @@ test("updates the visitation type when editing a schedule event", async () => {
   assert.equal(storedEvent?.visitationType, "Phone Call");
   assert.equal(writtenVisitations.at(-1)?.type, "Phone Call");
   assert.equal(JSON.parse(String(response.body)).visitationType, "Phone Call");
+});
+
+test("editing an event can persist dismissed auto-linked members", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "google_connection",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account",
+                email: "owner@example.com",
+                accessToken: "token-123",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-03T12:00:00.000Z",
+                lastConnectedAt: "2026-06-03T12:00:00.000Z",
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "CALENDAR#calendar-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "CALENDAR#calendar-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_calendar",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                summary: "Main Calendar",
+                primary: true,
+                enabled: true,
+                selected: true,
+                sync: {
+                  syncMode: "ALWAYS_GOOGLE",
+                  refreshIntervalMinutes: 15,
+                  initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                  lastSyncStatus: "idle",
+                  requiresFullSync: false,
+                },
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "EVENT#calendar-1#event-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "EVENT#calendar-1#event-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_event",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                eventId: "event-1",
+                googleEventId: "event-1",
+                calendarName: "Main Calendar",
+                summary: "Meeting with adel@example.com",
+                attendees: ["adel@example.com"],
+                start: "2026-06-04T15:00:00.000Z",
+                end: "2026-06-04T16:00:00.000Z",
+                allDay: false,
+                status: "confirmed",
+                source: "GOOGLE",
+                autoLinkedMemberIds: ["member-1"],
+                autoLinkedMemberNames: ["Adel Abraham"],
+                autoLinkedVisitationType: "Meeting",
+                memberIds: [],
+                memberNames: [],
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+          if (values[":pk"] === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
+                  type: "Meeting",
+                  memberId: "member-1",
+                  memberIds: ["member-1"],
+                  memberNames: ["Adel Abraham"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Owner Example",
+                  createdByUserId: "user-123",
+                  createdByName: "Owner Example",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  title: "Meeting with adel@example.com",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  allDay: false,
+                  visitStatus: "scheduled",
+                  eventId: "event-1",
+                  calendarEventId: "event-1",
+                  calendarId: "calendar-1",
+                  calendarOwnerUserId: "user-123",
+                  calendarOwnerName: "Owner Example",
+                },
+              ],
+            };
+          }
+
+          if (values[":gsiPk"] === "TENANT#tenant-abc#MEMBERS") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#adel abraham#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  fullName: "Adel Abraham",
+                  initials: "AA",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  email: "adel@example.com",
+                  normalizedSearchText: "adel abraham adel@example.com",
+                },
+              ],
+            };
+          }
+
+          return { Items: [] };
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          return { Responses: { "records-table": [] } };
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: "event-1",
+        summary: "Meeting with adel@example.com",
+        attendees: [{ email: "adel@example.com" }],
+        start: { dateTime: "2026-06-04T15:00:00.000Z" },
+        end: { dateTime: "2026-06-04T16:00:00.000Z" },
+        status: "confirmed",
+        extendedProperties: {
+          private: {
+            memberIds: "",
+          },
+        },
+      }),
+    }) as Response,
+    now: () => "2026-06-03T13:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events/event-1",
+      pathParameters: { eventId: "event-1" },
+      body: JSON.stringify({
+        calendarId: "calendar-1",
+        memberIds: [],
+        dismissedAutoLinkedMemberIds: ["member-1"],
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "PUT",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const eventPut = [...commands].reverse().find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string } | undefined)?.entityType === "schedule_event",
+  );
+  assert.deepEqual((eventPut?.input.Item as { autoLinkedMemberIds?: string[] }).autoLinkedMemberIds, []);
+  assert.deepEqual((eventPut?.input.Item as { dismissedAutoLinkedMemberIds?: string[] }).dismissedAutoLinkedMemberIds, ["member-1"]);
+  const visitationDeletes = commands.filter(
+    (command) =>
+      command.name === "DeleteCommand" &&
+      (command.input.Key as { PK?: string } | undefined)?.PK === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+  );
+  assert.ok(visitationDeletes.length >= 1);
+  const responseBody = JSON.parse(String(response.body)) as {
+    autoLinkedMemberIds?: string[];
+    dismissedAutoLinkedMemberIds?: string[];
+  };
+  assert.deepEqual(responseBody.autoLinkedMemberIds, []);
+  assert.deepEqual(responseBody.dismissedAutoLinkedMemberIds, ["member-1"]);
+});
+
+test("editing an event keeps remaining auto-linked members after dismissing one", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "google_connection",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account",
+                email: "owner@example.com",
+                accessToken: "token-123",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-03T12:00:00.000Z",
+                lastConnectedAt: "2026-06-03T12:00:00.000Z",
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "CALENDAR#calendar-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "CALENDAR#calendar-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_calendar",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                summary: "Main Calendar",
+                primary: true,
+                enabled: true,
+                selected: true,
+                sync: {
+                  syncMode: "ALWAYS_GOOGLE",
+                  refreshIntervalMinutes: 15,
+                  initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                  lastSyncStatus: "idle",
+                  requiresFullSync: false,
+                },
+              },
+            };
+          }
+
+          if (key.PK === "USER#user-123" && key.SK === "EVENT#calendar-1#event-1") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "EVENT#calendar-1#event-1",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "schedule_event",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarId: "calendar-1",
+                eventId: "event-1",
+                googleEventId: "event-1",
+                calendarName: "Main Calendar",
+                summary: "Meeting with adel@example.com and mary@example.com",
+                attendees: ["adel@example.com", "mary@example.com"],
+                start: "2026-06-04T15:00:00.000Z",
+                end: "2026-06-04T16:00:00.000Z",
+                allDay: false,
+                status: "confirmed",
+                source: "GOOGLE",
+                autoLinkedMemberIds: ["member-1", "member-2"],
+                autoLinkedMemberNames: ["Adel Abraham", "Mary Smith"],
+                autoLinkedVisitationType: "Meeting",
+                memberIds: [],
+                memberNames: [],
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+          if (values[":pk"] === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
+                  type: "Meeting",
+                  memberId: "member-1",
+                  memberIds: ["member-1", "member-2"],
+                  memberNames: ["Adel Abraham", "Mary Smith"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Owner Example",
+                  createdByUserId: "user-123",
+                  createdByName: "Owner Example",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  title: "Meeting with adel@example.com and mary@example.com",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  allDay: false,
+                  visitStatus: "scheduled",
+                  eventId: "event-1",
+                  calendarEventId: "event-1",
+                  calendarId: "calendar-1",
+                  calendarOwnerUserId: "user-123",
+                  calendarOwnerName: "Owner Example",
+                },
+                {
+                  PK: "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1",
+                  SK: "MEMBER#member-2",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "VISITATION",
+                  tenantId: "tenant-abc",
+                  visitationId: "CALENDAR#calendar-1#EVENT#event-1",
+                  source: "calendar",
+                  type: "Meeting",
+                  memberId: "member-2",
+                  memberIds: ["member-1", "member-2"],
+                  memberNames: ["Adel Abraham", "Mary Smith"],
+                  visitorUserId: "user-123",
+                  visitorDisplayName: "Owner Example",
+                  createdByUserId: "user-123",
+                  createdByName: "Owner Example",
+                  visitDate: "2026-06-04T15:00:00.000Z",
+                  title: "Meeting with adel@example.com and mary@example.com",
+                  endDate: "2026-06-04T16:00:00.000Z",
+                  allDay: false,
+                  visitStatus: "scheduled",
+                  eventId: "event-1",
+                  calendarEventId: "event-1",
+                  calendarId: "calendar-1",
+                  calendarOwnerUserId: "user-123",
+                  calendarOwnerName: "Owner Example",
+                },
+              ],
+            };
+          }
+
+          if (values[":gsiPk"] === "TENANT#tenant-abc#MEMBERS") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#adel abraham#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  fullName: "Adel Abraham",
+                  initials: "AA",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  email: "adel@example.com",
+                  normalizedSearchText: "adel abraham adel@example.com",
+                },
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-2",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#mary smith#member-2",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-2",
+                  fullName: "Mary Smith",
+                  initials: "MS",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  email: "mary@example.com",
+                  normalizedSearchText: "mary smith mary@example.com",
+                },
+              ],
+            };
+          }
+
+          return { Items: [] };
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          const requestItems = command.input.RequestItems as Record<string, { Keys?: Array<{ PK: string; SK: string }> }>;
+          const keys = requestItems["records-table"]?.Keys ?? [];
+          return {
+            Responses: {
+              "records-table": keys
+                .map((key) => {
+                  if (key.SK === "MEMBER#member-2") {
+                    return {
+                      PK: "TENANT#tenant-abc",
+                      SK: "MEMBER#member-2",
+                      createdAt: "2026-06-03T12:00:00.000Z",
+                      updatedAt: "2026-06-03T12:00:00.000Z",
+                      entityType: "MEMBER",
+                      tenantId: "tenant-abc",
+                      memberId: "member-2",
+                      fullName: "Mary Smith",
+                      initials: "MS",
+                      source: "UNITY",
+                      isUnityMember: true,
+                      email: "mary@example.com",
+                      normalizedSearchText: "mary smith mary@example.com",
+                    };
+                  }
+                  return null;
+                })
+                .filter(Boolean),
+            },
+          };
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: "event-1",
+        summary: "Meeting with adel@example.com and mary@example.com",
+        attendees: [{ email: "adel@example.com" }, { email: "mary@example.com" }],
+        start: { dateTime: "2026-06-04T15:00:00.000Z" },
+        end: { dateTime: "2026-06-04T16:00:00.000Z" },
+        status: "confirmed",
+        extendedProperties: {
+          private: {
+            memberIds: "",
+          },
+        },
+      }),
+    }) as Response,
+    now: () => "2026-06-03T13:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events/event-1",
+      pathParameters: { eventId: "event-1" },
+      body: JSON.stringify({
+        calendarId: "calendar-1",
+        memberIds: [],
+        dismissedAutoLinkedMemberIds: ["member-1"],
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "PUT",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const eventPut = [...commands].reverse().find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string } | undefined)?.entityType === "schedule_event",
+  );
+  assert.deepEqual((eventPut?.input.Item as { autoLinkedMemberIds?: string[] }).autoLinkedMemberIds, ["member-2"]);
+
+  const visitationPut = [...commands].reverse().find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string; memberId?: string } | undefined)?.entityType === "VISITATION" &&
+      (command.input.Item as { memberId?: string } | undefined)?.memberId === "member-2",
+  );
+  assert.deepEqual((visitationPut?.input.Item as { memberIds?: string[] }).memberIds, ["member-2"]);
+  assert.deepEqual((visitationPut?.input.Item as { memberNames?: string[] }).memberNames, ["Mary Smith"]);
+
+  const responseBody = JSON.parse(String(response.body)) as {
+    autoLinkedMemberIds?: string[];
+    dismissedAutoLinkedMemberIds?: string[];
+  };
+  assert.deepEqual(responseBody.autoLinkedMemberIds, ["member-2"]);
+  assert.deepEqual(responseBody.dismissedAutoLinkedMemberIds, ["member-1"]);
 });
 
 test("full sync restores member links from Google event private metadata", async () => {

@@ -170,6 +170,7 @@ type EventItem = BaseItem & {
   htmlLink?: string;
   autoLinkedMemberIds?: string[];
   autoLinkedMemberNames?: string[];
+  dismissedAutoLinkedMemberIds?: string[];
   autoLinkedVisitationType?: VisitationType;
   memberIds?: string[];
   memberNames?: string[];
@@ -828,6 +829,7 @@ const toScheduleEvent = (item: EventItem): ScheduleEvent => ({
   attendees: item.attendees,
   autoLinkedMemberIds: item.autoLinkedMemberIds,
   autoLinkedMemberNames: item.autoLinkedMemberNames,
+  dismissedAutoLinkedMemberIds: item.dismissedAutoLinkedMemberIds,
   autoLinkedVisitationType: item.autoLinkedVisitationType,
   calendarColor: item.calendarColor,
   calendarId: item.calendarId,
@@ -1984,6 +1986,7 @@ const persistEventWithMemberAssignments = async (
     ...normalizedEvent,
     memberIds: assignedMembers.map((member) => member.memberId),
     memberNames: assignedMembers.map((member) => member.fullName),
+    dismissedAutoLinkedMemberIds: normalizeMemberIds(normalizedEvent.dismissedAutoLinkedMemberIds),
     visitationType: assignedMembers.length ? normalizeVisitationType(normalizedEvent.visitationType) : undefined,
   };
   await putEvent(context, persistedEvent, deps);
@@ -3710,6 +3713,7 @@ const upsertGoogleEventIntoCache = async (
   );
 
   const existingItem = existingOverride ?? (existing.Item as EventItem | undefined);
+  const dismissedAutoLinkedMemberIds = normalizeMemberIds(existingItem?.dismissedAutoLinkedMemberIds);
   const metadataMemberIds = parseGoogleMemberIds(googleEvent.extendedProperties?.private?.memberIds);
   const memberIds = metadataMemberIds.length ? metadataMemberIds : normalizeMemberIds(existingItem?.memberIds);
   const existingVisitations = await listVisitationsForEvent(context, calendar.calendarId, googleEvent.id, deps);
@@ -3734,6 +3738,9 @@ const upsertGoogleEventIntoCache = async (
         },
         deps,
       );
+  const filteredAutoLinkedMembers = autoLinkedInteraction.matchedMembers.filter(
+    (member) => !dismissedAutoLinkedMemberIds.includes(member.memberId),
+  );
   const item: EventItem = {
     PK: userPk(context.actorSub),
     SK: eventSk(calendar.calendarId, googleEvent.id),
@@ -3759,8 +3766,9 @@ const upsertGoogleEventIntoCache = async (
     status: googleEvent.status ?? "confirmed",
     source,
     htmlLink: googleEvent.htmlLink,
-    autoLinkedMemberIds: autoLinkedInteraction.matchedMembers.map((member) => member.memberId),
-    autoLinkedMemberNames: autoLinkedInteraction.matchedMembers.map((member) => member.fullName),
+    autoLinkedMemberIds: filteredAutoLinkedMembers.map((member) => member.memberId),
+    autoLinkedMemberNames: filteredAutoLinkedMembers.map((member) => member.fullName),
+    dismissedAutoLinkedMemberIds,
     autoLinkedVisitationType: autoLinkedInteraction.interactionType,
     memberIds,
     visitationType: memberIds.length ? normalizeVisitationType(existingItem?.visitationType) : undefined,
@@ -3773,7 +3781,7 @@ const upsertGoogleEventIntoCache = async (
     },
     deps,
     {
-      autoLinkedMembers: autoLinkedInteraction.matchedMembers,
+      autoLinkedMembers: filteredAutoLinkedMembers,
       visitationTypeOverride: autoLinkedInteraction.interactionType,
     },
   );
@@ -4379,32 +4387,70 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
   }
 
   const eventLinks = await listMemberEvents(context, memberId, deps);
-  for (const link of eventLinks) {
-    await deps.documentClient.send(
-      new DeleteCommand({
-        Key: {
-          PK: tenantEventPk(context.tenantId, link.eventId),
-          SK: eventMemberSk(memberId),
-        },
-        TableName: context.tableName,
-      }),
-    );
+  const visitations = await listMemberVisitations(context, memberId, deps);
+  const affectedCalendarEvents = new Map<string, { calendarId: string; eventId: string }>();
 
-    await deps.documentClient.send(
-      new DeleteCommand({
-        Key: {
-          PK: tenantVisitationPk(
-            context.tenantId,
-            eventVisitationId(link.calendarId, link.eventId),
-          ),
-          SK: visitationMemberSk(memberId),
-        },
-        TableName: context.tableName,
-      }),
+  for (const link of eventLinks) {
+    affectedCalendarEvents.set(`${link.calendarId}#${link.eventId}`, {
+      calendarId: link.calendarId,
+      eventId: link.eventId,
+    });
+  }
+
+  for (const visitation of visitations) {
+    if (visitation.source !== "calendar" || !visitation.calendarId || !visitation.eventId) {
+      continue;
+    }
+
+    affectedCalendarEvents.set(`${visitation.calendarId}#${visitation.eventId}`, {
+      calendarId: visitation.calendarId,
+      eventId: visitation.eventId,
+    });
+  }
+
+  for (const { calendarId, eventId } of affectedCalendarEvents.values()) {
+    const event = await getEvent(context, calendarId, eventId, deps);
+    if (!event) {
+      continue;
+    }
+
+    const nextAssignedMemberIds = normalizeMemberIds(event.memberIds).filter((id) => id !== memberId);
+    const nextAutoLinkedMemberIds = normalizeMemberIds(event.autoLinkedMemberIds).filter((id) => id !== memberId);
+    const nextDismissedAutoLinkedMemberIds = normalizeMemberIds(event.dismissedAutoLinkedMemberIds).filter((id) => id !== memberId);
+    const nextAutoLinkedMembers = await loadMembersByIds(context, nextAutoLinkedMemberIds, deps);
+
+    await persistEventWithMemberAssignments(
+      context,
+      {
+        ...event,
+        memberIds: nextAssignedMemberIds,
+        autoLinkedMemberIds: nextAutoLinkedMembers.map((item) => item.memberId),
+        autoLinkedMemberNames: nextAutoLinkedMembers.map((item) => item.fullName),
+        dismissedAutoLinkedMemberIds: nextDismissedAutoLinkedMemberIds,
+      },
+      deps,
+      {
+        autoLinkedMembers: nextAutoLinkedMembers,
+        visitationTypeOverride: event.autoLinkedVisitationType,
+      },
     );
   }
 
-  const manualVisitations = await listMemberVisitations(context, memberId, deps);
+  for (const visitation of visitations.filter((item) => item.source === "manual")) {
+    const group = await getVisitationGroup(context, visitation.visitationId, deps);
+    const nextMembers = await loadMembersByIds(
+      context,
+      group.map((item) => item.memberId).filter((id) => id !== memberId),
+      deps,
+    );
+
+    await persistManualVisitationGroup(context, visitation.visitationId, group, {
+      ...visitation,
+      memberIds: nextMembers.map((item) => item.memberId),
+    }, deps);
+  }
+
+  const manualVisitations = visitations;
   for (const visitation of manualVisitations.filter((item) => item.source === "manual")) {
     await deps.documentClient.send(
       new DeleteCommand({
@@ -5665,15 +5711,11 @@ const buildGoogleEventBody = (
     ...(description ? { description } : {}),
     ...(location ? { location } : {}),
     attendees,
-    ...(memberIds.length
-      ? {
-        extendedProperties: {
-          private: {
-            memberIds: serializeGoogleMemberIds(memberIds),
-          },
-        },
-      }
-      : {}),
+    extendedProperties: {
+      private: {
+        memberIds: serializeGoogleMemberIds(memberIds),
+      },
+    },
   };
 
   if (input.allDay) {
@@ -5716,6 +5758,7 @@ const createScheduleEvent = async (
   const nextInput: CreateScheduleEventInput = {
     ...input,
     memberIds: resolvedMemberIds,
+    dismissedAutoLinkedMemberIds: normalizeMemberIds(input.dismissedAutoLinkedMemberIds),
   };
 
   const response = await googleFetch(
@@ -5734,6 +5777,7 @@ const createScheduleEvent = async (
   const stored = await upsertGoogleEventIntoCache(context, calendar, created, "GOOGLE", undefined, deps);
   const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
+    dismissedAutoLinkedMemberIds: nextInput.dismissedAutoLinkedMemberIds,
     memberIds: resolvedMemberIds,
     visitationType: input.type,
   }, deps);
@@ -5776,6 +5820,7 @@ const updateScheduleEvent = async (
     end: input.end ?? existing.end,
     allDay: input.allDay ?? existing.allDay,
     memberIds: input.memberIds ?? existing.memberIds,
+    dismissedAutoLinkedMemberIds: input.dismissedAutoLinkedMemberIds ?? existing.dismissedAutoLinkedMemberIds,
     householdIds: input.householdIds,
     type: input.type ?? existing.visitationType,
   };
@@ -5800,12 +5845,33 @@ const updateScheduleEvent = async (
 
   const updated = (await response.json()) as GoogleEventPayload;
 
-  const stored = await upsertGoogleEventIntoCache(context, calendar, updated, "GOOGLE", undefined, deps);
+  const stored = await upsertGoogleEventIntoCache(
+    context,
+    calendar,
+    updated,
+    "GOOGLE",
+    {
+      ...existing,
+      dismissedAutoLinkedMemberIds: nextEvent.dismissedAutoLinkedMemberIds,
+      memberIds: nextEvent.memberIds,
+      visitationType: nextEvent.type,
+    },
+    deps,
+  );
+  const persistedAutoLinkedMembers = await loadMembersByIds(context, stored.autoLinkedMemberIds ?? [], deps);
+  const autoLinkedVisitationTypeOverride =
+    persistedAutoLinkedMembers.length && !normalizeMemberIds(nextEvent.memberIds).length
+      ? stored.autoLinkedVisitationType
+      : undefined;
   const updatedStored = await persistEventWithMemberAssignments(context, {
     ...stored,
+    dismissedAutoLinkedMemberIds: nextEvent.dismissedAutoLinkedMemberIds,
     memberIds: nextEvent.memberIds ?? [],
     visitationType: nextEvent.type,
-  }, deps);
+  }, deps, {
+    autoLinkedMembers: persistedAutoLinkedMembers,
+    visitationTypeOverride: autoLinkedVisitationTypeOverride,
+  });
   return json(200, toScheduleEvent(updatedStored));
 };
 

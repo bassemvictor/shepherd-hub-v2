@@ -21,6 +21,7 @@ import {
   ChevronRight,
   Clock3,
   FileText,
+  Link2,
   List,
   Mail,
   MapPin,
@@ -37,6 +38,7 @@ import { Navigate, useLocation, useNavigate, useSearchParams } from "react-route
 
 import type {
   CreateScheduleEventInput,
+  EventMemberSummary,
   HouseholdSummary,
   MemberIndexItem,
   ScheduleCalendar,
@@ -97,12 +99,17 @@ type EventFormState = {
   end: string;
   allDay: boolean;
   autoLinkedMemberIds: string[];
+  dismissedAutoLinkedMemberIds: string[];
   autoLinkedVisitationType?: VisitationType;
   memberIds: string[];
   memberQuery: string;
   householdIds: string[];
   householdQuery: string;
   visitationType: VisitationType;
+};
+
+type SelectedMember = Pick<EventMemberSummary, "memberId" | "fullName" | "initials"> & {
+  source: "manual" | "auto";
 };
 
 const fullCalendarPlugins = [dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin];
@@ -520,8 +527,9 @@ const buildOptionalEventFields = (form: EventFormState) => {
     ...(description ? { description } : {}),
     ...(location ? { location } : {}),
     ...(attendees.length ? { attendees } : {}),
-    ...(form.memberIds.length ? { memberIds: form.memberIds } : {}),
-    ...(form.householdIds.length ? { householdIds: form.householdIds } : {}),
+    memberIds: form.memberIds,
+    dismissedAutoLinkedMemberIds: form.dismissedAutoLinkedMemberIds,
+    householdIds: form.householdIds,
     ...(form.memberIds.length ? { type: normalizeVisitationType(form.visitationType) } : {}),
   };
 };
@@ -622,6 +630,7 @@ const emptyEventForm = (calendarId = ""): EventFormState => {
     end: toLocalDateTimeInputFromDate(end),
     allDay: false,
     autoLinkedMemberIds: [],
+    dismissedAutoLinkedMemberIds: [],
     autoLinkedVisitationType: undefined,
     memberIds: [],
     memberQuery: "",
@@ -641,6 +650,7 @@ const eventToFormState = (event: ScheduleEvent): EventFormState => ({
   end: event.allDay ? shiftDateOnlyValue(normalizeAllDayEndValue(event.end), -1) : toLocalDateTimeInput(event.end),
   allDay: event.allDay,
   autoLinkedMemberIds: event.autoLinkedMemberIds ?? [],
+  dismissedAutoLinkedMemberIds: event.dismissedAutoLinkedMemberIds ?? [],
   autoLinkedVisitationType: event.autoLinkedVisitationType,
   memberIds: event.memberIds ?? [],
   memberQuery: "",
@@ -667,6 +677,7 @@ const createFormFromSelection = (
   end: allDay ? shiftDateOnlyValue(toDateOnlyValue(endValue), -1) : toLocalDateTimeInputFromDate(snapDateToQuarterHour(endValue)),
   allDay,
   autoLinkedMemberIds: [],
+  dismissedAutoLinkedMemberIds: [],
   autoLinkedVisitationType: undefined,
   memberIds: [],
   memberQuery: "",
@@ -695,6 +706,7 @@ const createIntentFormFromSearchParams = (
     location: memberAddress,
     attendeesText: memberEmail,
     autoLinkedMemberIds: [],
+    dismissedAutoLinkedMemberIds: [],
     autoLinkedVisitationType: undefined,
     memberIds: [memberId],
     householdIds: [],
@@ -740,6 +752,8 @@ const EventEditor = ({
 }: EventEditorProps) => {
   const navigate = useNavigate();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [activeAutoLinkedMemberTooltipId, setActiveAutoLinkedMemberTooltipId] = useState<string | null>(null);
+  const autoLinkedMemberExplanation = "Automatically linked from the event title or attendees";
 
   useEffect(() => {
     if (!open) {
@@ -752,21 +766,87 @@ const EventEditor = ({
     );
   }, [mode, open]);
 
+  useEffect(() => {
+    setActiveAutoLinkedMemberTooltipId(null);
+  }, [open]);
+
   if (!open) {
     return null;
   }
 
-  const selectedMembers = emptyMemberSelection(memberIndex, form.memberIds);
-  const autoLinkedMembers = emptyMemberSelection(
-    memberIndex,
-    form.autoLinkedMemberIds.filter((memberId) => !form.memberIds.includes(memberId)),
+  const selectedMembers: SelectedMember[] = emptyMemberSelection(memberIndex, form.memberIds)
+    .map((member) => ({ ...member, source: "manual" }));
+  const visibleAutoLinkedMemberIds = form.autoLinkedMemberIds.filter(
+    (memberId) => !form.memberIds.includes(memberId) && !form.dismissedAutoLinkedMemberIds.includes(memberId),
   );
+  const autoLinkedMembers: SelectedMember[] = emptyMemberSelection(memberIndex, visibleAutoLinkedMemberIds)
+    .map((member) => ({ ...member, source: "auto" }));
   const totalLinkedMembers = selectedMembers.length + autoLinkedMembers.length;
+  const selectedMemberIds = [...new Set([...form.memberIds, ...visibleAutoLinkedMemberIds])];
   const editorTitle = mode === "create" ? "New Event" : "Edit Event";
   const editorDescription = mode === "create" ? "Create a new calendar event." : "Update the calendar event details.";
   const primaryActionLabel = mode === "create" ? "Create Event" : "Save Changes";
   const sectionCardClassName = "space-y-3 rounded-[1.2rem] border border-border/80 bg-card/96 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur dark:shadow-[0_14px_32px_rgba(0,0,0,0.24)] sm:p-3.5";
   const fieldClassName = "h-10 rounded-xl border-border bg-card px-3 text-sm shadow-sm shadow-slate-200/35 transition focus:border-primary focus:ring-primary/10 dark:shadow-black/20";
+
+  const removeSelectedMember = (memberId: string, source: SelectedMember["source"]) => {
+    if (source === "auto") {
+      setActiveAutoLinkedMemberTooltipId((current) => (current === memberId ? null : current));
+      onChange({
+        ...form,
+        dismissedAutoLinkedMemberIds: [...new Set([...form.dismissedAutoLinkedMemberIds, memberId])],
+      });
+      return;
+    }
+
+    onChange(
+      applyMemberSelectionToForm(
+        form,
+        form.memberIds.filter((currentId) => currentId !== memberId),
+        memberIndex,
+      ),
+    );
+  };
+
+  const addManualMember = (memberId: string) => {
+    onChange(
+      applyMemberSelectionToForm(
+        {
+          ...form,
+          dismissedAutoLinkedMemberIds: form.dismissedAutoLinkedMemberIds.filter((currentId) => currentId !== memberId),
+        },
+        [...new Set([...form.memberIds, memberId])],
+        memberIndex,
+      ),
+    );
+  };
+
+  const renderAutoLinkedAccessory = (memberId: string) => (
+    <span className="relative flex items-center">
+      <button
+        aria-describedby={activeAutoLinkedMemberTooltipId === memberId ? `auto-linked-member-tooltip-${memberId}` : undefined}
+        aria-label={autoLinkedMemberExplanation}
+        className="rounded-sm p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-500 focus-visible:bg-slate-100 focus-visible:text-slate-500"
+        onBlur={() => setActiveAutoLinkedMemberTooltipId((current) => (current === memberId ? null : current))}
+        onClick={() => setActiveAutoLinkedMemberTooltipId((current) => (current === memberId ? null : memberId))}
+        onMouseEnter={() => setActiveAutoLinkedMemberTooltipId(memberId)}
+        onMouseLeave={() => setActiveAutoLinkedMemberTooltipId((current) => (current === memberId ? null : current))}
+        title={autoLinkedMemberExplanation}
+        type="button"
+      >
+        <Link2 className="h-3.5 w-3.5" />
+      </button>
+      {activeAutoLinkedMemberTooltipId === memberId ? (
+        <span
+          className="absolute bottom-full left-1/2 z-10 mb-2 w-44 -translate-x-1/2 rounded-lg border border-border bg-white px-2 py-1.5 text-[11px] font-medium leading-snug text-slate-600 shadow-lg"
+          id={`auto-linked-member-tooltip-${memberId}`}
+          role="tooltip"
+        >
+          {autoLinkedMemberExplanation}
+        </span>
+      ) : null}
+    </span>
+  );
 
   const applyDurationPreset = (minutes: number) => {
     const startDate = parseLocalDateTimeInput(form.start);
@@ -808,47 +888,23 @@ const EventEditor = ({
           items={memberIndex}
           maxResults={24}
           onQueryChange={(value) => onChange({ ...form, memberQuery: value })}
-          onSelect={(member) =>
-            onChange(
-              applyMemberSelectionToForm(
-                form,
-                [...new Set([...form.memberIds, member.memberId])],
-                memberIndex,
-              ),
-            )
-          }
+          onSelect={(member) => addManualMember(member.memberId)}
           placeholder="Search members..."
           query={form.memberQuery}
-          selectedIds={form.memberIds}
+          selectedIds={selectedMemberIds}
         />
         <div className="space-y-1.5">
           <div className="text-sm font-semibold text-muted-foreground">Selected ({totalLinkedMembers})</div>
           {totalLinkedMembers ? (
             <div className="flex flex-wrap gap-1.5">
-              {selectedMembers.map((member) => (
+              {[...selectedMembers, ...autoLinkedMembers].map((member) => (
                 <MemberChip
-                  key={member.memberId}
+                  accessory={member.source === "auto" ? renderAutoLinkedAccessory(member.memberId) : undefined}
+                  key={`${member.source}-${member.memberId}`}
                   member={member}
                   onClick={(memberId) => navigate(`/members/${memberId}`)}
-                  onRemove={(memberId) =>
-                    onChange(
-                      applyMemberSelectionToForm(
-                        form,
-                        form.memberIds.filter((currentId) => currentId !== memberId),
-                        memberIndex,
-                      ),
-                    )
-                  }
+                  onRemove={(memberId) => removeSelectedMember(memberId, member.source)}
                 />
-              ))}
-              {autoLinkedMembers.map((member) => (
-                <div key={member.memberId} className="space-y-1">
-                  <MemberChip
-                    member={member}
-                    onClick={(memberId) => navigate(`/members/${memberId}`)}
-                  />
-                  <div className="px-1 text-[11px] text-muted-foreground">Auto-linked from the event title or attendees.</div>
-                </div>
               ))}
             </div>
           ) : (
