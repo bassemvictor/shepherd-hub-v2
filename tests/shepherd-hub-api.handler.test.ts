@@ -2496,7 +2496,7 @@ test("full sync restores member links from Google event private metadata", async
   assert.match(JSON.stringify(memberLinkWrite?.input), /"GSI3PK":"TENANT#tenant-abc#EVENT_ASSIGNMENTS"/);
 });
 
-test("full Google sync auto-links meeting-prefixed events to matching members by email", async () => {
+test("full Google sync auto-links meeting-prefixed events to all matching members by email", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
 
@@ -2588,6 +2588,23 @@ test("full Google sync auto-links meeting-prefixed events to matching members by
                   isUnityMember: true,
                   normalizedSearchText: "mary mina mary@example.com",
                 },
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-2",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#john gira#MEMBER#member-2",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-2",
+                  fullName: "John Gira",
+                  initials: "JG",
+                  email: "john@example.com",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "john gira john@example.com",
+                },
               ],
             };
           }
@@ -2615,10 +2632,11 @@ test("full Google sync auto-links meeting-prefixed events to matching members by
           items: [
             {
               id: "event-1",
-              summary: "  Meeting: Reach Mary at MARY@example.com  ",
+              summary: "  Meeting: Reach Mary at MARY@example.com and John at JOHN@example.com  ",
               attendees: [
                 { email: "mary@example.com" },
                 { email: "MARY@example.com" },
+                { email: "john@example.com" },
               ],
               start: { dateTime: "2026-06-04T15:00:00.000Z" },
               end: { dateTime: "2026-06-04T16:00:00.000Z" },
@@ -2658,25 +2676,227 @@ test("full Google sync auto-links meeting-prefixed events to matching members by
   ) as APIGatewayProxyStructuredResultV2;
 
   assert.equal(response.statusCode, 200);
-  const visitationPut = commands.find(
+  const visitationPuts = commands.filter(
     (command) =>
       command.name === "PutCommand" &&
-      (command.input.Item as { entityType?: string; memberId?: string } | undefined)?.entityType === "VISITATION" &&
-      (command.input.Item as { memberId?: string } | undefined)?.memberId === "member-1",
+      (command.input.Item as { entityType?: string } | undefined)?.entityType === "VISITATION",
   );
-  assert.ok(visitationPut);
-  assert.equal((visitationPut?.input.Item as { type?: string }).type, "Meeting");
-  assert.equal((visitationPut?.input.Item as { eventId?: string }).eventId, "event-1");
-  assert.equal((visitationPut?.input.Item as { calendarEventId?: string }).calendarEventId, "event-1");
+  assert.equal(visitationPuts.length, 2);
+  assert.deepEqual(
+    visitationPuts.map((command) => (command.input.Item as { memberId?: string }).memberId).sort(),
+    ["member-1", "member-2"],
+  );
+  visitationPuts.forEach((command) => {
+    assert.equal((command.input.Item as { type?: string }).type, "Meeting");
+    assert.equal((command.input.Item as { eventId?: string }).eventId, "event-1");
+    assert.equal((command.input.Item as { calendarEventId?: string }).calendarEventId, "event-1");
+  });
   const eventPut = commands.find(
     (command) =>
       command.name === "PutCommand" &&
       (command.input.Item as { entityType?: string } | undefined)?.entityType === "schedule_event",
   );
-  assert.deepEqual((eventPut?.input.Item as { autoLinkedMemberIds?: string[] }).autoLinkedMemberIds, ["member-1"]);
+  assert.deepEqual(
+    (eventPut?.input.Item as { autoLinkedMemberIds?: string[] }).autoLinkedMemberIds,
+    ["member-1", "member-2"],
+  );
   assert.equal((eventPut?.input.Item as { autoLinkedVisitationType?: string }).autoLinkedVisitationType, "Meeting");
   assert.deepEqual((eventPut?.input.Item as { memberIds?: string[] }).memberIds, []);
   assert.equal(commands.some((command) => command.name === "TransactWriteCommand"), false);
+});
+
+test("full Google sync auto-links meeting-prefixed events to all matching members named in the title", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-06-03T12:00:00.000Z",
+                updatedAt: "2026-06-03T12:00:00.000Z",
+                entityType: "GOOGLE_CONNECTION",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account-1",
+                email: "owner@example.com",
+                accessToken: "access-token",
+                refreshToken: "refresh-token",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-06-03T12:00:00.000Z",
+                lastConnectedAt: "2026-06-03T12:00:00.000Z",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":calendarPrefix"] === "CALENDAR#") {
+            return {
+              Items: [
+                {
+                  PK: "USER#user-123",
+                  SK: "CALENDAR#calendar-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "schedule_calendar",
+                  userId: "user-123",
+                  tenantId: "tenant-abc",
+                  calendarId: "calendar-1",
+                  summary: "Main Calendar",
+                  primary: true,
+                  enabled: true,
+                  selected: true,
+                  backgroundColor: "#2563eb",
+                  sync: {
+                    syncMode: "ALWAYS_GOOGLE",
+                    refreshIntervalMinutes: 15,
+                    initialSyncRange: { from: "2026-01-01", to: "2027-12-31" },
+                    lastSyncStatus: "idle",
+                    requiresFullSync: true,
+                  },
+                },
+              ],
+            };
+          }
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":eventPrefix"] === "EVENT#calendar-1#") {
+            return { Items: [] };
+          }
+
+          if (command.input.IndexName === "GSI1" && values?.[":gsiPk"] === "TENANT#tenant-abc#MEMBERS") {
+            return {
+              Items: [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#mary mina#MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  fullName: "Mary Mina",
+                  initials: "MM",
+                  email: "mary@example.com",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "mary mina mary@example.com",
+                },
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-2",
+                  GSI1PK: "TENANT#tenant-abc#MEMBERS",
+                  GSI1SK: "NAME#john gira#MEMBER#member-2",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-2",
+                  fullName: "John Gira",
+                  initials: "JG",
+                  email: "john@example.com",
+                  source: "UNITY",
+                  isUnityMember: true,
+                  normalizedSearchText: "john gira john@example.com",
+                },
+              ],
+            };
+          }
+
+          if (values?.[":pk"] === "TENANT#tenant-abc#EVENT#event-1") {
+            return { Items: [] };
+          }
+
+          if (values?.[":pk"] === "TENANT#tenant-abc#VISITATION#CALENDAR#calendar-1#EVENT#event-1") {
+            return { Items: [] };
+          }
+
+          if (command.input.IndexName === "GSI1") {
+            return { Items: [] };
+          }
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async () =>
+      ({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              id: "event-1",
+              summary: "Meeting: Mary Mina and John Gira",
+              attendees: [],
+              start: { dateTime: "2026-06-04T15:00:00.000Z" },
+              end: { dateTime: "2026-06-04T16:00:00.000Z" },
+            },
+          ],
+          nextSyncToken: "sync-token-1",
+        }),
+      }) as Response,
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+      queryStringParameters: {
+        forceSync: "true",
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const eventPut = commands.find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string } | undefined)?.entityType === "schedule_event",
+  );
+  assert.ok(eventPut);
+  assert.deepEqual(
+    (eventPut?.input.Item as { autoLinkedMemberIds?: string[] }).autoLinkedMemberIds,
+    ["member-1", "member-2"],
+  );
+  const visitationPuts = commands.filter(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string } | undefined)?.entityType === "VISITATION",
+  );
+  assert.equal(visitationPuts.length, 2);
 });
 
 test("Google sync skips auto-link when the event already has a visitation entry", async () => {

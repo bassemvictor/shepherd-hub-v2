@@ -683,6 +683,12 @@ const extractEmails = (...values: Array<unknown>) => {
   return [...found];
 };
 
+const includesNormalizedName = (value: string, candidate: string) =>
+  value === candidate
+  || value.startsWith(`${candidate} `)
+  || value.endsWith(` ${candidate}`)
+  || value.includes(` ${candidate} `);
+
 const toOptionalString = (value: unknown) => {
   const normalized = normalizeWhitespace(value);
   return normalized || undefined;
@@ -2343,9 +2349,19 @@ const resolveAutoLinkedInteractionMembers = async (
 
   const extractedEmails = extractEmails(event.summary, ...(event.attendees ?? []));
   const extractedEmailSet = new Set(extractedEmails);
+  const normalizedTitleBody = normalizeName(
+    normalizeWhitespace(event.summary)
+      .slice(matchedPrefix.prefix.length)
+      .replace(emailPattern, " "),
+  );
   const matchedMembers = (await listMembers(context, deps)).filter((member) => {
     const email = normalizeEmail(member.email);
-    return email ? extractedEmailSet.has(email) : false;
+    if (email && extractedEmailSet.has(email)) {
+      return true;
+    }
+
+    const normalizedMemberName = normalizeName(member.fullName);
+    return normalizedMemberName ? includesNormalizedName(normalizedTitleBody, normalizedMemberName) : false;
   });
 
   if (!matchedMembers.length) {
@@ -2354,6 +2370,7 @@ const resolveAutoLinkedInteractionMembers = async (
         calendarId: event.calendarId,
         extractedEmails,
         googleEventId: event.googleEventId ?? event.eventId,
+        normalizedTitleBody,
       },
     });
   }

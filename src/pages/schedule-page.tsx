@@ -566,12 +566,26 @@ const buildVisitationDescription = (memberIds: string[], memberIndex: MemberInde
   return memberNames.length ? `Members: ${memberNames.join(", ")}` : "";
 };
 
+const getVisibleAutoLinkedMemberIds = (
+  autoLinkedMemberIds: string[],
+  dismissedAutoLinkedMemberIds: string[],
+  memberIds: string[],
+) => autoLinkedMemberIds.filter(
+  (memberId) => !memberIds.includes(memberId) && !dismissedAutoLinkedMemberIds.includes(memberId),
+);
+
 const applyMemberSelectionToForm = (
   currentForm: EventFormState,
   nextMemberIds: string[],
   memberIndex: MemberIndexItem[],
 ): EventFormState => {
-  const hadMembers = currentForm.memberIds.length > 0;
+  const visibleAutoLinkedMemberIds = getVisibleAutoLinkedMemberIds(
+    currentForm.autoLinkedMemberIds,
+    currentForm.dismissedAutoLinkedMemberIds,
+    nextMemberIds,
+  );
+  const linkedMemberIds = [...new Set([...nextMemberIds, ...visibleAutoLinkedMemberIds])];
+  const hadMembers = currentForm.memberIds.length > 0 || currentForm.autoLinkedMemberIds.length > 0;
   const hasMembers = nextMemberIds.length > 0;
   const nextVisitationType = hasMembers
     ? (hadMembers ? normalizeVisitationType(currentForm.visitationType) : DEFAULT_VISITATION_TYPE)
@@ -585,11 +599,11 @@ const applyMemberSelectionToForm = (
     ...currentForm,
     summary:
       !currentForm.summary.trim() || isVisitationSummary(currentForm.summary)
-        ? buildVisitationSummary(nextMemberIds, memberIndex, nextVisitationType)
+        ? buildVisitationSummary(linkedMemberIds, memberIndex, nextVisitationType)
         : currentForm.summary,
     description:
       !currentForm.description.trim() || isVisitationDescription(currentForm.description)
-        ? buildVisitationDescription(nextMemberIds, memberIndex)
+        ? buildVisitationDescription(linkedMemberIds, memberIndex)
         : currentForm.description,
     location: currentForm.location,
     attendeesText,
@@ -776,8 +790,10 @@ const EventEditor = ({
 
   const selectedMembers: SelectedMember[] = emptyMemberSelection(memberIndex, form.memberIds)
     .map((member) => ({ ...member, source: "manual" }));
-  const visibleAutoLinkedMemberIds = form.autoLinkedMemberIds.filter(
-    (memberId) => !form.memberIds.includes(memberId) && !form.dismissedAutoLinkedMemberIds.includes(memberId),
+  const visibleAutoLinkedMemberIds = getVisibleAutoLinkedMemberIds(
+    form.autoLinkedMemberIds,
+    form.dismissedAutoLinkedMemberIds,
+    form.memberIds,
   );
   const autoLinkedMembers: SelectedMember[] = emptyMemberSelection(memberIndex, visibleAutoLinkedMemberIds)
     .map((member) => ({ ...member, source: "auto" }));
@@ -801,7 +817,12 @@ const EventEditor = ({
 
     onChange(
       applyMemberSelectionToForm(
-        form,
+        {
+          ...form,
+          dismissedAutoLinkedMemberIds: form.autoLinkedMemberIds.includes(memberId)
+            ? [...new Set([...form.dismissedAutoLinkedMemberIds, memberId])]
+            : form.dismissedAutoLinkedMemberIds,
+        },
         form.memberIds.filter((currentId) => currentId !== memberId),
         memberIndex,
       ),
