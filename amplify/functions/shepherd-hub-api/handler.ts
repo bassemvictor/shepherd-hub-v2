@@ -22,6 +22,7 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
 import * as XLSX from "xlsx";
+import { buildAddressBasedHouseholdName, normalizeAddress } from "../../../shared/address-normalization.js";
 import { visitationTypes } from "../../../shared/types.js";
 
 import type {
@@ -44,6 +45,7 @@ import type {
   Household,
   HouseholdDetailResponse,
   HouseholdDirectoryResponse,
+  HouseholdMatchResponse,
   HouseholdMemberSummary,
   HouseholdSummary,
   Member,
@@ -224,6 +226,12 @@ type MemberHouseholdItem = BaseItem & {
   householdId: string;
   memberId: string;
   householdName: string;
+};
+
+type HouseholdAddressLookupItem = BaseItem & {
+  tenantId: string;
+  addressKey: string;
+  householdId: string;
 };
 
 type EventMemberItem = BaseItem & {
@@ -524,6 +532,7 @@ const eventGsiPk = (userId: string, calendarId: string) => `USER#${userId}#CALEN
 const eventGsiSk = (start: string, eventId: string) => `EVENT#${start}#${eventId}`;
 const memberSk = (memberId: string) => `MEMBER#${memberId}`;
 const householdSk = (householdId: string) => `HOUSEHOLD#${householdId}`;
+const householdAddressLookupSk = (addressKey: string) => `HOUSEHOLD_ADDRESS#${addressKey}`;
 const tenantHouseholdPk = (tenantId: string, householdId: string) => `TENANT#${tenantId}#HOUSEHOLD#${householdId}`;
 const householdMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const memberHouseholdSk = () => "HOUSEHOLD";
@@ -913,6 +922,8 @@ const toMemberIndexItem = (item: MemberItem): MemberIndexItem => ({
   initials: item.initials,
   phone: item.phone,
   email: item.email,
+  address: item.address,
+  postalCode: item.postalCode,
   householdId: item.householdId,
   householdName: item.householdName,
   unityId: item.unityId,
@@ -941,6 +952,11 @@ const toHouseholdSummary = (
   householdId: item.householdId,
   householdName: item.householdName,
   address: item.address,
+  postalCode: item.postalCode,
+  normalizedAddress: item.normalizedAddress,
+  normalizedPostalCode: item.normalizedPostalCode,
+  unit: item.unit,
+  addressKey: item.addressKey,
   notes: item.notes,
   memberCount: item.memberCount,
   primaryContactMemberId: item.primaryContactMemberId,
@@ -1366,6 +1382,11 @@ const emptyImportResult = (): MemberImportResult => ({
   created: 0,
   updated: 0,
   skipped: 0,
+  householdsCreated: 0,
+  householdsMatched: 0,
+  membersAssignedToHouseholds: 0,
+  membersWithoutHouseholds: 0,
+  householdConflicts: 0,
   errorCount: 0,
   errors: [],
 });
@@ -2153,13 +2174,18 @@ const buildHouseholdSearchText = (
 const buildHouseholdItem = (
   context: RequestContext,
   householdId: string,
-  input: Pick<CreateHouseholdInput, "householdName" | "address" | "notes" | "primaryContactMemberId">,
+  input: Pick<CreateHouseholdInput, "householdName" | "address" | "postalCode" | "notes" | "primaryContactMemberId">,
   members: MemberItem[],
   deps: HandlerDependencies,
   existing?: HouseholdItem | null,
 ): HouseholdItem => {
   const householdName = normalizeWhitespace(input.householdName);
   const address = toOptionalString(input.address);
+  const postalCode = toOptionalString(input.postalCode) ?? existing?.postalCode;
+  const normalized = normalizeAddress({
+    address,
+    postalCode,
+  });
   const notes = toOptionalString(input.notes);
   const memberSummaries: HouseholdMemberSummary[] = members
     .map((member) => ({
@@ -2186,12 +2212,102 @@ const buildHouseholdItem = (
     householdId,
     householdName,
     address,
+    postalCode,
+    normalizedAddress: normalized.normalizedAddress,
+    normalizedPostalCode: normalized.normalizedPostalCode,
+    unit: normalized.unit,
+    addressKey: normalized.addressKey,
     notes,
     memberCount: memberSummaries.length,
     primaryContactMemberId: toOptionalString(input.primaryContactMemberId),
     members: memberSummaries,
     normalizedSearchText: buildHouseholdSearchText(householdName, address, notes, members),
   };
+};
+
+const buildHouseholdAddressLookupItem = (
+  context: RequestContext,
+  addressKey: string,
+  householdId: string,
+  deps: HandlerDependencies,
+  existing?: HouseholdAddressLookupItem | null,
+): HouseholdAddressLookupItem => ({
+  PK: tenantPk(context.tenantId),
+  SK: householdAddressLookupSk(addressKey),
+  createdAt: existing?.createdAt ?? deps.now(),
+  updatedAt: deps.now(),
+  entityType: "HOUSEHOLD_ADDRESS_LOOKUP",
+  tenantId: context.tenantId,
+  addressKey,
+  householdId,
+});
+
+const getHouseholdAddressLookup = async (
+  context: RequestContext,
+  addressKey: string,
+  deps: HandlerDependencies,
+) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: householdAddressLookupSk(addressKey),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  return (response.Item as HouseholdAddressLookupItem | undefined) ?? null;
+};
+
+const findHouseholdsByAddressMatch = async (
+  context: RequestContext,
+  address: string | undefined,
+  postalCode: string | undefined,
+  deps: HandlerDependencies,
+) => {
+  const normalized = normalizeAddress({ address, postalCode });
+  if (!normalized.addressKey) {
+    return { normalized, households: [] as HouseholdItem[] };
+  }
+
+  const lookup = await getHouseholdAddressLookup(context, normalized.addressKey, deps);
+  if (lookup) {
+    const household = await getHousehold(context, lookup.householdId, deps);
+    return { normalized, households: household ? [household] : [] };
+  }
+
+  const households = (await listHouseholds(context, deps)).filter((household) => {
+    if (household.addressKey) {
+      return household.addressKey === normalized.addressKey;
+    }
+
+    const householdNormalized = normalizeAddress({
+      address: household.address,
+      postalCode: household.postalCode,
+    });
+
+    return householdNormalized.addressKey === normalized.addressKey;
+  });
+
+  const firstMatch = households[0];
+  if (firstMatch && !firstMatch.addressKey) {
+    try {
+      const membership = await listHouseholdMembers(context, firstMatch.householdId, deps);
+      await updateHouseholdMembership(context, firstMatch.householdId, {
+        householdName: firstMatch.householdName,
+        address: firstMatch.address,
+        postalCode: firstMatch.postalCode ?? postalCode,
+        notes: firstMatch.notes,
+        memberIds: membership.map((member) => member.memberId),
+        primaryContactMemberId: firstMatch.primaryContactMemberId,
+      }, deps, firstMatch);
+    } catch {
+      // Best effort repair; matching still succeeds even if the lookup write races.
+    }
+  }
+
+  return { normalized, households };
 };
 
 const getMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
@@ -2206,6 +2322,133 @@ const getMemberImportJob = async (context: RequestContext, jobId: string, deps: 
   );
 
   return (response.Item as MemberImportJobItem | undefined) ?? null;
+};
+
+const ensureMemberAssignedToHousehold = async (
+  context: RequestContext,
+  member: MemberItem,
+  household: HouseholdItem,
+  deps: HandlerDependencies,
+) => {
+  if (member.householdId === household.householdId) {
+    return false;
+  }
+
+  const membership = await listHouseholdMembers(context, household.householdId, deps);
+  await updateHouseholdMembership(context, household.householdId, {
+    householdName: household.householdName,
+    address: household.address,
+    postalCode: household.postalCode,
+    notes: household.notes,
+    memberIds: [...new Set([...membership.map((entry) => entry.memberId), member.memberId])],
+    primaryContactMemberId: household.primaryContactMemberId,
+  }, deps, household, { allowReassign: true });
+
+  await logMemberActivity(
+    context,
+    member.memberId,
+    "Household Assigned",
+    `Automatically assigned to ${household.householdName} during Unity import.`,
+    deps,
+    { householdId: household.householdId, source: "unity_import" },
+  );
+
+  return true;
+};
+
+const resolveImportHouseholdAssignment = async (
+  context: RequestContext,
+  member: MemberItem,
+  deps: HandlerDependencies,
+) => {
+  const normalized = normalizeAddress({ address: member.address, postalCode: member.postalCode });
+  if (!normalized.addressKey) {
+    return {
+      householdCreated: 0,
+      householdMatched: 0,
+      memberAssigned: 0,
+      memberWithoutHousehold: member.householdId ? 0 : 1,
+      conflict: 0,
+    };
+  }
+
+  if (member.householdId) {
+    const household = await getHousehold(context, member.householdId, deps);
+    if (household?.addressKey && household.addressKey !== normalized.addressKey) {
+      await logMemberActivity(
+        context,
+        member.memberId,
+        "Household Address Review",
+        `Imported address differs from the assigned household address for ${household.householdName}.`,
+        deps,
+        {
+          householdId: household.householdId,
+          householdAddressKey: household.addressKey,
+          importedAddressKey: normalized.addressKey,
+          source: "unity_import",
+        },
+      );
+      return {
+        householdCreated: 0,
+        householdMatched: 0,
+        memberAssigned: 0,
+        memberWithoutHousehold: 0,
+        conflict: 1,
+      };
+    }
+
+    return {
+      householdCreated: 0,
+      householdMatched: 0,
+      memberAssigned: 0,
+      memberWithoutHousehold: 0,
+      conflict: 0,
+    };
+  }
+
+  const { households } = await findHouseholdsByAddressMatch(
+    context,
+    member.address,
+    member.postalCode,
+    deps,
+  );
+  const household = households[0];
+  if (household) {
+    const assigned = await ensureMemberAssignedToHousehold(context, member, household, deps);
+    return {
+      householdCreated: 0,
+      householdMatched: 1,
+      memberAssigned: assigned ? 1 : 0,
+      memberWithoutHousehold: 0,
+      conflict: 0,
+    };
+  }
+
+  const householdId = deps.uuid();
+  const createdHousehold = await updateHouseholdMembership(context, householdId, {
+    householdName: buildAddressBasedHouseholdName(member.address),
+    address: member.address,
+    postalCode: member.postalCode,
+    notes: undefined,
+    memberIds: [member.memberId],
+  }, deps, null);
+
+  await logMemberActivity(
+    context,
+    member.memberId,
+    "Household Assigned",
+    `Automatically assigned to ${createdHousehold.householdName} during Unity import.`,
+    deps,
+    { householdId: createdHousehold.householdId, source: "unity_import" },
+  );
+
+  return {
+    householdCreated: 1,
+    householdMatched: 0,
+    memberAssigned: 1,
+    memberWithoutHousehold: 0,
+    conflict: 0,
+  };
 };
 
 const listMemberImportChunks = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
@@ -2239,6 +2482,11 @@ const processImportRow = async (
       created: 0,
       updated: 0,
       skipped: 1,
+      householdsCreated: 0,
+      householdsMatched: 0,
+      membersAssignedToHouseholds: 0,
+      membersWithoutHouseholds: 0,
+      householdConflicts: 0,
       errors: [],
     };
   }
@@ -2288,6 +2536,7 @@ const processImportRow = async (
     member.notes = existing?.notes;
     await putMember(context, member, deps);
     existingMembersByUnityId.set(unityId, member);
+    const householdAssignment = await resolveImportHouseholdAssignment(context, member, deps);
     await logMemberActivity(
       context,
       member.memberId,
@@ -2300,6 +2549,11 @@ const processImportRow = async (
       created: existing ? 0 : 1,
       updated: existing ? 1 : 0,
       skipped: 0,
+      householdsCreated: householdAssignment.householdCreated,
+      householdsMatched: householdAssignment.householdMatched,
+      membersAssignedToHouseholds: householdAssignment.memberAssigned,
+      membersWithoutHouseholds: householdAssignment.memberWithoutHousehold,
+      householdConflicts: householdAssignment.conflict,
       errors: [],
     };
   } catch (error) {
@@ -2307,6 +2561,11 @@ const processImportRow = async (
       created: 0,
       updated: 0,
       skipped: 0,
+      householdsCreated: 0,
+      householdsMatched: 0,
+      membersAssignedToHouseholds: 0,
+      membersWithoutHouseholds: 0,
+      householdConflicts: 0,
       errors: [
         {
           row: row.rowNumber,
@@ -2969,6 +3228,12 @@ const updateHouseholdMembership = async (
   }
 
   const household = buildHouseholdItem(context, householdId, input, members, deps, existing);
+  if (household.addressKey) {
+    const lookup = await getHouseholdAddressLookup(context, household.addressKey, deps);
+    if (lookup && lookup.householdId !== householdId) {
+      throw new HttpError(409, "A household already exists for this address.");
+    }
+  }
   const existingMembers = existing ? await listHouseholdMembers(context, householdId, deps) : [];
   const nextIds = new Set(memberIds);
   const transactItems: Array<Record<string, unknown>> = [
@@ -2979,6 +3244,27 @@ const updateHouseholdMembership = async (
       },
     },
   ];
+
+  if (existing?.addressKey && existing.addressKey !== household.addressKey) {
+    transactItems.push({
+      Delete: {
+        Key: {
+          PK: tenantPk(context.tenantId),
+          SK: householdAddressLookupSk(existing.addressKey),
+        },
+        TableName: context.tableName,
+      },
+    });
+  }
+
+  if (household.addressKey) {
+    transactItems.push({
+      Put: {
+        Item: buildHouseholdAddressLookupItem(context, household.addressKey, householdId, deps),
+        TableName: context.tableName,
+      },
+    });
+  }
 
   const priorHouseholdIds = [...new Set([...reassignedLinks.values()].map((link) => link.householdId))];
   for (const priorHouseholdId of priorHouseholdIds) {
@@ -3003,6 +3289,7 @@ const updateHouseholdMembership = async (
       {
         householdName: priorHousehold.householdName,
         address: priorHousehold.address,
+        postalCode: priorHousehold.postalCode,
         notes: priorHousehold.notes,
         primaryContactMemberId:
           priorHousehold.primaryContactMemberId && movedMemberIds.has(priorHousehold.primaryContactMemberId)
@@ -4241,6 +4528,7 @@ const updateHousehold = async (
   const merged: CreateHouseholdInput = {
     householdName: input.householdName ?? existing.householdName,
     address: input.address ?? existing.address,
+    postalCode: input.postalCode ?? existing.postalCode,
     notes: input.notes ?? existing.notes,
     memberIds: input.memberIds ?? membership.map((member) => member.memberId),
     primaryContactMemberId: input.primaryContactMemberId ?? existing.primaryContactMemberId,
@@ -4274,7 +4562,41 @@ const deleteHousehold = async (context: RequestContext, householdId: string, dep
     }),
   );
 
+  if (household.addressKey) {
+    await deps.documentClient.send(
+      new DeleteCommand({
+        Key: {
+          PK: tenantPk(context.tenantId),
+          SK: householdAddressLookupSk(household.addressKey),
+        },
+        TableName: context.tableName,
+      }),
+    );
+  }
+
   return json(200, { deleted: true, householdId });
+};
+
+const matchHouseholdByAddress = async (
+  context: RequestContext,
+  input: { address?: string; postalCode?: string },
+  deps: HandlerDependencies,
+) => {
+  const { normalized, households } = await findHouseholdsByAddressMatch(
+    context,
+    toOptionalString(input.address),
+    toOptionalString(input.postalCode),
+    deps,
+  );
+
+  return json(200, {
+    normalizedAddress: normalized.normalizedAddress,
+    normalizedPostalCode: normalized.normalizedPostalCode,
+    unit: normalized.unit,
+    addressKey: normalized.addressKey,
+    status: households.length ? "MATCH" : "NO_MATCH",
+    matches: households.map((household) => toHouseholdSummary(household)),
+  } satisfies HouseholdMatchResponse);
 };
 
 const attachMemberToHousehold = async (
@@ -4298,6 +4620,7 @@ const attachMemberToHousehold = async (
   const updated = await updateHouseholdMembership(context, householdId, {
     householdName: household.householdName,
     address: household.address,
+    postalCode: household.postalCode,
     notes: household.notes,
     memberIds,
     primaryContactMemberId: household.primaryContactMemberId,
@@ -4322,6 +4645,7 @@ const removeMemberFromHousehold = async (
   const updated = await updateHouseholdMembership(context, householdId, {
     householdName: household.householdName,
     address: household.address,
+    postalCode: household.postalCode,
     notes: household.notes,
     memberIds: nextIds,
     primaryContactMemberId:
@@ -4393,6 +4717,7 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
       await updateHouseholdMembership(context, household.householdId, {
         householdName: household.householdName,
         address: household.address,
+        postalCode: household.postalCode,
         notes: household.notes,
         memberIds: (await listHouseholdMembers(context, household.householdId, deps))
           .map((item) => item.memberId)
@@ -4580,7 +4905,17 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
       .map((member) => [member.unityId as string, member]),
   );
   const chunksToProcess = chunks.slice(0, importJobChunksPerRequest);
-  let chunkResult = { created: 0, updated: 0, skipped: 0, errors: [] as MemberImportResult["errors"] };
+  let chunkResult = {
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    householdsCreated: 0,
+    householdsMatched: 0,
+    membersAssignedToHouseholds: 0,
+    membersWithoutHouseholds: 0,
+    householdConflicts: 0,
+    errors: [] as MemberImportResult["errors"],
+  };
   let processedRowDelta = 0;
   for (const chunk of chunksToProcess) {
     processedRowDelta += chunk.rowCount;
@@ -4590,6 +4925,11 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
         created: chunkResult.created + outcome.created,
         updated: chunkResult.updated + outcome.updated,
         skipped: chunkResult.skipped + outcome.skipped,
+        householdsCreated: chunkResult.householdsCreated + outcome.householdsCreated,
+        householdsMatched: chunkResult.householdsMatched + outcome.householdsMatched,
+        membersAssignedToHouseholds: chunkResult.membersAssignedToHouseholds + outcome.membersAssignedToHouseholds,
+        membersWithoutHouseholds: chunkResult.membersWithoutHouseholds + outcome.membersWithoutHouseholds,
+        householdConflicts: chunkResult.householdConflicts + outcome.householdConflicts,
         errors: [...chunkResult.errors, ...outcome.errors],
       };
     }
@@ -4605,10 +4945,15 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
   const processedRows = Math.min(job.totalRows, job.processedRows + processedRowDelta);
   const processedChunks = Math.min(job.totalChunks, job.processedChunks + chunksToProcess.length);
   const result: MemberImportResult = {
-    created: job.result.created + chunkResult.created,
-    updated: job.result.updated + chunkResult.updated,
-    skipped: job.result.skipped + chunkResult.skipped,
-    errorCount: job.result.errorCount + chunkResult.errors.length,
+    created: (job.result.created ?? 0) + chunkResult.created,
+    updated: (job.result.updated ?? 0) + chunkResult.updated,
+    skipped: (job.result.skipped ?? 0) + chunkResult.skipped,
+    householdsCreated: (job.result.householdsCreated ?? 0) + chunkResult.householdsCreated,
+    householdsMatched: (job.result.householdsMatched ?? 0) + chunkResult.householdsMatched,
+    membersAssignedToHouseholds: (job.result.membersAssignedToHouseholds ?? 0) + chunkResult.membersAssignedToHouseholds,
+    membersWithoutHouseholds: (job.result.membersWithoutHouseholds ?? 0) + chunkResult.membersWithoutHouseholds,
+    householdConflicts: (job.result.householdConflicts ?? 0) + chunkResult.householdConflicts,
+    errorCount: (job.result.errorCount ?? 0) + chunkResult.errors.length,
     errors: mergeImportErrors(job.result.errors, chunkResult.errors),
   };
   const status: MemberImportJobStatus = processedChunks >= job.totalChunks ? "completed" : "running";
@@ -6125,6 +6470,10 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       if (method === "GET" && path === "/households") {
         return await getHouseholds(context, typedEvent, deps);
+      }
+
+      if (method === "POST" && path === "/households/match") {
+        return await matchHouseholdByAddress(context, parseBody<{ address?: string; postalCode?: string }>(typedEvent.body), deps);
       }
 
       if (method === "POST" && path === "/households") {

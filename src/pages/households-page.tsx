@@ -10,6 +10,7 @@ import { LoadingState } from "../components/states/loading-state";
 import { PageHeader } from "../components/common/page-header";
 import { Button } from "../components/ui/button";
 import { api, isApiConfigured } from "../lib/api";
+import { isAdminUser, useAuth } from "../lib/auth";
 import { useHouseholdsIndex, refreshHouseholdsIndexCache } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
 
@@ -19,6 +20,7 @@ const PAGE_SIZE = 25;
 export const HouseholdsPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const {
     cacheScope,
     items: households,
@@ -140,6 +142,11 @@ export const HouseholdsPage = () => {
                 <div>
                   <div className="truncate text-sm font-semibold text-slate-900">{household.householdName}</div>
                   <div className="truncate text-xs text-muted-foreground">{household.address || "No address"}</div>
+                  {isAdminUser(user?.groups ?? []) && (household.normalizedAddress || household.addressKey) ? (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      {household.normalizedAddress || "No normalized address"} · {household.addressKey || "No address key"}
+                    </div>
+                  ) : null}
                 </div>
                 <MoreHorizontal className="h-4 w-4 shrink-0 text-muted-foreground" />
               </div>

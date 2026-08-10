@@ -361,6 +361,12 @@ export const MemberImportDialog = ({
             <p className="mt-1">
               {job.result.created} created, {job.result.updated} updated, {job.result.skipped} skipped.
             </p>
+            <p className="mt-1">
+              Households: {job.result.householdsCreated} created, {job.result.householdsMatched} matched, {job.result.membersAssignedToHouseholds} members assigned.
+            </p>
+            <p className="mt-1">
+              {job.result.membersWithoutHouseholds} members left without a household, {job.result.householdConflicts} conflicts.
+            </p>
             {job.result.errorCount ? <p className="mt-1 text-rose-600">{job.result.errorCount} rows had errors.</p> : null}
           </div>
         ) : null}

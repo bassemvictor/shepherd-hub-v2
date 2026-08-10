@@ -10,12 +10,14 @@ import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
 import { Button } from "../components/ui/button";
 import { api } from "../lib/api";
+import { isAdminUser, useAuth } from "../lib/auth";
 import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
 
 export const HouseholdDetailPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const { householdId = "" } = useParams();
   const { cacheScope } = useHouseholdsIndex();
   const { items: members } = useMembersIndex();
@@ -126,6 +128,11 @@ export const HouseholdDetailPage = () => {
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{household.householdName}</h1>
           </div>
           <div className="mt-1 text-sm text-muted-foreground">{household.address || "No address"}</div>
+          {isAdminUser(user?.groups ?? []) && (household.normalizedAddress || household.addressKey) ? (
+            <div className="mt-2 text-xs text-muted-foreground">
+              {household.normalizedAddress || "No normalized address"} · {household.addressKey || "No address key"}
+            </div>
+          ) : null}
           {household.notes ? <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{household.notes}</p> : null}
           <div className="mt-3 text-sm font-medium text-slate-900">{household.memberCount} members</div>
         </div>

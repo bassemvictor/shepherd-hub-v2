@@ -328,6 +328,11 @@ test("creates an async Unity import job when headers start below a title row", a
       created: 0,
       updated: 0,
       skipped: 0,
+      householdsCreated: 0,
+      householdsMatched: 0,
+      membersAssignedToHouseholds: 0,
+      membersWithoutHouseholds: 0,
+      householdConflicts: 0,
       errorCount: 0,
       errors: [],
     },
@@ -366,6 +371,11 @@ test("processes multiple member import job chunks in one request and completes t
                 created: 0,
                 updated: 0,
                 skipped: 0,
+                householdsCreated: 0,
+                householdsMatched: 0,
+                membersAssignedToHouseholds: 0,
+                membersWithoutHouseholds: 0,
+                householdConflicts: 0,
                 errorCount: 0,
                 errors: [],
               },
@@ -488,6 +498,11 @@ test("processes multiple member import job chunks in one request and completes t
       created: 2,
       updated: 0,
       skipped: 0,
+      householdsCreated: 0,
+      householdsMatched: 0,
+      membersAssignedToHouseholds: 0,
+      membersWithoutHouseholds: 2,
+      householdConflicts: 0,
       errorCount: 0,
       errors: [],
     },
@@ -907,6 +922,7 @@ test("members index returns only lightweight list fields for the tenant", async 
         initials: "AA",
         phone: "(613) 606-4114",
         email: "adel@example.com",
+        address: "123 Main St",
         householdName: "Abraham Household",
         unityId: "17317",
         isUnityImported: true,
@@ -917,7 +933,7 @@ test("members index returns only lightweight list fields for the tenant", async 
     ],
     generatedAt: "2026-06-09T12:00:00.000Z",
   });
-  assert.doesNotMatch(String(response.body), /address|notes/);
+  assert.doesNotMatch(String(response.body), /notes/);
 });
 
 test("stores visitation member links with VISITATION type", async () => {

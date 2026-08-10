@@ -51,10 +51,8 @@ import type {
 import { visitationTypes } from "../../shared/types";
 import {
   MemberChip,
-  MemberSearchAutocomplete,
   emptyMemberSelection,
 } from "../components/members/member-ui";
-import { HouseholdSearchAutocomplete } from "../components/members/household-ui";
 import { ConfirmDialog } from "../components/common/confirm-dialog";
 import { PageHeader } from "../components/common/page-header";
 import { RightSideDrawer } from "../components/common/right-side-drawer";
@@ -799,6 +797,11 @@ const EventEditor = ({
     .map((member) => ({ ...member, source: "auto" }));
   const totalLinkedMembers = selectedMembers.length + autoLinkedMembers.length;
   const selectedMemberIds = [...new Set([...form.memberIds, ...visibleAutoLinkedMemberIds])];
+  const memberResults = form.memberQuery.trim()
+    ? memberIndex
+      .filter((member) => !selectedMemberIds.includes(member.memberId) && member.normalizedSearchText.includes(form.memberQuery.trim().toLowerCase()))
+      .slice(0, 12)
+    : [];
   const editorTitle = mode === "create" ? "New Event" : "Edit Event";
   const editorDescription = mode === "create" ? "Create a new calendar event." : "Update the calendar event details.";
   const primaryActionLabel = mode === "create" ? "Create Event" : "Save Changes";
@@ -905,15 +908,72 @@ const EventEditor = ({
           </div>
           <p className="text-sm text-muted-foreground">Add one or more members to this event.</p>
         </div>
-        <MemberSearchAutocomplete
-          items={memberIndex}
-          maxResults={24}
-          onQueryChange={(value) => onChange({ ...form, memberQuery: value })}
-          onSelect={(member) => addManualMember(member.memberId)}
-          placeholder="Search members..."
-          query={form.memberQuery}
-          selectedIds={selectedMemberIds}
-        />
+        <label className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-2">
+          <Search className="h-3.5 w-3.5 text-muted-foreground" />
+          <input
+            className="w-full bg-transparent text-sm outline-none"
+            onChange={(event) => onChange({ ...form, memberQuery: event.target.value })}
+            placeholder="Search members..."
+            value={form.memberQuery}
+          />
+        </label>
+        {form.memberQuery.trim() ? (
+          memberResults.length ? (
+            <div className="max-h-72 overflow-y-auto rounded-md border border-border bg-white p-1 panel-shadow">
+              {memberResults.map((member) => {
+                const household = member.householdId
+                  ? households.find((item) => item.householdId === member.householdId)
+                  : undefined;
+
+                return (
+                  <div className="rounded-sm px-2 py-2 hover:bg-accent/50" key={member.memberId}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{member.fullName}</div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {member.address || member.householdName || member.email || member.phone || "No address"}
+                        </div>
+                        {household ? (
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            Household · {household.memberCount} members
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <Button onClick={() => addManualMember(member.memberId)} size="sm" type="button" variant="outline">
+                          Add member
+                        </Button>
+                        {household ? (
+                          <Button
+                            onClick={() => onChange(
+                              applyMemberSelectionToForm(
+                                {
+                                  ...form,
+                                  householdIds: [...new Set([...form.householdIds, household.householdId])],
+                                  memberQuery: "",
+                                },
+                                [...new Set([...form.memberIds, ...household.members.map((householdMember) => householdMember.memberId)])],
+                                memberIndex,
+                              ),
+                            )}
+                            size="sm"
+                            type="button"
+                          >
+                            Add household
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border bg-muted/35 px-3 py-2.5 text-sm text-muted-foreground">
+              No members match that search.
+            </div>
+          )
+        ) : null}
         <div className="space-y-1.5">
           <div className="text-sm font-semibold text-muted-foreground">Selected ({totalLinkedMembers})</div>
           {totalLinkedMembers ? (
@@ -957,57 +1017,6 @@ const EventEditor = ({
             </div>
           </label>
         ) : null}
-        <div className="space-y-1.5">
-          <div className="text-sm font-semibold text-muted-foreground">Households</div>
-          <HouseholdSearchAutocomplete
-            items={households.filter((item) => !form.householdIds.includes(item.householdId))}
-            onQueryChange={(value) => onChange({ ...form, householdQuery: value })}
-            onSelect={(household) => onChange(
-              applyMemberSelectionToForm(
-                {
-                  ...form,
-                  householdIds: [...new Set([...form.householdIds, household.householdId])],
-                  householdQuery: "",
-                },
-                [...new Set([...form.memberIds, ...household.members.map((member) => member.memberId)])],
-                memberIndex,
-              ),
-            )}
-            placeholder="Search households..."
-            query={form.householdQuery}
-          />
-          {form.householdIds.length ? (
-            <div className="flex flex-wrap gap-1.5">
-              {form.householdIds.map((householdId) => {
-                const household = households.find((item) => item.householdId === householdId);
-                if (!household) {
-                  return null;
-                }
-
-                return (
-                  <div className="inline-flex items-center gap-2 rounded-md border border-border bg-white px-2 py-1 text-xs" key={householdId}>
-                    <span className="font-medium">{household.householdName}</span>
-                    <span className="text-muted-foreground">{household.memberCount} members</span>
-                    <button
-                      className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      onClick={() => onChange({
-                        ...form,
-                        householdIds: form.householdIds.filter((currentId) => currentId !== householdId),
-                      })}
-                      type="button"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-border bg-muted/35 px-3 py-2.5 text-sm text-muted-foreground">
-              No households selected.
-            </div>
-          )}
-        </div>
       </section>
 
       <section className={sectionCardClassName}>

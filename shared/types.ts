@@ -180,6 +180,8 @@ export type MemberIndexItem = {
   initials: string;
   phone?: string;
   email?: string;
+  address?: string;
+  postalCode?: string;
   householdId?: string;
   householdName?: string;
   unityId?: string;
@@ -440,6 +442,11 @@ export type HouseholdSummary = EntityEnvelope & {
   householdId: string;
   householdName: string;
   address?: string;
+  postalCode?: string;
+  normalizedAddress?: string;
+  normalizedPostalCode?: string;
+  unit?: string;
+  addressKey?: string;
   notes?: string;
   memberCount: number;
   primaryContactMemberId?: string;
@@ -462,6 +469,7 @@ export type HouseholdDetailResponse = {
 export type CreateHouseholdInput = {
   householdName: string;
   address?: string;
+  postalCode?: string;
   notes?: string;
   memberIds?: string[];
   primaryContactMemberId?: string;
@@ -473,10 +481,26 @@ export type AttachMemberToHouseholdInput = {
   householdId: string;
 };
 
+export type HouseholdMatchStatus = "MATCH" | "NO_MATCH";
+
+export type HouseholdMatchResponse = {
+  normalizedAddress?: string;
+  normalizedPostalCode?: string;
+  unit?: string;
+  addressKey?: string;
+  status: HouseholdMatchStatus;
+  matches: HouseholdSummary[];
+};
+
 export type MemberImportResult = {
   created: number;
   updated: number;
   skipped: number;
+  householdsCreated: number;
+  householdsMatched: number;
+  membersAssignedToHouseholds: number;
+  membersWithoutHouseholds: number;
+  householdConflicts: number;
   errorCount: number;
   errors: Array<{ row: number; message: string }>;
 };

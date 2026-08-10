@@ -16,10 +16,26 @@ export const householdsIndexQueryOptions = (cacheScope: string, enabled: boolean
   enabled,
   gcTime: 24 * 60 * 60 * 1000,
   queryFn: async () => {
-    const response = await api.get<HouseholdDirectoryResponse>("/households?limit=100");
+    const items: HouseholdSummary[] = [];
+    let nextCursor: string | undefined;
+    let total = 0;
+
+    do {
+      const params = new URLSearchParams();
+      params.set("limit", "100");
+      if (nextCursor) {
+        params.set("cursor", nextCursor);
+      }
+
+      const response = await api.get<HouseholdDirectoryResponse>(`/households?${params.toString()}`);
+      items.push(...response.items);
+      nextCursor = response.nextCursor;
+      total = response.total;
+    } while (nextCursor);
+
     return {
-      items: response.items,
-      total: response.total,
+      items,
+      total,
     };
   },
   queryKey: householdsIndexQueryKey(cacheScope),

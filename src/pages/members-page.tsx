@@ -11,6 +11,7 @@ import { PageHeader } from "../components/common/page-header";
 import { Button } from "../components/ui/button";
 import { api, isApiConfigured } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { refreshMembersIndexCache, useMembersIndex } from "../lib/members-index";
 
 type SortMode = "az" | "recent";
@@ -42,6 +43,7 @@ export const MembersPage = () => {
     refresh,
     status: authStatus,
   } = useMembersIndex();
+  const { cacheScope: householdCacheScope } = useHouseholdsIndex();
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [sortMode, setSortMode] = useState<SortMode>("az");
@@ -149,7 +151,10 @@ export const MembersPage = () => {
           setImportJob(nextJob);
           if (nextJob.status === "completed") {
             window.sessionStorage.removeItem(activeImportJobStorageKey);
-            await refreshMembersIndexCache(queryClient, cacheScope);
+            await Promise.all([
+              refreshMembersIndexCache(queryClient, cacheScope),
+              refreshHouseholdsIndexCache(queryClient, householdCacheScope),
+            ]);
           }
         } catch (reason) {
           setError(reason instanceof Error ? reason.message : "Unable to refresh import status.");
@@ -158,7 +163,7 @@ export const MembersPage = () => {
     }, 1200);
 
     return () => window.clearTimeout(timer);
-  }, [cacheScope, importJob, queryClient]);
+  }, [cacheScope, householdCacheScope, importJob, queryClient]);
 
   if (!isApiConfigured) {
     return <ErrorState description="Set `VITE_API_BASE_URL` or regenerate `amplify_outputs.json` before using member APIs." title="API not configured" />;
