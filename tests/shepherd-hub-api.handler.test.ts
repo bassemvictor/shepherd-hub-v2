@@ -383,6 +383,41 @@ test("processes multiple member import job chunks in one request and completes t
           };
         }
 
+        if (command.constructor.name === "UpdateCommand") {
+          return {
+            Attributes: {
+              PK: "TENANT#tenant-abc",
+              SK: "MEMBER_IMPORT_JOB#import-job-1",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "MEMBER_IMPORT_JOB",
+              tenantId: "tenant-abc",
+              jobId: "import-job-1",
+              fileName: "Adel.xlsx",
+              status: "running",
+              totalRows: 2,
+              processedRows: 0,
+              totalChunks: 2,
+              processedChunks: 0,
+              startedAt: "2026-06-03T12:00:00.000Z",
+              leaseOwner: "member-1",
+              leaseExpiresAt: "2026-06-03T12:01:00.000Z",
+              result: {
+                created: 0,
+                updated: 0,
+                skipped: 0,
+                householdsCreated: 0,
+                householdsMatched: 0,
+                membersAssignedToHouseholds: 0,
+                membersWithoutHouseholds: 0,
+                householdConflicts: 0,
+                errorCount: 0,
+                errors: [],
+              },
+            },
+          };
+        }
+
         if (command.constructor.name === "QueryCommand") {
           if (command.input.IndexName === "GSI2") {
             return { Items: [] };
@@ -509,6 +544,205 @@ test("processes multiple member import job chunks in one request and completes t
   });
   assert.ok(commands.some((command) => command.name === "BatchWriteCommand"));
   assert.ok(commands.some((command) => command.name === "PutCommand"));
+});
+
+test("member import processing backs off when another lambda already holds the lease", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          return {
+            Item: {
+              PK: "TENANT#tenant-abc",
+              SK: "MEMBER_IMPORT_JOB#import-job-1",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "MEMBER_IMPORT_JOB",
+              tenantId: "tenant-abc",
+              jobId: "import-job-1",
+              fileName: "Adel.xlsx",
+              status: "running",
+              totalRows: 2,
+              processedRows: 1,
+              totalChunks: 2,
+              processedChunks: 1,
+              startedAt: "2026-06-03T12:00:00.000Z",
+              leaseOwner: "other-worker",
+              leaseExpiresAt: "2026-06-03T12:01:00.000Z",
+              result: {
+                created: 1,
+                updated: 0,
+                skipped: 0,
+                householdsCreated: 0,
+                householdsMatched: 0,
+                membersAssignedToHouseholds: 0,
+                membersWithoutHouseholds: 1,
+                householdConflicts: 0,
+                errorCount: 0,
+                errors: [],
+              },
+            },
+          };
+        }
+
+        if (command.constructor.name === "UpdateCommand") {
+          const error = new Error("The conditional request failed.");
+          error.name = "ConditionalCheckFailedException";
+          throw error;
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          throw new Error("chunks should not be queried when the lease is held");
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "worker-2",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/members/import/import-job-1",
+      pathParameters: {
+        jobId: "import-job-1",
+      },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(JSON.parse(String(response.body)), {
+    createdAt: "2026-06-03T12:00:00.000Z",
+    updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "MEMBER_IMPORT_JOB",
+    tenantId: "tenant-abc",
+    jobId: "import-job-1",
+    fileName: "Adel.xlsx",
+    status: "running",
+    totalRows: 2,
+    processedRows: 1,
+    totalChunks: 2,
+    processedChunks: 1,
+    startedAt: "2026-06-03T12:00:00.000Z",
+    result: {
+      created: 1,
+      updated: 0,
+      skipped: 0,
+      householdsCreated: 0,
+      householdsMatched: 0,
+      membersAssignedToHouseholds: 0,
+      membersWithoutHouseholds: 1,
+      householdConflicts: 0,
+      errorCount: 0,
+      errors: [],
+    },
+  });
+  assert.equal(commands.filter((command) => command.name === "UpdateCommand").length, 1);
+  assert.equal(commands.filter((command) => command.name === "QueryCommand").length, 0);
+});
+
+test("creating a household returns 409 when the normalized address is claimed concurrently", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "BatchGetCommand") {
+          return {
+            Responses: {
+              "records-table": [
+                {
+                  PK: "TENANT#tenant-abc",
+                  SK: "MEMBER#member-1",
+                  createdAt: "2026-06-03T12:00:00.000Z",
+                  updatedAt: "2026-06-03T12:00:00.000Z",
+                  entityType: "MEMBER",
+                  tenantId: "tenant-abc",
+                  memberId: "member-1",
+                  source: "MANUAL",
+                  isUnityMember: false,
+                  fullName: "Adel Abraham",
+                  firstName: "Adel",
+                  lastName: "Abraham",
+                  initials: "AA",
+                  normalizedSearchText: "adel abraham",
+                },
+              ],
+            },
+          };
+        }
+
+        if (command.constructor.name === "GetCommand") {
+          return {};
+        }
+
+        if (command.constructor.name === "TransactWriteCommand") {
+          const error = new Error("Transaction cancelled, please refer cancellation reasons for specific reasons.");
+          error.name = "TransactionCanceledException";
+          throw error;
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "household-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/households",
+      body: JSON.stringify({
+        householdName: "Abraham Household",
+        address: "123 Main St",
+        postalCode: "K2P 1L4",
+        memberIds: ["member-1"],
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 409);
+  assert.match(String(response.body), /A household already exists for this address/);
 });
 
 test("member responses ignore legacy role and status fields from stored items", async () => {

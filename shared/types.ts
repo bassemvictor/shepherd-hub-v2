@@ -427,9 +427,27 @@ export type MemberActivity = {
   createdAt: string;
 };
 
+export type HouseholdConflict = {
+  memberId: string;
+  memberFullName: string;
+  currentHouseholdId?: string;
+  currentHouseholdName?: string;
+  currentHouseholdAddress?: string;
+  currentHouseholdAddressKey?: string;
+  importedAddress?: string;
+  importedPostalCode?: string;
+  importedAddressKey?: string;
+  matchedHouseholdId?: string;
+  matchedHouseholdName?: string;
+  matchedHouseholdAddress?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type MemberDetailResponse = {
   member: Member;
   household?: HouseholdSummary;
+  householdConflict?: HouseholdConflict;
   activity: MemberActivity[];
 };
 
@@ -490,6 +508,20 @@ export type HouseholdMatchResponse = {
   addressKey?: string;
   status: HouseholdMatchStatus;
   matches: HouseholdSummary[];
+};
+
+export type HouseholdConflictListResponse = {
+  items: HouseholdConflict[];
+  total: number;
+};
+
+export type ResolveHouseholdConflictAction =
+  | "KEEP_CURRENT_HOUSEHOLD"
+  | "MOVE_TO_MATCHING_HOUSEHOLD"
+  | "CREATE_NEW_HOUSEHOLD";
+
+export type ResolveHouseholdConflictInput = {
+  action: ResolveHouseholdConflictAction;
 };
 
 export type MemberImportResult = {

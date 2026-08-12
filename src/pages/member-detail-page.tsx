@@ -6,12 +6,14 @@ import {
   Clock3,
   Ellipsis,
   FileText,
+  Home,
   Mail,
   MapPin,
   MessageCircleCheck,
   MessageCircle,
   MessagesSquare,
   Phone,
+  TriangleAlert,
   UserRound,
   Users,
 } from "lucide-react";
@@ -22,6 +24,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import type {
   CreateHouseholdInput,
   CreateManualVisitationInput,
+  HouseholdConflict,
   HouseholdSummary,
   Member,
   MemberActivity,
@@ -29,6 +32,7 @@ import type {
   MemberIndexItem,
   MemberVisitation,
   ReportVisitorOption,
+  ResolveHouseholdConflictAction,
   UpdateManualVisitationInput,
   VisitationType,
 } from "../../shared/types";
@@ -217,6 +221,7 @@ export const MemberDetailPage = () => {
   const { memberId = "" } = useParams();
   const [member, setMember] = useState<Member | null>(null);
   const [household, setHousehold] = useState<HouseholdSummary | null>(null);
+  const [householdConflict, setHouseholdConflict] = useState<HouseholdConflict | null>(null);
   const [activity, setActivity] = useState<MemberActivity[]>([]);
   const [visitations, setVisitations] = useState<MemberVisitation[]>([]);
   const {
@@ -260,6 +265,7 @@ export const MemberDetailPage = () => {
       ]);
       setMember(details.member);
       setHousehold(details.household ?? null);
+      setHouseholdConflict(details.householdConflict ?? null);
       setActivity(details.activity);
       setVisitations(memberEvents.items);
     } catch (reason) {
@@ -413,6 +419,19 @@ export const MemberDetailPage = () => {
       await refreshHouseholdData();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to remove member from household.");
+    } finally {
+      setHouseholdSaving(false);
+    }
+  }, [memberId, refreshHouseholdData]);
+
+  const handleResolveHouseholdConflict = useCallback(async (action: ResolveHouseholdConflictAction) => {
+    setHouseholdSaving(true);
+    setError(null);
+    try {
+      await api.post(`/household-conflicts/${memberId}/resolve`, { action });
+      await refreshHouseholdData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to resolve household conflict.");
     } finally {
       setHouseholdSaving(false);
     }
@@ -619,6 +638,80 @@ export const MemberDetailPage = () => {
         <div className="mt-3">
           <MemberDetailsTabs activeTab={activeTab} onChange={setActiveTab} />
         </div>
+
+        {householdConflict ? (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-left">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                <TriangleAlert className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-amber-900">Household address conflict</div>
+                <div className="mt-1 text-sm text-amber-900/85">
+                  This member&apos;s imported address does not match their current household assignment.
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-md border border-amber-200/80 bg-white/70 p-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-700">Current household</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">{householdConflict.currentHouseholdName || "No household"}</div>
+                    <div className="text-xs text-muted-foreground">{householdConflict.currentHouseholdAddress || "No household address"}</div>
+                  </div>
+                  <div className="rounded-md border border-amber-200/80 bg-white/70 p-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-700">Imported member address</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">{householdConflict.importedAddress || "No imported address"}</div>
+                    <div className="text-xs text-muted-foreground">{householdConflict.importedPostalCode || "No postal code"}</div>
+                  </div>
+                </div>
+                {householdConflict.matchedHouseholdName ? (
+                  <div className="mt-2 rounded-md border border-amber-200/80 bg-white/70 p-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-700">Suggested household</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">{householdConflict.matchedHouseholdName}</div>
+                    <div className="text-xs text-muted-foreground">{householdConflict.matchedHouseholdAddress || "No address"}</div>
+                  </div>
+                ) : null}
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                  <Button
+                    disabled={householdSaving}
+                    onClick={() => void handleResolveHouseholdConflict("KEEP_CURRENT_HOUSEHOLD")}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    Keep current household
+                  </Button>
+                  {householdConflict.matchedHouseholdId ? (
+                    <Button
+                      disabled={householdSaving}
+                      onClick={() => void handleResolveHouseholdConflict("MOVE_TO_MATCHING_HOUSEHOLD")}
+                      size="sm"
+                      type="button"
+                    >
+                      Move to matching household
+                    </Button>
+                  ) : null}
+                  <Button
+                    disabled={householdSaving}
+                    onClick={() => void handleResolveHouseholdConflict("CREATE_NEW_HOUSEHOLD")}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    Create new household
+                  </Button>
+                  <Button
+                    disabled={householdSaving}
+                    onClick={() => navigate("/reports/household-conflicts")}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    Review all conflicts
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-2.5 rounded-lg border border-border bg-background/50 p-3">
           {activeTab === "details" ? (

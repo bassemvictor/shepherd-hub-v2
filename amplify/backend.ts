@@ -169,7 +169,10 @@ addProtectedRoutes("/members/{memberId}/household", [HttpMethod.POST, HttpMethod
 addProtectedRoutes("/members/{memberId}/events", [HttpMethod.GET]);
 addProtectedRoutes("/members/{memberId}/visitations", [HttpMethod.POST]);
 addProtectedRoutes("/members/{memberId}/visitations/{visitationId}", [HttpMethod.PUT, HttpMethod.DELETE]);
+addProtectedRoutes("/household-conflicts", [HttpMethod.GET]);
+addProtectedRoutes("/household-conflicts/{memberId}/resolve", [HttpMethod.POST]);
 addProtectedRoutes("/households", [HttpMethod.GET, HttpMethod.POST]);
+addProtectedRoutes("/households/match", [HttpMethod.POST]);
 addProtectedRoutes("/households/{householdId}", [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE]);
 addProtectedRoutes("/households/{householdId}/members", [HttpMethod.POST]);
 addProtectedRoutes("/households/{householdId}/members/{memberId}", [HttpMethod.DELETE]);

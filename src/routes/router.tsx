@@ -8,6 +8,7 @@ import { AdminTenantResetPage } from "../pages/admin-tenant-reset-page";
 import { AdminUserGroupsPage } from "../pages/admin-user-groups-page";
 import { CalendarSettingsPage } from "../pages/calendar-settings-page";
 import { HouseholdDetailPage } from "../pages/household-detail-page";
+import { HouseholdConflictsReportPage } from "../pages/household-conflicts-report-page";
 import { HouseholdsPage } from "../pages/households-page";
 import { MemberDetailPage } from "../pages/member-detail-page";
 import { MembersPage } from "../pages/members-page";
@@ -72,6 +73,10 @@ export const router = createBrowserRouter([
       {
         path: "reports/member-visitation",
         element: <VisitationReportsPage reportView="members" />,
+      },
+      {
+        path: "reports/household-conflicts",
+        element: <HouseholdConflictsReportPage />,
       },
       {
         path: "members/:memberId",

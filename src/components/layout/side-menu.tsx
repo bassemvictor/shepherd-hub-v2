@@ -53,6 +53,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
         children: [
           { label: "Reports Overview", href: "/reports/dashboard" },
           { label: "Member Report", href: "/reports/member-visitation" },
+          { label: "Household Conflicts", href: "/reports/household-conflicts" },
         ],
       },
     ],

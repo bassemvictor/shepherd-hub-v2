@@ -14,13 +14,18 @@ const reportDestinations = [
     href: "/reports/member-visitation",
     icon: UsersRound,
   },
+  {
+    title: "Household Conflicts",
+    href: "/reports/household-conflicts",
+    icon: UsersRound,
+  },
 ] as const;
 
 export const ReportsHomePage = () => (
   <ReportsLayout title="Reports">
     <div className="min-h-[calc(100vh-15rem)] rounded-[1.5rem] border border-border/60 bg-[linear-gradient(180deg,#f8fafc_0%,#f3f6fb_100%)] px-4 py-5 dark:bg-[linear-gradient(180deg,#0d1728_0%,#0a1220_100%)] sm:px-6 sm:py-8 lg:px-10 lg:py-12">
       <div className="mx-auto flex max-w-5xl justify-center">
-        <div className="grid w-full max-w-xl grid-cols-1 gap-3 sm:max-w-[33rem] sm:grid-cols-2 sm:gap-4">
+        <div className="grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
           {reportDestinations.map((report) => {
             const Icon = report.icon;
 

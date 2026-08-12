@@ -19,6 +19,7 @@ import {
   QueryCommand,
   ScanCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
 import * as XLSX from "xlsx";
@@ -43,6 +44,8 @@ import type {
   GoogleConnectionSummary,
   InitialSyncRange,
   Household,
+  HouseholdConflict,
+  HouseholdConflictListResponse,
   HouseholdDetailResponse,
   HouseholdDirectoryResponse,
   HouseholdMatchResponse,
@@ -68,6 +71,7 @@ import type {
   ScheduleSettings,
   ReportPagination,
   ReportVisitorOption,
+  ResolveHouseholdConflictInput,
   ReportsMemberScope,
   ReportsMemberStatusFilter,
   ReportsMemberSourceFilter,
@@ -234,6 +238,22 @@ type HouseholdAddressLookupItem = BaseItem & {
   householdId: string;
 };
 
+type HouseholdConflictItem = BaseItem & {
+  tenantId: string;
+  memberId: string;
+  memberFullName: string;
+  currentHouseholdId?: string;
+  currentHouseholdName?: string;
+  currentHouseholdAddress?: string;
+  currentHouseholdAddressKey?: string;
+  importedAddress?: string;
+  importedPostalCode?: string;
+  importedAddressKey?: string;
+  matchedHouseholdId?: string;
+  matchedHouseholdName?: string;
+  matchedHouseholdAddress?: string;
+};
+
 type EventMemberItem = BaseItem & {
   tenantId: string;
   calendarId: string;
@@ -284,6 +304,8 @@ type MemberImportJobItem = BaseItem & {
   processedChunks: number;
   startedAt?: string;
   completedAt?: string;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
   result: MemberImportResult;
 };
 
@@ -339,6 +361,12 @@ type HandlerDependencies = {
   uuid: () => string;
   randomState: () => string;
   fetchImpl: typeof fetch;
+};
+
+type ImportExecutionState = {
+  existingMembersByUnityId: Map<string, MemberItem>;
+  householdsById: Map<string, HouseholdItem>;
+  householdsByAddressKey: Map<string, HouseholdItem>;
 };
 
 type AutoLinkedInteractionResult = {
@@ -533,6 +561,8 @@ const eventGsiSk = (start: string, eventId: string) => `EVENT#${start}#${eventId
 const memberSk = (memberId: string) => `MEMBER#${memberId}`;
 const householdSk = (householdId: string) => `HOUSEHOLD#${householdId}`;
 const householdAddressLookupSk = (addressKey: string) => `HOUSEHOLD_ADDRESS#${addressKey}`;
+const householdConflictSk = (memberId: string) => `HOUSEHOLD_CONFLICT#MEMBER#${memberId}`;
+const householdConflictSkPrefix = () => "HOUSEHOLD_CONFLICT#";
 const tenantHouseholdPk = (tenantId: string, householdId: string) => `TENANT#${tenantId}#HOUSEHOLD#${householdId}`;
 const householdMemberSk = (memberId: string) => `MEMBER#${memberId}`;
 const memberHouseholdSk = () => "HOUSEHOLD";
@@ -567,10 +597,44 @@ const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
 const isAdminGroup = (group: AppCognitoGroup) => group === "admin";
 const importJobChunkSize = 20;
-const importJobChunksPerRequest = 10;
+const importJobChunksPerRequest = 2;
 const importJobErrorLimit = 100;
+const importJobLeaseDurationMs = 60_000;
+const importTimingWarnThresholdMs = 200;
 
 const defaultCalendarListRefreshThresholdMinutes = 0;
+
+const getElapsedMs = (startedAt: number) => Date.now() - startedAt;
+const addMillisecondsToIso = (value: string, milliseconds: number) => new Date(Date.parse(value) + milliseconds).toISOString();
+
+const logImportTiming = (
+  stage: string,
+  startedAt: number,
+  details: Record<string, unknown> = {},
+) => {
+  const elapsedMs = getElapsedMs(startedAt);
+  if (elapsedMs < importTimingWarnThresholdMs) {
+    return elapsedMs;
+  }
+
+  console.log("[member-import]", JSON.stringify({
+    stage,
+    elapsedMs,
+    ...details,
+  }));
+
+  return elapsedMs;
+};
+
+const logImportEvent = (
+  stage: string,
+  details: Record<string, unknown> = {},
+) => {
+  console.log("[member-import]", JSON.stringify({
+    stage,
+    ...details,
+  }));
+};
 
 const defaultInitialSyncRange = (nowIso: string): InitialSyncRange => {
   const now = new Date(nowIso);
@@ -962,6 +1026,23 @@ const toHouseholdSummary = (
   primaryContactMemberId: item.primaryContactMemberId,
   members,
   normalizedSearchText: item.normalizedSearchText,
+});
+
+const toHouseholdConflict = (item: HouseholdConflictItem): HouseholdConflict => ({
+  memberId: item.memberId,
+  memberFullName: item.memberFullName,
+  currentHouseholdId: item.currentHouseholdId,
+  currentHouseholdName: item.currentHouseholdName,
+  currentHouseholdAddress: item.currentHouseholdAddress,
+  currentHouseholdAddressKey: item.currentHouseholdAddressKey,
+  importedAddress: item.importedAddress,
+  importedPostalCode: item.importedPostalCode,
+  importedAddressKey: item.importedAddressKey,
+  matchedHouseholdId: item.matchedHouseholdId,
+  matchedHouseholdName: item.matchedHouseholdName,
+  matchedHouseholdAddress: item.matchedHouseholdAddress,
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
 });
 
 const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({
@@ -1449,6 +1530,19 @@ const deleteKeysInBatches = async (
   }
 };
 
+const transactWriteInChunks = async (
+  documentClient: Pick<DynamoDBDocumentClient, "send">,
+  transactItems: Array<Record<string, unknown>>,
+) => {
+  for (const batch of chunkItems(transactItems, 25)) {
+    await documentClient.send(
+      new TransactWriteCommand({
+        TransactItems: batch,
+      }),
+    );
+  }
+};
+
 const queryAll = async (
   documentClient: Pick<DynamoDBDocumentClient, "send">,
   input: ConstructorParameters<typeof QueryCommand>[0],
@@ -1491,6 +1585,29 @@ const queryPage = async (
   documentClient: Pick<DynamoDBDocumentClient, "send">,
   input: ConstructorParameters<typeof QueryCommand>[0],
 ) => documentClient.send(new QueryCommand(input));
+
+const queryCount = async (
+  documentClient: Pick<DynamoDBDocumentClient, "send">,
+  input: ConstructorParameters<typeof QueryCommand>[0],
+) => {
+  let count = 0;
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const response = await documentClient.send(
+      new QueryCommand({
+        ...input,
+        ExclusiveStartKey: exclusiveStartKey,
+        Select: "COUNT",
+      }),
+    );
+
+    count += response.Count ?? 0;
+    exclusiveStartKey = response.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return count;
+};
 
 const scanAll = async (
   documentClient: Pick<DynamoDBDocumentClient, "send">,
@@ -2159,6 +2276,22 @@ const listHouseholds = async (context: RequestContext, deps: HandlerDependencies
   return items as HouseholdItem[];
 };
 
+const upsertHouseholdInImportState = (state: ImportExecutionState | undefined, household: HouseholdItem) => {
+  if (!state) {
+    return;
+  }
+
+  const previous = state.householdsById.get(household.householdId);
+  if (previous?.addressKey) {
+    state.householdsByAddressKey.delete(previous.addressKey);
+  }
+
+  state.householdsById.set(household.householdId, household);
+  if (household.addressKey) {
+    state.householdsByAddressKey.set(household.addressKey, household);
+  }
+};
+
 const buildHouseholdSearchText = (
   householdName: string,
   address: string | undefined,
@@ -2260,20 +2393,109 @@ const getHouseholdAddressLookup = async (
   return (response.Item as HouseholdAddressLookupItem | undefined) ?? null;
 };
 
+const getHouseholdConflict = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: householdConflictSk(memberId),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  const item = response.Item as HouseholdConflictItem | undefined;
+  return item?.entityType === "HOUSEHOLD_CONFLICT" ? item : null;
+};
+
+const listHouseholdConflicts = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantPk(context.tenantId),
+      ":sk": householdConflictSkPrefix(),
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :sk)",
+    TableName: context.tableName,
+  });
+
+  return (items as HouseholdConflictItem[]).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+};
+
+const putHouseholdConflict = async (
+  context: RequestContext,
+  item: HouseholdConflictItem,
+  deps: HandlerDependencies,
+) => {
+  await deps.documentClient.send(
+    new PutCommand({
+      Item: item,
+      TableName: context.tableName,
+    }),
+  );
+};
+
+const deleteHouseholdConflict = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
+  await deps.documentClient.send(
+    new DeleteCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: householdConflictSk(memberId),
+      },
+      TableName: context.tableName,
+    }),
+  );
+};
+
 const findHouseholdsByAddressMatch = async (
   context: RequestContext,
   address: string | undefined,
   postalCode: string | undefined,
   deps: HandlerDependencies,
+  state?: ImportExecutionState,
 ) => {
+  const startedAt = Date.now();
   const normalized = normalizeAddress({ address, postalCode });
   if (!normalized.addressKey) {
     return { normalized, households: [] as HouseholdItem[] };
   }
 
+  const cachedHousehold = state?.householdsByAddressKey.get(normalized.addressKey);
+  if (cachedHousehold) {
+    logImportTiming("findHouseholdsByAddressMatch", startedAt, {
+      addressKey: normalized.addressKey,
+      householdsMatched: 1,
+      lookupHit: true,
+      source: "import_state",
+    });
+    return { normalized, households: [cachedHousehold] };
+  }
+
   const lookup = await getHouseholdAddressLookup(context, normalized.addressKey, deps);
   if (lookup) {
     const household = await getHousehold(context, lookup.householdId, deps);
+    if (household) {
+      upsertHouseholdInImportState(state, household);
+    }
+    logImportTiming("findHouseholdsByAddressMatch", startedAt, {
+      addressKey: normalized.addressKey,
+      householdsMatched: household ? 1 : 0,
+      lookupHit: true,
+    });
     return { normalized, households: household ? [household] : [] };
   }
 
@@ -2294,7 +2516,7 @@ const findHouseholdsByAddressMatch = async (
   if (firstMatch && !firstMatch.addressKey) {
     try {
       const membership = await listHouseholdMembers(context, firstMatch.householdId, deps);
-      await updateHouseholdMembership(context, firstMatch.householdId, {
+      const repairedHousehold = await updateHouseholdMembership(context, firstMatch.householdId, {
         householdName: firstMatch.householdName,
         address: firstMatch.address,
         postalCode: firstMatch.postalCode ?? postalCode,
@@ -2302,13 +2524,51 @@ const findHouseholdsByAddressMatch = async (
         memberIds: membership.map((member) => member.memberId),
         primaryContactMemberId: firstMatch.primaryContactMemberId,
       }, deps, firstMatch);
+      upsertHouseholdInImportState(state, repairedHousehold);
     } catch {
       // Best effort repair; matching still succeeds even if the lookup write races.
     }
   }
 
+  logImportTiming("findHouseholdsByAddressMatch", startedAt, {
+    addressKey: normalized.addressKey,
+    householdsMatched: households.length,
+    lookupHit: false,
+  });
+
   return { normalized, households };
 };
+
+const buildHouseholdConflictItem = (
+  context: RequestContext,
+  member: MemberItem,
+  currentHousehold: HouseholdItem,
+  deps: HandlerDependencies,
+  options: {
+    importedAddressKey?: string;
+    matchedHousehold?: HouseholdItem | null;
+    existing?: HouseholdConflictItem | null;
+  } = {},
+): HouseholdConflictItem => ({
+  PK: tenantPk(context.tenantId),
+  SK: householdConflictSk(member.memberId),
+  createdAt: options.existing?.createdAt ?? deps.now(),
+  updatedAt: deps.now(),
+  entityType: "HOUSEHOLD_CONFLICT",
+  tenantId: context.tenantId,
+  memberId: member.memberId,
+  memberFullName: member.fullName,
+  currentHouseholdId: currentHousehold.householdId,
+  currentHouseholdName: currentHousehold.householdName,
+  currentHouseholdAddress: currentHousehold.address,
+  currentHouseholdAddressKey: currentHousehold.addressKey,
+  importedAddress: member.address,
+  importedPostalCode: member.postalCode,
+  importedAddressKey: options.importedAddressKey,
+  matchedHouseholdId: options.matchedHousehold?.householdId,
+  matchedHouseholdName: options.matchedHousehold?.householdName,
+  matchedHouseholdAddress: options.matchedHousehold?.address,
+});
 
 const getMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
   const response = await deps.documentClient.send(
@@ -2324,25 +2584,86 @@ const getMemberImportJob = async (context: RequestContext, jobId: string, deps: 
   return (response.Item as MemberImportJobItem | undefined) ?? null;
 };
 
+const tryAcquireMemberImportJobLease = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
+  const now = deps.now();
+  const leaseOwner = deps.uuid();
+  const leaseExpiresAt = addMillisecondsToIso(now, importJobLeaseDurationMs);
+
+  try {
+    const response = await deps.documentClient.send(
+      new UpdateCommand({
+        Key: {
+          PK: tenantPk(context.tenantId),
+          SK: memberImportJobSk(jobId),
+        },
+        TableName: context.tableName,
+        UpdateExpression: "SET updatedAt = :updatedAt, startedAt = if_not_exists(startedAt, :startedAt), #status = :status, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt",
+        ConditionExpression: "#status <> :completed AND #status <> :failed AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)",
+        ExpressionAttributeNames: {
+          "#status": "status",
+        },
+        ExpressionAttributeValues: {
+          ":updatedAt": now,
+          ":startedAt": now,
+          ":status": "running",
+          ":leaseOwner": leaseOwner,
+          ":leaseExpiresAt": leaseExpiresAt,
+          ":completed": "completed",
+          ":failed": "failed",
+          ":now": now,
+        },
+        ReturnValues: "ALL_NEW",
+      }),
+    );
+
+    return (response.Attributes as MemberImportJobItem | undefined) ?? null;
+  } catch (error) {
+    if (
+      error instanceof Error
+      && (error.name === "ConditionalCheckFailedException" || error.name === "TransactionCanceledException")
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
+};
+
 const ensureMemberAssignedToHousehold = async (
   context: RequestContext,
   member: MemberItem,
   household: HouseholdItem,
   deps: HandlerDependencies,
+  state?: ImportExecutionState,
 ) => {
+  const startedAt = Date.now();
   if (member.householdId === household.householdId) {
     return false;
   }
 
-  const membership = await listHouseholdMembers(context, household.householdId, deps);
-  await updateHouseholdMembership(context, household.householdId, {
+  const updatedHousehold = await updateHouseholdMembership(context, household.householdId, {
     householdName: household.householdName,
     address: household.address,
     postalCode: household.postalCode,
     notes: household.notes,
-    memberIds: [...new Set([...membership.map((entry) => entry.memberId), member.memberId])],
+    memberIds: [...new Set([...(household.members ?? []).map((entry) => entry.memberId), member.memberId])],
     primaryContactMemberId: household.primaryContactMemberId,
   }, deps, household, { allowReassign: true });
+  upsertHouseholdInImportState(state, updatedHousehold);
+  if (state && member.householdId && member.householdId !== household.householdId) {
+    const previousHousehold = state.householdsById.get(member.householdId);
+    if (previousHousehold) {
+      upsertHouseholdInImportState(state, {
+        ...previousHousehold,
+        members: (previousHousehold.members ?? []).filter((entry) => entry.memberId !== member.memberId),
+        memberCount: Math.max(0, previousHousehold.memberCount - 1),
+      });
+    }
+  }
 
   await logMemberActivity(
     context,
@@ -2353,6 +2674,11 @@ const ensureMemberAssignedToHousehold = async (
     { householdId: household.householdId, source: "unity_import" },
   );
 
+  logImportTiming("ensureMemberAssignedToHousehold", startedAt, {
+    memberId: member.memberId,
+    householdId: household.householdId,
+  });
+
   return true;
 };
 
@@ -2360,9 +2686,16 @@ const resolveImportHouseholdAssignment = async (
   context: RequestContext,
   member: MemberItem,
   deps: HandlerDependencies,
+  state?: ImportExecutionState,
 ) => {
+  const startedAt = Date.now();
   const normalized = normalizeAddress({ address: member.address, postalCode: member.postalCode });
   if (!normalized.addressKey) {
+    await deleteHouseholdConflict(context, member.memberId, deps);
+    logImportTiming("resolveImportHouseholdAssignment", startedAt, {
+      memberId: member.memberId,
+      outcome: "no_address_key",
+    });
     return {
       householdCreated: 0,
       householdMatched: 0,
@@ -2373,8 +2706,35 @@ const resolveImportHouseholdAssignment = async (
   }
 
   if (member.householdId) {
-    const household = await getHousehold(context, member.householdId, deps);
-    if (household?.addressKey && household.addressKey !== normalized.addressKey) {
+    const household = state?.householdsById.get(member.householdId) ?? await getHousehold(context, member.householdId, deps);
+    if (household) {
+      upsertHouseholdInImportState(state, household);
+    }
+    const currentHouseholdAddressKey = household
+      ? (household.addressKey ?? normalizeAddress({
+        address: household.address,
+        postalCode: household.postalCode,
+      }).addressKey)
+      : undefined;
+    if (household && currentHouseholdAddressKey && currentHouseholdAddressKey !== normalized.addressKey) {
+      const { households: matchedHouseholds } = await findHouseholdsByAddressMatch(
+        context,
+        member.address,
+        member.postalCode,
+        deps,
+        state,
+      );
+      const matchedHousehold = matchedHouseholds.find((item) => item.householdId !== household.householdId) ?? null;
+      const existingConflict = await getHouseholdConflict(context, member.memberId, deps);
+      await putHouseholdConflict(
+        context,
+        buildHouseholdConflictItem(context, member, household, deps, {
+          importedAddressKey: normalized.addressKey,
+          matchedHousehold,
+          existing: existingConflict,
+        }),
+        deps,
+      );
       await logMemberActivity(
         context,
         member.memberId,
@@ -2388,6 +2748,11 @@ const resolveImportHouseholdAssignment = async (
           source: "unity_import",
         },
       );
+      logImportTiming("resolveImportHouseholdAssignment", startedAt, {
+        memberId: member.memberId,
+        householdId: household.householdId,
+        outcome: "conflict",
+      });
       return {
         householdCreated: 0,
         householdMatched: 0,
@@ -2397,6 +2762,12 @@ const resolveImportHouseholdAssignment = async (
       };
     }
 
+    await deleteHouseholdConflict(context, member.memberId, deps);
+    logImportTiming("resolveImportHouseholdAssignment", startedAt, {
+      memberId: member.memberId,
+      householdId: household?.householdId,
+      outcome: "already_assigned",
+    });
     return {
       householdCreated: 0,
       householdMatched: 0,
@@ -2411,10 +2782,17 @@ const resolveImportHouseholdAssignment = async (
     member.address,
     member.postalCode,
     deps,
+    state,
   );
   const household = households[0];
   if (household) {
-    const assigned = await ensureMemberAssignedToHousehold(context, member, household, deps);
+    const assigned = await ensureMemberAssignedToHousehold(context, member, household, deps, state);
+    await deleteHouseholdConflict(context, member.memberId, deps);
+    logImportTiming("resolveImportHouseholdAssignment", startedAt, {
+      memberId: member.memberId,
+      householdId: household.householdId,
+      outcome: assigned ? "matched_and_assigned" : "matched_existing",
+    });
     return {
       householdCreated: 0,
       householdMatched: 1,
@@ -2432,6 +2810,7 @@ const resolveImportHouseholdAssignment = async (
     notes: undefined,
     memberIds: [member.memberId],
   }, deps, null);
+  upsertHouseholdInImportState(state, createdHousehold);
 
   await logMemberActivity(
     context,
@@ -2441,6 +2820,12 @@ const resolveImportHouseholdAssignment = async (
     deps,
     { householdId: createdHousehold.householdId, source: "unity_import" },
   );
+  await deleteHouseholdConflict(context, member.memberId, deps);
+  logImportTiming("resolveImportHouseholdAssignment", startedAt, {
+    memberId: member.memberId,
+    householdId: createdHousehold.householdId,
+    outcome: "created_household",
+  });
 
   return {
     householdCreated: 1,
@@ -2472,9 +2857,10 @@ const processImportRow = async (
   context: RequestContext,
   row: ImportWorkbookRow,
   fileName: string,
-  existingMembersByUnityId: Map<string, MemberItem>,
+  state: ImportExecutionState,
   deps: HandlerDependencies,
 ): Promise<Omit<MemberImportResult, "errorCount">> => {
+  const startedAt = Date.now();
   const unityId = toOptionalString(row.values["Member ID"]);
   const fullName = normalizeWhitespace(row.values["Member Name"]);
   if (!unityId || !fullName) {
@@ -2492,7 +2878,7 @@ const processImportRow = async (
   }
 
   try {
-    const existing = existingMembersByUnityId.get(unityId) ?? null;
+    const existing = state.existingMembersByUnityId.get(unityId) ?? null;
     const member = buildMemberItem(
       context,
       {
@@ -2535,8 +2921,8 @@ const processImportRow = async (
     );
     member.notes = existing?.notes;
     await putMember(context, member, deps);
-    existingMembersByUnityId.set(unityId, member);
-    const householdAssignment = await resolveImportHouseholdAssignment(context, member, deps);
+    state.existingMembersByUnityId.set(unityId, member);
+    const householdAssignment = await resolveImportHouseholdAssignment(context, member, deps, state);
     await logMemberActivity(
       context,
       member.memberId,
@@ -2557,6 +2943,11 @@ const processImportRow = async (
       errors: [],
     };
   } catch (error) {
+    logImportTiming("processImportRow.failed", startedAt, {
+      unityId,
+      rowNumber: row.rowNumber,
+      message: error instanceof Error ? error.message : "Unknown import error.",
+    });
     return {
       created: 0,
       updated: 0,
@@ -2573,6 +2964,11 @@ const processImportRow = async (
         },
       ],
     };
+  } finally {
+    logImportTiming("processImportRow", startedAt, {
+      unityId,
+      rowNumber: row.rowNumber,
+    });
   }
 };
 
@@ -3209,6 +3605,7 @@ const updateHouseholdMembership = async (
     allowReassign?: boolean;
   } = {},
 ) => {
+  const startedAt = Date.now();
   const memberIds = normalizeMemberIds(input.memberIds);
   const members = await loadMembersByIds(context, memberIds, deps);
   if (members.length !== memberIds.length) {
@@ -3235,6 +3632,12 @@ const updateHouseholdMembership = async (
     }
   }
   const existingMembers = existing ? await listHouseholdMembers(context, householdId, deps) : [];
+  const existingMembersById = new Map(existingMembers.map((item) => [item.memberId, item]));
+  const currentLinksByMemberId = new Map(
+    currentLinks
+      .filter((link): link is MemberHouseholdItem => Boolean(link))
+      .map((link) => [link.memberId, link]),
+  );
   const nextIds = new Set(memberIds);
   const transactItems: Array<Record<string, unknown>> = [
     {
@@ -3261,6 +3664,10 @@ const updateHouseholdMembership = async (
     transactItems.push({
       Put: {
         Item: buildHouseholdAddressLookupItem(context, household.addressKey, householdId, deps),
+        ConditionExpression: "attribute_not_exists(householdId) OR householdId = :householdId",
+        ExpressionAttributeValues: {
+          ":householdId": householdId,
+        },
         TableName: context.tableName,
       },
     });
@@ -3322,6 +3729,7 @@ const updateHouseholdMembership = async (
   }
 
   for (const member of members) {
+    const now = deps.now();
     const updatedMember = buildMemberItem(
       context,
       {
@@ -3345,8 +3753,8 @@ const updateHouseholdMembership = async (
           Item: {
             PK: tenantHouseholdPk(context.tenantId, householdId),
             SK: householdMemberSk(member.memberId),
-            createdAt: existingMembers.find((item) => item.memberId === member.memberId)?.createdAt ?? deps.now(),
-            updatedAt: deps.now(),
+            createdAt: existingMembersById.get(member.memberId)?.createdAt ?? now,
+            updatedAt: now,
             entityType: "HOUSEHOLD_MEMBER",
             tenantId: context.tenantId,
             householdId,
@@ -3362,8 +3770,8 @@ const updateHouseholdMembership = async (
           Item: {
             PK: tenantMemberPk(context.tenantId, member.memberId),
             SK: memberHouseholdSk(),
-            createdAt: currentLinks.find((link) => link?.memberId === member.memberId)?.createdAt ?? deps.now(),
-            updatedAt: deps.now(),
+            createdAt: currentLinksByMemberId.get(member.memberId)?.createdAt ?? now,
+            updatedAt: now,
             entityType: "MEMBER_HOUSEHOLD",
             tenantId: context.tenantId,
             householdId,
@@ -3376,12 +3784,23 @@ const updateHouseholdMembership = async (
     );
   }
 
+  const removedMembersById = new Map(
+    (
+      await loadMembersByIds(
+        context,
+        existingMembers
+          .filter((existingMember) => !nextIds.has(existingMember.memberId))
+          .map((existingMember) => existingMember.memberId),
+        deps,
+      )
+    ).map((item) => [item.memberId, item]),
+  );
   for (const existingMember of existingMembers) {
     if (nextIds.has(existingMember.memberId)) {
       continue;
     }
 
-    const member = await getMember(context, existingMember.memberId, deps);
+    const member = removedMembersById.get(existingMember.memberId);
     if (member) {
       transactItems.push({
         Put: {
@@ -3422,11 +3841,26 @@ const updateHouseholdMembership = async (
     );
   }
 
-  await deps.documentClient.send(
-    new TransactWriteCommand({
-      TransactItems: transactItems,
-    }),
-  );
+  try {
+    await transactWriteInChunks(deps.documentClient, transactItems);
+  } catch (error) {
+    if (
+      household.addressKey
+      && error instanceof Error
+      && (error.name === "TransactionCanceledException" || error.name === "ConditionalCheckFailedException")
+    ) {
+      throw new HttpError(409, "A household already exists for this address.");
+    }
+
+    throw error;
+  }
+
+  logImportTiming("updateHouseholdMembership", startedAt, {
+    householdId,
+    memberCount: memberIds.length,
+    reassignedCount: reassignedLinks.size,
+    transactItemCount: transactItems.length,
+  });
 
   return household;
 };
@@ -4421,6 +4855,14 @@ const getMembersIndex = async (context: RequestContext, deps: HandlerDependencie
   return json(200, response);
 };
 
+const getHouseholdConflictsResponse = async (context: RequestContext, deps: HandlerDependencies) => {
+  const items = await listHouseholdConflicts(context, deps);
+  return json(200, {
+    items: items.map(toHouseholdConflict),
+    total: items.length,
+  } satisfies HouseholdConflictListResponse);
+};
+
 const getMemberDetails = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
   const member = await getMember(context, memberId, deps);
   if (!member) {
@@ -4429,9 +4871,11 @@ const getMemberDetails = async (context: RequestContext, memberId: string, deps:
 
   const activity = await listMemberActivities(context, memberId, deps);
   const household = member.householdId ? await getHousehold(context, member.householdId, deps) : null;
+  const householdConflict = await getHouseholdConflict(context, memberId, deps);
   const response: MemberDetailResponse = {
     member: toMember(member),
     household: household ? toHouseholdSummary(household) : undefined,
+    householdConflict: householdConflict ? toHouseholdConflict(householdConflict) : undefined,
     activity: activity.map(toMemberActivity),
   };
   return json(200, response);
@@ -4471,11 +4915,24 @@ const getHouseholds = async (
     TableName: context.tableName,
   });
 
-  const all = await listHouseholds(context, deps);
+  const total = await queryCount(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#gsiPk": "GSI4PK",
+      "#gsiSk": "GSI4SK",
+    },
+    ExpressionAttributeValues: {
+      ":gsiPk": householdGsiPk(context.tenantId),
+      ":from": "NAME#",
+      ":to": "NAME#~",
+    },
+    IndexName: GSI4_NAME,
+    KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
+    TableName: context.tableName,
+  });
   return json(200, {
     items: ((page.Items ?? []) as HouseholdItem[]).map((item) => toHouseholdSummary(item)),
     nextCursor: encodeCursor(page.LastEvaluatedKey as Record<string, unknown> | undefined),
-    total: all.length,
+    total,
   } satisfies HouseholdDirectoryResponse);
 };
 
@@ -4653,6 +5110,83 @@ const removeMemberFromHousehold = async (
   }, deps, household);
 
   return json(200, toHouseholdSummary(updated));
+};
+
+const resolveHouseholdConflict = async (
+  context: RequestContext,
+  memberId: string,
+  input: ResolveHouseholdConflictInput,
+  deps: HandlerDependencies,
+) => {
+  const conflict = await getHouseholdConflict(context, memberId, deps);
+  if (!conflict) {
+    return json(404, { message: "Household conflict not found." });
+  }
+
+  const member = await getMember(context, memberId, deps);
+  if (!member) {
+    return json(404, { message: "Member not found." });
+  }
+
+  if (input.action === "KEEP_CURRENT_HOUSEHOLD") {
+    await deleteHouseholdConflict(context, memberId, deps);
+    await logMemberActivity(
+      context,
+      memberId,
+      "Household Conflict Resolved",
+      "Kept the current household assignment.",
+      deps,
+      { resolution: input.action },
+    );
+    return json(200, { resolved: true, action: input.action });
+  }
+
+  if (input.action === "MOVE_TO_MATCHING_HOUSEHOLD") {
+    const matchedHouseholdId = conflict.matchedHouseholdId
+      ?? (await findHouseholdsByAddressMatch(
+        context,
+        conflict.importedAddress ?? member.address,
+        conflict.importedPostalCode ?? member.postalCode,
+        deps,
+      )).households.find((household) => household.householdId !== conflict.currentHouseholdId)?.householdId;
+
+    if (!matchedHouseholdId) {
+      return json(400, { message: "No matching household is available for this conflict." });
+    }
+
+    const response = await attachMemberToHousehold(context, memberId, matchedHouseholdId, deps);
+    await deleteHouseholdConflict(context, memberId, deps);
+    await logMemberActivity(
+      context,
+      memberId,
+      "Household Conflict Resolved",
+      "Moved the member to the matching household.",
+      deps,
+      { resolution: input.action, householdId: matchedHouseholdId },
+    );
+    return response;
+  }
+
+  if (input.action === "CREATE_NEW_HOUSEHOLD") {
+    const created = await createHousehold(context, {
+      householdName: buildAddressBasedHouseholdName(conflict.importedAddress ?? member.address),
+      address: conflict.importedAddress ?? member.address,
+      postalCode: conflict.importedPostalCode ?? member.postalCode,
+      memberIds: [memberId],
+    }, deps);
+    await deleteHouseholdConflict(context, memberId, deps);
+    await logMemberActivity(
+      context,
+      memberId,
+      "Household Conflict Resolved",
+      "Created a new household from the imported address.",
+      deps,
+      { resolution: input.action },
+    );
+    return created;
+  }
+
+  return json(400, { message: "Unsupported resolution action." });
 };
 
 const createMember = async (context: RequestContext, input: CreateMemberInput, deps: HandlerDependencies) => {
@@ -4861,6 +5395,12 @@ const createMemberImportJob = async (context: RequestContext, input: MemberImpor
 
   await putImportJob(context, jobItem, deps);
   await putItemsInBatches(deps.documentClient, context.tableName, chunkItemsToWrite);
+  logImportEvent("createMemberImportJob", {
+    jobId,
+    totalRows: rows.length,
+    totalChunks: chunks.length,
+    fileName: jobItem.fileName,
+  });
 
   return json(202, toMemberImportJob(jobItem));
 };
@@ -4875,36 +5415,74 @@ const putImportJob = async (context: RequestContext, item: MemberImportJobItem, 
 };
 
 const processMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+  const startedAt = Date.now();
   const job = await getMemberImportJob(context, jobId, deps);
   if (!job) {
     return json(404, { message: "Import job not found." });
   }
 
   if (job.status === "completed" || job.status === "failed") {
+    logImportEvent("processMemberImportJob.skipped", {
+      jobId,
+      status: job.status,
+      processedRows: job.processedRows,
+      totalRows: job.totalRows,
+    });
     return json(200, toMemberImportJob(job));
+  }
+
+  const leasedJob = await tryAcquireMemberImportJobLease(context, jobId, deps);
+  if (!leasedJob) {
+    const currentJob = await getMemberImportJob(context, jobId, deps);
+    return json(200, toMemberImportJob(currentJob ?? job));
   }
 
   const chunks = await listMemberImportChunks(context, jobId, deps);
   if (!chunks.length) {
     const completedAt = deps.now();
     const completedJob: MemberImportJobItem = {
-      ...job,
+      ...leasedJob,
       updatedAt: completedAt,
       completedAt,
       status: "completed",
-      processedRows: job.totalRows,
-      processedChunks: job.totalChunks,
+      processedRows: leasedJob.totalRows,
+      processedChunks: leasedJob.totalChunks,
+      leaseOwner: undefined,
+      leaseExpiresAt: undefined,
     };
     await putImportJob(context, completedJob, deps);
+    logImportEvent("processMemberImportJob.completed", {
+      jobId,
+      status: completedJob.status,
+      processedRows: completedJob.processedRows,
+      totalRows: completedJob.totalRows,
+      elapsedMs: getElapsedMs(startedAt),
+    });
     return json(200, toMemberImportJob(completedJob));
   }
 
-  const existingMembersByUnityId = new Map(
-    (await listMembers(context, deps))
-      .filter((member) => member.unityId)
-      .map((member) => [member.unityId as string, member]),
-  );
+  const existingMembers = await listMembers(context, deps);
+  const importState: ImportExecutionState = {
+    existingMembersByUnityId: new Map(
+      existingMembers
+        .filter((member) => member.unityId)
+        .map((member) => [member.unityId as string, member]),
+    ),
+    householdsById: new Map<string, HouseholdItem>(),
+    householdsByAddressKey: new Map<string, HouseholdItem>(),
+  };
+  for (const household of await listHouseholds(context, deps)) {
+    upsertHouseholdInImportState(importState, household);
+  }
   const chunksToProcess = chunks.slice(0, importJobChunksPerRequest);
+  logImportEvent("processMemberImportJob.started", {
+    jobId,
+    queuedChunks: chunks.length,
+    processingChunks: chunksToProcess.length,
+    chunkIndexes: chunksToProcess.map((chunk) => chunk.chunkIndex),
+    priorProcessedRows: job.processedRows,
+    totalRows: leasedJob.totalRows,
+  });
   let chunkResult = {
     created: 0,
     updated: 0,
@@ -4920,7 +5498,7 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
   for (const chunk of chunksToProcess) {
     processedRowDelta += chunk.rowCount;
     for (const row of chunk.rows) {
-      const outcome = await processImportRow(context, row, job.fileName, existingMembersByUnityId, deps);
+      const outcome = await processImportRow(context, row, job.fileName, importState, deps);
       chunkResult = {
         created: chunkResult.created + outcome.created,
         updated: chunkResult.updated + outcome.updated,
@@ -4942,32 +5520,53 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
   );
 
   const updatedAt = deps.now();
-  const processedRows = Math.min(job.totalRows, job.processedRows + processedRowDelta);
-  const processedChunks = Math.min(job.totalChunks, job.processedChunks + chunksToProcess.length);
+  const processedRows = Math.min(leasedJob.totalRows, leasedJob.processedRows + processedRowDelta);
+  const processedChunks = Math.min(leasedJob.totalChunks, leasedJob.processedChunks + chunksToProcess.length);
   const result: MemberImportResult = {
-    created: (job.result.created ?? 0) + chunkResult.created,
-    updated: (job.result.updated ?? 0) + chunkResult.updated,
-    skipped: (job.result.skipped ?? 0) + chunkResult.skipped,
-    householdsCreated: (job.result.householdsCreated ?? 0) + chunkResult.householdsCreated,
-    householdsMatched: (job.result.householdsMatched ?? 0) + chunkResult.householdsMatched,
-    membersAssignedToHouseholds: (job.result.membersAssignedToHouseholds ?? 0) + chunkResult.membersAssignedToHouseholds,
-    membersWithoutHouseholds: (job.result.membersWithoutHouseholds ?? 0) + chunkResult.membersWithoutHouseholds,
-    householdConflicts: (job.result.householdConflicts ?? 0) + chunkResult.householdConflicts,
-    errorCount: (job.result.errorCount ?? 0) + chunkResult.errors.length,
-    errors: mergeImportErrors(job.result.errors, chunkResult.errors),
+    created: (leasedJob.result.created ?? 0) + chunkResult.created,
+    updated: (leasedJob.result.updated ?? 0) + chunkResult.updated,
+    skipped: (leasedJob.result.skipped ?? 0) + chunkResult.skipped,
+    householdsCreated: (leasedJob.result.householdsCreated ?? 0) + chunkResult.householdsCreated,
+    householdsMatched: (leasedJob.result.householdsMatched ?? 0) + chunkResult.householdsMatched,
+    membersAssignedToHouseholds: (leasedJob.result.membersAssignedToHouseholds ?? 0) + chunkResult.membersAssignedToHouseholds,
+    membersWithoutHouseholds: (leasedJob.result.membersWithoutHouseholds ?? 0) + chunkResult.membersWithoutHouseholds,
+    householdConflicts: (leasedJob.result.householdConflicts ?? 0) + chunkResult.householdConflicts,
+    errorCount: (leasedJob.result.errorCount ?? 0) + chunkResult.errors.length,
+    errors: mergeImportErrors(leasedJob.result.errors, chunkResult.errors),
   };
-  const status: MemberImportJobStatus = processedChunks >= job.totalChunks ? "completed" : "running";
+  const status: MemberImportJobStatus = processedChunks >= leasedJob.totalChunks ? "completed" : "running";
   const nextJob: MemberImportJobItem = {
-    ...job,
+    ...leasedJob,
     updatedAt,
-    startedAt: job.startedAt ?? updatedAt,
+    startedAt: leasedJob.startedAt ?? updatedAt,
     completedAt: status === "completed" ? updatedAt : undefined,
     processedRows,
     processedChunks,
     status,
     result,
+    leaseOwner: undefined,
+    leaseExpiresAt: undefined,
   };
   await putImportJob(context, nextJob, deps);
+  logImportEvent("processMemberImportJob.completed", {
+    jobId,
+    status,
+    processedRows,
+    totalRows: job.totalRows,
+    processedChunks,
+    totalChunks: job.totalChunks,
+    chunkIndexes: chunksToProcess.map((chunk) => chunk.chunkIndex),
+    chunkRows: processedRowDelta,
+    created: chunkResult.created,
+    updated: chunkResult.updated,
+    skipped: chunkResult.skipped,
+    householdsCreated: chunkResult.householdsCreated,
+    householdsMatched: chunkResult.householdsMatched,
+    membersAssignedToHouseholds: chunkResult.membersAssignedToHouseholds,
+    householdConflicts: chunkResult.householdConflicts,
+    errorCount: chunkResult.errors.length,
+    elapsedMs: getElapsedMs(startedAt),
+  });
 
   return json(200, toMemberImportJob(nextJob));
 };
@@ -6419,6 +7018,10 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         return await getMembersIndex(context, deps);
       }
 
+      if (method === "GET" && path === "/household-conflicts") {
+        return await getHouseholdConflictsResponse(context, deps);
+      }
+
       if (method === "POST" && path === "/members") {
         return await createMember(context, parseBody<CreateMemberInput>(typedEvent.body), deps);
       }
@@ -6462,6 +7065,15 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
           return await removeMemberFromHousehold(context, memberId, member.householdId, deps);
         }
+      }
+
+      if (path === `/household-conflicts/${memberId}/resolve` && memberId && method === "POST") {
+        return await resolveHouseholdConflict(
+          context,
+          memberId,
+          parseBody<ResolveHouseholdConflictInput>(typedEvent.body),
+          deps,
+        );
       }
 
       if (path === `/members/${memberId}/events` && memberId && method === "GET") {
