@@ -16,6 +16,8 @@ export class ApiError extends Error {
 
 const googleCalendarReconnectUiMessage =
   "Reconnect Google Calendar: Google Calendar connection has expired because the app is currently in TEST mode. Google requires TEST applications to reconnect every 7 days. Once the app is released, this will no longer be required.";
+const householdConflictWriteUiMessage =
+  "This household could not be updated because the address or membership changed at the same time. Please refresh and try again.";
 
 const isExpiredGoogleRefreshTokenMessage = (message: string) => {
   const normalized = message.toLowerCase();
@@ -26,9 +28,27 @@ const isExpiredGoogleRefreshTokenMessage = (message: string) => {
   );
 };
 
+const isHouseholdConflictWriteMessage = (message: string) => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized === "cancellederror"
+    || normalized === "cancelederror"
+    || normalized.includes("transactioncanceledexception")
+    || normalized.includes("conditionalcheckfailedexception")
+  );
+};
+
 export const getDisplayErrorMessage = (reason: unknown, fallback: string) => {
   const message = reason instanceof Error ? reason.message : fallback;
-  return isExpiredGoogleRefreshTokenMessage(message) ? googleCalendarReconnectUiMessage : message;
+  if (isExpiredGoogleRefreshTokenMessage(message)) {
+    return googleCalendarReconnectUiMessage;
+  }
+
+  if (isHouseholdConflictWriteMessage(message)) {
+    return householdConflictWriteUiMessage;
+  }
+
+  return message;
 };
 
 type AmplifyOutputs = {

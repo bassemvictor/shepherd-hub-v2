@@ -12,7 +12,7 @@ import { ReportsLayout } from "../components/reports/reports-layout";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
 import { Button } from "../components/ui/button";
-import { api } from "../lib/api";
+import { api, getDisplayErrorMessage } from "../lib/api";
 import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { refreshMembersIndexCache, useMembersIndex } from "../lib/members-index";
 
@@ -33,7 +33,7 @@ export const HouseholdConflictsReportPage = () => {
       const response = await api.get<HouseholdConflictListResponse>("/household-conflicts");
       setItems(response.items);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load household conflicts.");
+      setError(getDisplayErrorMessage(reason, "Unable to load household conflicts."));
     } finally {
       setLoading(false);
     }
@@ -54,7 +54,7 @@ export const HouseholdConflictsReportPage = () => {
         refreshHouseholdsIndexCache(queryClient, householdCacheScope),
       ]);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to resolve household conflict.");
+      setError(getDisplayErrorMessage(reason, "Unable to resolve household conflict."));
     } finally {
       setResolvingKey(null);
     }

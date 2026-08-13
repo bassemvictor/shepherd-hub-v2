@@ -19,7 +19,7 @@ const dataStack = backend.createStack("project-template-data");
 
 const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE?.trim();
 
-const recordsTable = new Table(dataStack, "ProjectTemplateTable", {
+const recordsTable = new Table(dataStack, "SHTable", {
   ...(tableName ? { tableName } : {}),
   billingMode: BillingMode.PAY_PER_REQUEST,
   partitionKey: {
@@ -76,6 +76,18 @@ recordsTable.addGlobalSecondaryIndex({
   },
   sortKey: {
     name: "GSI4SK",
+    type: AttributeType.STRING,
+  },
+});
+
+recordsTable.addGlobalSecondaryIndex({
+  indexName: "GSI5",
+  partitionKey: {
+    name: "GSI5PK",
+    type: AttributeType.STRING,
+  },
+  sortKey: {
+    name: "GSI5SK",
     type: AttributeType.STRING,
   },
 });

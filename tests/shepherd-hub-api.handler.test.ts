@@ -77,6 +77,8 @@ test("creates a member and scopes it to the tenant", async () => {
     GSI1SK: "NAME#adel abraham#MEMBER#member-1",
     GSI2PK: undefined,
     GSI2SK: undefined,
+    GSI5PK: undefined,
+    GSI5SK: undefined,
     createdAt: "2026-06-03T12:00:00.000Z",
     updatedAt: "2026-06-03T12:00:00.000Z",
     entityType: "MEMBER",
@@ -208,6 +210,8 @@ test("creates a member with tenant and member indexes", async () => {
     GSI1SK: "NAME#adel abraham#MEMBER#member-1",
     GSI2PK: undefined,
     GSI2SK: undefined,
+    GSI5PK: undefined,
+    GSI5SK: undefined,
     createdAt: "2026-06-03T12:00:00.000Z",
     updatedAt: "2026-06-03T12:00:00.000Z",
     entityType: "MEMBER",
@@ -743,6 +747,339 @@ test("creating a household returns 409 when the normalized address is claimed co
 
   assert.equal(response.statusCode, 409);
   assert.match(String(response.body), /A household already exists for this address/);
+});
+
+test("resolving a household conflict by creating a new household reassigns the member", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const member = {
+    PK: "TENANT#tenant-abc",
+    SK: "MEMBER#member-1",
+    GSI1PK: "TENANT#tenant-abc#MEMBERS",
+    GSI1SK: "NAME#abanoub otros#MEMBER#member-1",
+    GSI5PK: "TENANT#tenant-abc#HOUSEHOLD#household-current",
+    GSI5SK: "NAME#abanoub otros#MEMBER#member-1",
+    createdAt: "2026-06-03T12:00:00.000Z",
+    updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "MEMBER",
+    tenantId: "tenant-abc",
+    memberId: "member-1",
+    source: "MANUAL",
+    isUnityMember: false,
+    householdId: "household-current",
+    householdName: "603 Ottawa St Household",
+    fullName: "Abanoub Otros",
+    firstName: "Abanoub",
+    lastName: "Otros",
+    initials: "AO",
+    address: "603 Ottawa St",
+    postalCode: "K1Z 5H6",
+    normalizedSearchText: "abanoub otros",
+  };
+  const currentHousehold = {
+    PK: "TENANT#tenant-abc",
+    SK: "HOUSEHOLD#household-current",
+    GSI4PK: "TENANT#tenant-abc#HOUSEHOLDS",
+    GSI4SK: "NAME#603 ottawa st household#HOUSEHOLD#household-current",
+    GSI2PK: "TENANT#tenant-abc#HOUSEHOLD_ADDRESS",
+    GSI2SK: "ADDRESS#603 ottawa st|K1Z5H6",
+    createdAt: "2026-06-03T12:00:00.000Z",
+    updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "HOUSEHOLD",
+    tenantId: "tenant-abc",
+    householdId: "household-current",
+    householdName: "603 Ottawa St Household",
+    address: "603 Ottawa St",
+    postalCode: "K1Z 5H6",
+    addressKey: "603 ottawa st|K1Z5H6",
+    memberCount: 1,
+    primaryContactMemberId: "member-1",
+    memberIds: ["member-1"],
+  };
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, any> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+
+          if (key.SK === "HOUSEHOLD_CONFLICT#MEMBER#member-1") {
+            return {
+              Item: {
+                PK: "TENANT#tenant-abc",
+                SK: "HOUSEHOLD_CONFLICT#MEMBER#member-1",
+                createdAt: "2026-08-12T20:47:24.000Z",
+                updatedAt: "2026-08-12T20:47:24.000Z",
+                entityType: "HOUSEHOLD_CONFLICT",
+                tenantId: "tenant-abc",
+                memberId: "member-1",
+                memberFullName: "Abanoub Otros",
+                currentHouseholdId: "household-current",
+                currentHouseholdName: "603 Ottawa St Household",
+                currentHouseholdAddress: "603 Ottawa St",
+                currentHouseholdAddressKey: "603 ottawa st|K1Z5H6",
+                importedAddress: "457 Ottawa St",
+                importedPostalCode: "K1F5H1",
+              },
+            };
+          }
+
+          if (key.SK === "MEMBER#member-1") {
+            return { Item: member };
+          }
+
+          if (key.SK === "HOUSEHOLD#household-current") {
+            return { Item: currentHousehold };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          return {
+            Responses: {
+              "records-table": [member],
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          if (command.input.IndexName === "GSI2") {
+            return { Items: [] };
+          }
+
+          if (
+            command.input.IndexName === "GSI5"
+            && command.input.ExpressionAttributeValues?.[":gsiPk"] === "TENANT#tenant-abc#HOUSEHOLD#household-current"
+          ) {
+            return { Items: [member] };
+          }
+
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-08-12T20:52:00.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/household-conflicts/member-1/resolve",
+      pathParameters: { memberId: "member-1" },
+      body: JSON.stringify({ action: "CREATE_NEW_HOUSEHOLD" }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 201);
+  assert.match(String(response.body), /457 Ottawa St/);
+  assert.equal(commands.some((command) => command.name === "TransactWriteCommand"), true);
+  assert.equal(commands.some((command) => command.name === "DeleteCommand"), true);
+});
+
+test("resolving a household conflict by creating a new household reuses an existing matching household", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const member = {
+    PK: "TENANT#tenant-abc",
+    SK: "MEMBER#member-1",
+    GSI1PK: "TENANT#tenant-abc#MEMBERS",
+    GSI1SK: "NAME#aaron ghaly#MEMBER#member-1",
+    GSI5PK: "TENANT#tenant-abc#HOUSEHOLD#household-current",
+    GSI5SK: "NAME#aaron ghaly#MEMBER#member-1",
+    createdAt: "2026-06-03T12:00:00.000Z",
+    updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "MEMBER",
+    tenantId: "tenant-abc",
+    memberId: "member-1",
+    source: "MANUAL",
+    isUnityMember: false,
+    householdId: "household-current",
+    householdName: "895 Ottawa St Household",
+    fullName: "Aaron Ghaly",
+    firstName: "Aaron",
+    lastName: "Ghaly",
+    initials: "AG",
+    address: "895 Ottawa St",
+    postalCode: "K1Z 5H6",
+    normalizedSearchText: "aaron ghaly",
+  };
+  const currentHousehold = {
+    PK: "TENANT#tenant-abc",
+    SK: "HOUSEHOLD#household-current",
+    GSI4PK: "TENANT#tenant-abc#HOUSEHOLDS",
+    GSI4SK: "NAME#895 ottawa st household#HOUSEHOLD#household-current",
+    GSI2PK: "TENANT#tenant-abc#HOUSEHOLD_ADDRESS",
+    GSI2SK: "ADDRESS#895 ottawa st|K1Z5H6",
+    createdAt: "2026-06-03T12:00:00.000Z",
+    updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "HOUSEHOLD",
+    tenantId: "tenant-abc",
+    householdId: "household-current",
+    householdName: "895 Ottawa St Household",
+    address: "895 Ottawa St",
+    postalCode: "K1Z 5H6",
+    addressKey: "895 ottawa st|K1Z5H6",
+    memberCount: 1,
+    primaryContactMemberId: "member-1",
+    memberIds: ["member-1"],
+  };
+  const existingMatchedHousehold = {
+    PK: "TENANT#tenant-abc",
+    SK: "HOUSEHOLD#household-match",
+    GSI4PK: "TENANT#tenant-abc#HOUSEHOLDS",
+    GSI4SK: "NAME#1027 ottawa st household#HOUSEHOLD#household-match",
+    GSI2PK: "TENANT#tenant-abc#HOUSEHOLD_ADDRESS",
+    GSI2SK: "ADDRESS#1027 ottawa st|K1Z5H6",
+    createdAt: "2026-06-03T12:00:00.000Z",
+    updatedAt: "2026-06-03T12:00:00.000Z",
+    entityType: "HOUSEHOLD",
+    tenantId: "tenant-abc",
+    householdId: "household-match",
+    householdName: "1027 Ottawa St Household",
+    address: "1027 Ottawa St",
+    postalCode: "K1Z 5H6",
+    addressKey: "1027 ottawa st|K1Z5H6",
+    memberCount: 0,
+    memberIds: [],
+  };
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, any> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+
+          if (key.SK === "HOUSEHOLD_CONFLICT#MEMBER#member-1") {
+            return {
+              Item: {
+                PK: "TENANT#tenant-abc",
+                SK: "HOUSEHOLD_CONFLICT#MEMBER#member-1",
+                createdAt: "2026-08-12T20:47:24.000Z",
+                updatedAt: "2026-08-12T20:47:24.000Z",
+                entityType: "HOUSEHOLD_CONFLICT",
+                tenantId: "tenant-abc",
+                memberId: "member-1",
+                memberFullName: "Aaron Ghaly",
+                currentHouseholdId: "household-current",
+                currentHouseholdName: "895 Ottawa St Household",
+                currentHouseholdAddress: "895 Ottawa St",
+                currentHouseholdAddressKey: "895 ottawa st|K1Z5H6",
+                importedAddress: "1027 Ottawa St",
+                importedPostalCode: "K1Z5H6",
+              },
+            };
+          }
+
+          if (key.SK === "MEMBER#member-1") {
+            return { Item: member };
+          }
+
+          if (key.SK === "HOUSEHOLD#household-current") {
+            return { Item: currentHousehold };
+          }
+
+          if (key.SK === "HOUSEHOLD#household-match") {
+            return { Item: existingMatchedHousehold };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          return {
+            Responses: {
+              "records-table": [member],
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          if (command.input.IndexName === "GSI2") {
+            return { Items: [existingMatchedHousehold] };
+          }
+
+          if (
+            command.input.IndexName === "GSI5"
+            && command.input.ExpressionAttributeValues?.[":gsiPk"] === "TENANT#tenant-abc#HOUSEHOLD#household-current"
+          ) {
+            return { Items: [member] };
+          }
+
+          if (
+            command.input.IndexName === "GSI5"
+            && command.input.ExpressionAttributeValues?.[":gsiPk"] === "TENANT#tenant-abc#HOUSEHOLD#household-match"
+          ) {
+            return { Items: [] };
+          }
+
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-08-12T21:26:34.000Z",
+    uuid: () => "activity-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/household-conflicts/member-1/resolve",
+      pathParameters: { memberId: "member-1" },
+      body: JSON.stringify({ action: "CREATE_NEW_HOUSEHOLD" }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.match(String(response.body), /1027 Ottawa St Household/);
+  assert.equal(
+    commands.some(
+      (command) =>
+        command.name === "GetCommand"
+        && (command.input.Key as { PK: string; SK: string }).SK === "HOUSEHOLD#household-match",
+    ),
+    true,
+  );
+  assert.equal(commands.some((command) => command.name === "DeleteCommand"), true);
 });
 
 test("member responses ignore legacy role and status fields from stored items", async () => {

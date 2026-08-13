@@ -367,7 +367,25 @@ export const MemberImportDialog = ({
             <p className="mt-1">
               {job.result.membersWithoutHouseholds} members left without a household, {job.result.householdConflicts} conflicts.
             </p>
-            {job.result.errorCount ? <p className="mt-1 text-rose-600">{job.result.errorCount} rows had errors.</p> : null}
+            {job.result.errorCount ? (
+              <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50/80 p-3 text-rose-700">
+                <p className="font-medium">{job.result.errorCount} rows had errors.</p>
+                {job.result.errors.length ? (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-sm font-medium text-rose-700">
+                      Show error details
+                    </summary>
+                    <ul className="mt-2 space-y-1 text-sm">
+                      {job.result.errors.map((error) => (
+                        <li key={`${error.row}-${error.message}`}>
+                          Row {error.row}: {error.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="flex justify-end">

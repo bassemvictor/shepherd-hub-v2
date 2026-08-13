@@ -431,7 +431,7 @@ export const MemberDetailPage = () => {
       await api.post(`/household-conflicts/${memberId}/resolve`, { action });
       await refreshHouseholdData();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to resolve household conflict.");
+      setError(getDisplayErrorMessage(reason, "Unable to resolve household conflict."));
     } finally {
       setHouseholdSaving(false);
     }
