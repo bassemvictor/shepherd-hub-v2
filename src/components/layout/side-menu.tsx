@@ -54,6 +54,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
           { label: "Reports Overview", href: "/reports/dashboard" },
           { label: "Member Report", href: "/reports/member-visitation" },
           { label: "Household Conflicts", href: "/reports/household-conflicts" },
+          { label: "Visitation Geography Report", href: "/reports/visitation-geography" },
         ],
       },
     ],

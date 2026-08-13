@@ -14,6 +14,7 @@ const routeTitleMap: Record<string, string> = {
   "/reports/dashboard": "Reports",
   "/reports/member-visitation": "Member Report",
   "/reports/household-conflicts": "Household Conflicts",
+  "/reports/visitation-geography": "Visitation Geography Report",
   "/auth": "Sign In",
 };
 
@@ -29,6 +30,7 @@ const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
   "/reports/dashboard": [{ label: "Insights" }, { label: "Reports" }],
   "/reports/member-visitation": [{ label: "Insights" }, { label: "Member Report" }],
   "/reports/household-conflicts": [{ label: "Insights" }, { label: "Household Conflicts" }],
+  "/reports/visitation-geography": [{ label: "Insights" }, { label: "Visitation Geography Report" }],
   "/auth": [{ label: "Sign In" }],
 };
 

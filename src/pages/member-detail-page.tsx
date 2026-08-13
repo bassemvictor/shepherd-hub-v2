@@ -60,7 +60,7 @@ import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import { useAuth } from "../lib/auth";
-import { api } from "../lib/api";
+import { api, getDisplayErrorMessage } from "../lib/api";
 import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
 

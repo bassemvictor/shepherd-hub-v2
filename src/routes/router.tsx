@@ -15,6 +15,7 @@ import { MembersPage } from "../pages/members-page";
 import { NotFoundPage } from "../pages/not-found-page";
 import { ReportsHomePage } from "../pages/reports-home-page";
 import { LegacyScheduleBetaRedirectPage, SchedulePage } from "../pages/schedule-page";
+import { VisitationGeographyReportPage } from "../pages/visitation-geography-report-page";
 import { VisitationReportsPage } from "../pages/visitation-reports-page";
 
 export const router = createBrowserRouter([
@@ -77,6 +78,10 @@ export const router = createBrowserRouter([
       {
         path: "reports/household-conflicts",
         element: <HouseholdConflictsReportPage />,
+      },
+      {
+        path: "reports/visitation-geography",
+        element: <VisitationGeographyReportPage />,
       },
       {
         path: "members/:memberId",

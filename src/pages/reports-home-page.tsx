@@ -1,4 +1,4 @@
-import { ChartColumnBig, UsersRound } from "lucide-react";
+import { ChartColumnBig, Map, UsersRound } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { ReportsLayout } from "../components/reports/reports-layout";
@@ -18,6 +18,11 @@ const reportDestinations = [
     title: "Household Conflicts",
     href: "/reports/household-conflicts",
     icon: UsersRound,
+  },
+  {
+    title: "Visitation Geography Report",
+    href: "/reports/visitation-geography",
+    icon: Map,
   },
 ] as const;
 
