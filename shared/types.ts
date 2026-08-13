@@ -456,6 +456,16 @@ export type HouseholdMemberSummary = Pick<
   "memberId" | "fullName" | "initials" | "phone" | "email" | "householdId" | "householdName"
 >;
 
+export type HouseholdGeocodeStatus = "not_started" | "pending" | "success" | "failed";
+
+export type HouseholdLocation = {
+  latitude: number;
+  longitude: number;
+  geocodeStatus?: HouseholdGeocodeStatus;
+  geocodedAt?: string;
+  geocodeProvider?: string;
+};
+
 export type HouseholdSummary = EntityEnvelope & {
   householdId: string;
   householdName: string;
@@ -466,6 +476,8 @@ export type HouseholdSummary = EntityEnvelope & {
   unit?: string;
   addressKey?: string;
   notes?: string;
+  location?: HouseholdLocation;
+  areaId?: string;
   memberCount: number;
   primaryContactMemberId?: string;
   members: HouseholdMemberSummary[];
@@ -489,6 +501,8 @@ export type CreateHouseholdInput = {
   address?: string;
   postalCode?: string;
   notes?: string;
+  location?: HouseholdLocation;
+  areaId?: string;
   memberIds?: string[];
   primaryContactMemberId?: string;
 };

@@ -749,6 +749,370 @@ test("creating a household returns 409 when the normalized address is claimed co
   assert.match(String(response.body), /A household already exists for this address/);
 });
 
+test("creating a household accepts valid optional geographic fields", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "BatchGetCommand") {
+          return { Responses: { "records-table": [] } };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "household-geo-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/households",
+      body: JSON.stringify({
+        householdName: "Geo Household",
+        notes: "Mapped for route planning",
+        areaId: "area-central",
+        location: {
+          latitude: 45.4215,
+          longitude: -75.6972,
+          geocodeStatus: "success",
+          geocodedAt: "2026-06-01T10:30:00.000Z",
+          geocodeProvider: "manual",
+        },
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 201);
+  const body = JSON.parse(String(response.body));
+  assert.deepEqual(body.location, {
+    latitude: 45.4215,
+    longitude: -75.6972,
+    geocodeStatus: "success",
+    geocodedAt: "2026-06-01T10:30:00.000Z",
+    geocodeProvider: "manual",
+  });
+  assert.equal(body.areaId, "area-central");
+
+  const transactWrite = commands.find((command) => command.name === "TransactWriteCommand");
+  const createdHousehold = (transactWrite?.input.TransactItems as Array<{ Put?: { Item?: Record<string, unknown> } }> | undefined)
+    ?.find((item) => item.Put?.Item && (item.Put.Item.SK as string | undefined)?.startsWith("HOUSEHOLD#"))
+    ?.Put?.Item;
+  assert.deepEqual(createdHousehold?.location, {
+    latitude: 45.4215,
+    longitude: -75.6972,
+    geocodeStatus: "success",
+    geocodedAt: "2026-06-01T10:30:00.000Z",
+    geocodeProvider: "manual",
+  });
+  assert.equal(createdHousehold?.areaId, "area-central");
+});
+
+test("creating a household rejects invalid latitude", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+
+  const handler = createHandler({
+    documentClient: {
+      send: async () => ({}),
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "household-invalid-lat",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/households",
+      body: JSON.stringify({
+        householdName: "Invalid Latitude Household",
+        location: {
+          latitude: 145.4215,
+          longitude: -75.6972,
+        },
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 400);
+  assert.match(String(response.body), /Latitude must be between -90 and 90/);
+});
+
+test("creating a household rejects invalid longitude", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+
+  const handler = createHandler({
+    documentClient: {
+      send: async () => ({}),
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "household-invalid-lng",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/households",
+      body: JSON.stringify({
+        householdName: "Invalid Longitude Household",
+        location: {
+          latitude: 45.4215,
+          longitude: -195.6972,
+        },
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 400);
+  assert.match(String(response.body), /Longitude must be between -180 and 180/);
+});
+
+test("existing household without location still reads successfully", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "GetCommand") {
+          return {
+            Item: {
+              PK: "TENANT#tenant-abc",
+              SK: "HOUSEHOLD#household-1",
+              GSI4PK: "TENANT#tenant-abc#HOUSEHOLDS",
+              GSI4SK: "NAME#alpha household#HOUSEHOLD#household-1",
+              createdAt: "2026-06-03T12:00:00.000Z",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              entityType: "HOUSEHOLD",
+              tenantId: "tenant-abc",
+              householdId: "household-1",
+              householdName: "Alpha Household",
+              address: "123 Main St",
+              postalCode: "K2P 1L4",
+              normalizedAddress: "123 MAIN ST",
+              normalizedPostalCode: "K2P1L4",
+              unit: undefined,
+              addressKey: "123 MAIN ST|K2P1L4",
+              notes: "No coordinates yet",
+              memberCount: 0,
+              primaryContactMemberId: undefined,
+              members: [],
+              normalizedSearchText: "alpha household 123 main st no coordinates yet",
+            },
+          };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "unused",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/households/household-1",
+      pathParameters: { householdId: "household-1" },
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const body = JSON.parse(String(response.body));
+  assert.equal(body.household.householdId, "household-1");
+  assert.equal("location" in body.household, false);
+});
+
+test("updating a household preserves location fields through round-trip", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const existingHousehold = {
+    PK: "TENANT#tenant-abc",
+    SK: "HOUSEHOLD#household-1",
+    GSI4PK: "TENANT#tenant-abc#HOUSEHOLDS",
+    GSI4SK: "NAME#alpha household#HOUSEHOLD#household-1",
+    createdAt: "2026-06-01T09:00:00.000Z",
+    updatedAt: "2026-06-01T09:00:00.000Z",
+    entityType: "HOUSEHOLD",
+    tenantId: "tenant-abc",
+    householdId: "household-1",
+    householdName: "Alpha Household",
+    address: "123 Main St",
+    postalCode: "K2P 1L4",
+    normalizedAddress: "123 MAIN ST",
+    normalizedPostalCode: "K2P1L4",
+    unit: undefined,
+    addressKey: "123 MAIN ST|K2P1L4",
+    notes: "Initial notes",
+    location: {
+      latitude: 45.4,
+      longitude: -75.7,
+      geocodeStatus: "pending",
+      geocodedAt: "2026-06-01T09:00:00.000Z",
+      geocodeProvider: "manual",
+    },
+    areaId: "area-old",
+    memberCount: 0,
+    primaryContactMemberId: undefined,
+    members: [],
+    normalizedSearchText: "alpha household 123 main st initial notes",
+  };
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+
+        if (command.constructor.name === "GetCommand") {
+          return { Item: existingHousehold };
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          return { Items: [] };
+        }
+
+        if (command.constructor.name === "BatchGetCommand") {
+          return { Responses: { "records-table": [] } };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "unused",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/households/household-1",
+      pathParameters: { householdId: "household-1" },
+      body: JSON.stringify({
+        notes: "Updated notes",
+        location: {
+          latitude: 45.4215,
+          longitude: -75.6972,
+          geocodeStatus: "success",
+          geocodedAt: "2026-06-03T11:45:00.000Z",
+          geocodeProvider: "manual",
+        },
+        areaId: "area-central",
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "PUT",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const body = JSON.parse(String(response.body));
+  assert.deepEqual(body.location, {
+    latitude: 45.4215,
+    longitude: -75.6972,
+    geocodeStatus: "success",
+    geocodedAt: "2026-06-03T11:45:00.000Z",
+    geocodeProvider: "manual",
+  });
+  assert.equal(body.areaId, "area-central");
+
+  const transactWrite = commands.find((command) => command.name === "TransactWriteCommand");
+  const updatedHousehold = (transactWrite?.input.TransactItems as Array<{ Put?: { Item?: Record<string, unknown> } }> | undefined)
+    ?.find((item) => item.Put?.Item && item.Put.Item.SK === "HOUSEHOLD#household-1")
+    ?.Put?.Item;
+  assert.deepEqual(updatedHousehold?.location, {
+    latitude: 45.4215,
+    longitude: -75.6972,
+    geocodeStatus: "success",
+    geocodedAt: "2026-06-03T11:45:00.000Z",
+    geocodeProvider: "manual",
+  });
+  assert.equal(updatedHousehold?.areaId, "area-central");
+});
+
 test("resolving a household conflict by creating a new household reassigns the member", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];

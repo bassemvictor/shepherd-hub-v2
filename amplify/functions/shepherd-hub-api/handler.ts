@@ -48,6 +48,8 @@ import type {
   HouseholdConflictListResponse,
   HouseholdDetailResponse,
   HouseholdDirectoryResponse,
+  HouseholdGeocodeStatus,
+  HouseholdLocation,
   HouseholdMatchResponse,
   HouseholdMemberSummary,
   HouseholdSummary,
@@ -1021,6 +1023,8 @@ const toHouseholdSummary = (
   unit: item.unit,
   addressKey: item.addressKey,
   notes: item.notes,
+  location: item.location,
+  areaId: item.areaId,
   memberCount: item.memberCount,
   primaryContactMemberId: item.primaryContactMemberId,
   members,
@@ -1223,6 +1227,53 @@ const validateMemberInput = (input: Partial<CreateMemberInput>) => {
 const householdNameMaxLength = 120;
 const householdAddressMaxLength = 240;
 const householdNotesMaxLength = 2000;
+const householdAreaIdMaxLength = 120;
+const householdGeocodeProviderMaxLength = 120;
+
+const normalizeHouseholdGeocodeStatus = (value: unknown): HouseholdGeocodeStatus | undefined => {
+  const normalized = normalizeWhitespace(value).toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized === "not_started"
+    || normalized === "pending"
+    || normalized === "success"
+    || normalized === "failed"
+    ? normalized
+    : undefined;
+};
+
+const toOptionalCoordinate = (value: unknown) => {
+  if (value === null || value === undefined || value === "") {
+    return undefined;
+  }
+
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : Number.NaN;
+};
+
+const normalizeHouseholdLocation = (value: unknown): HouseholdLocation | undefined => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const location = value as Record<string, unknown>;
+  const latitude = toOptionalCoordinate(location.latitude);
+  const longitude = toOptionalCoordinate(location.longitude);
+
+  if (latitude === undefined || longitude === undefined) {
+    return undefined;
+  }
+
+  return {
+    latitude,
+    longitude,
+    geocodeStatus: normalizeHouseholdGeocodeStatus(location.geocodeStatus),
+    geocodedAt: toOptionalString(location.geocodedAt),
+    geocodeProvider: toOptionalString(location.geocodeProvider),
+  };
+};
 
 const validateHouseholdInput = (input: Partial<CreateHouseholdInput | UpdateHouseholdInput>) => {
   const householdName = normalizeWhitespace(input.householdName);
@@ -1242,6 +1293,38 @@ const validateHouseholdInput = (input: Partial<CreateHouseholdInput | UpdateHous
   const notes = normalizeWhitespace(input.notes);
   if (notes.length > householdNotesMaxLength) {
     return `Notes must be ${householdNotesMaxLength} characters or fewer.`;
+  }
+
+  const areaId = normalizeWhitespace(input.areaId);
+  if (areaId.length > householdAreaIdMaxLength) {
+    return `Area ID must be ${householdAreaIdMaxLength} characters or fewer.`;
+  }
+
+  const location = normalizeHouseholdLocation(input.location);
+  if (input.location && !location) {
+    return "Household location must include both latitude and longitude.";
+  }
+
+  if (location) {
+    if (!Number.isFinite(location.latitude) || location.latitude < -90 || location.latitude > 90) {
+      return "Latitude must be between -90 and 90.";
+    }
+
+    if (!Number.isFinite(location.longitude) || location.longitude < -180 || location.longitude > 180) {
+      return "Longitude must be between -180 and 180.";
+    }
+
+    if (input.location?.geocodeStatus !== undefined && !location.geocodeStatus) {
+      return "Geocode status must be not_started, pending, success, or failed.";
+    }
+
+    if (location.geocodedAt && Number.isNaN(Date.parse(location.geocodedAt))) {
+      return "Geocoded date must be a valid ISO date.";
+    }
+
+    if ((location.geocodeProvider?.length ?? 0) > householdGeocodeProviderMaxLength) {
+      return `Geocode provider must be ${householdGeocodeProviderMaxLength} characters or fewer.`;
+    }
   }
 
   const memberIds = normalizeMemberIds(input.memberIds);
@@ -2320,7 +2403,7 @@ const buildHouseholdSearchText = (
 const buildHouseholdItem = (
   context: RequestContext,
   householdId: string,
-  input: Pick<CreateHouseholdInput, "householdName" | "address" | "postalCode" | "notes" | "primaryContactMemberId">,
+  input: Pick<CreateHouseholdInput, "householdName" | "address" | "postalCode" | "notes" | "primaryContactMemberId" | "location" | "areaId">,
   members: MemberItem[],
   deps: HandlerDependencies,
   existing?: HouseholdItem | null,
@@ -2328,6 +2411,8 @@ const buildHouseholdItem = (
   const householdName = normalizeWhitespace(input.householdName);
   const address = toOptionalString(input.address);
   const postalCode = toOptionalString(input.postalCode) ?? existing?.postalCode;
+  const location = normalizeHouseholdLocation(input.location) ?? existing?.location;
+  const areaId = toOptionalString(input.areaId) ?? existing?.areaId;
   const normalized = normalizeAddress({
     address,
     postalCode,
@@ -2366,6 +2451,8 @@ const buildHouseholdItem = (
     unit: normalized.unit,
     addressKey: normalized.addressKey,
     notes,
+    location,
+    areaId,
     memberCount: memberSummaries.length,
     primaryContactMemberId: toOptionalString(input.primaryContactMemberId),
     members: memberSummaries,
@@ -2597,6 +2684,8 @@ const ensureMemberAssignedToHousehold = async (
     address: household.address,
     postalCode: household.postalCode,
     notes: household.notes,
+    location: household.location,
+    areaId: household.areaId,
     memberIds: [...new Set([...(household.members ?? []).map((entry) => entry.memberId), member.memberId])],
     primaryContactMemberId: household.primaryContactMemberId,
   }, deps, household, { allowReassign: true });
@@ -3616,6 +3705,8 @@ const updateHouseholdMembership = async (
         address: priorHousehold.address,
         postalCode: priorHousehold.postalCode,
         notes: priorHousehold.notes,
+        location: priorHousehold.location,
+        areaId: priorHousehold.areaId,
         primaryContactMemberId:
           priorHousehold.primaryContactMemberId && memberIds.includes(priorHousehold.primaryContactMemberId)
             ? undefined
@@ -4855,6 +4946,8 @@ const updateHousehold = async (
     address: input.address ?? existing.address,
     postalCode: input.postalCode ?? existing.postalCode,
     notes: input.notes ?? existing.notes,
+    location: input.location ?? existing.location,
+    areaId: input.areaId ?? existing.areaId,
     memberIds: input.memberIds ?? membership.map((member) => member.memberId),
     primaryContactMemberId: input.primaryContactMemberId ?? existing.primaryContactMemberId,
   };
@@ -4936,6 +5029,8 @@ const attachMemberToHousehold = async (
     address: household.address,
     postalCode: household.postalCode,
     notes: household.notes,
+    location: household.location,
+    areaId: household.areaId,
     memberIds,
     primaryContactMemberId: household.primaryContactMemberId,
   }, deps, household, { allowReassign: true });
@@ -4961,6 +5056,8 @@ const removeMemberFromHousehold = async (
     address: household.address,
     postalCode: household.postalCode,
     notes: household.notes,
+    location: household.location,
+    areaId: household.areaId,
     memberIds: nextIds,
     primaryContactMemberId:
       household.primaryContactMemberId === memberId ? undefined : household.primaryContactMemberId,
@@ -5130,6 +5227,8 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
         address: household.address,
         postalCode: household.postalCode,
         notes: household.notes,
+        location: household.location,
+        areaId: household.areaId,
         memberIds: householdMembers
           .map((item) => item.memberId)
           .filter((id) => id !== memberId),
