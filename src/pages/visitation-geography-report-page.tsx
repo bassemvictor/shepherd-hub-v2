@@ -118,13 +118,49 @@ const formatOptionalDate = (value?: string) => {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
 };
 
-const formatHouseholdLabel = (householdId: string) => {
-  const trimmed = householdId.trim();
-  if (!trimmed) {
-    return "Household";
+const formatHouseholdLabel = (memberNames: string[]) => {
+  const names = memberNames.map((name) => name.trim()).filter(Boolean);
+  if (!names.length) {
+    return "Household members";
   }
 
-  return `Household ${trimmed.slice(0, 8)}`;
+  return names.join(", ");
+};
+
+const formatCompactAddress = (address?: string) => {
+  const trimmed = address?.trim();
+  return trimmed || "No address";
+};
+
+const formatLastVisitedBy = (name?: string) => {
+  const trimmed = name?.trim();
+  return trimmed ? ` by ${trimmed}` : "";
+};
+
+const renderMemberNameChips = (memberNames: string[]) => {
+  const names = memberNames.map((name) => name.trim()).filter(Boolean);
+  if (!names.length) {
+    return "<span style=\"color:#64748b;font-size:0.76rem;\">No members</span>";
+  }
+
+  return names
+    .map((name) => `
+      <span style="
+        display:inline-flex;
+        align-items:center;
+        border-radius:999px;
+        background:#eff6ff;
+        color:#1d4ed8;
+        font-size:0.78rem;
+        font-weight:500;
+        line-height:1;
+        padding:0.42rem 0.7rem;
+        white-space:nowrap;
+      ">
+        ${escapeHtml(name)}
+      </span>
+    `)
+    .join("");
 };
 
 const focusMapOnAreaHouseholds = (
@@ -422,15 +458,15 @@ export const VisitationGeographyReportPage = () => {
       }
 
       const popupHtml = `
-          <div style="min-width: 12rem; color: #10213d;">
-          <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 0.35rem;">
-            ${escapeHtml(formatHouseholdLabel(properties.householdId))}
+        <div style="min-width:14rem; max-width:20rem; color:#10213d; padding:0.1rem 0;">
+          <div style="font-size:0.82rem; font-weight:600; line-height:1.25; margin-bottom:0.55rem;">
+            ${escapeHtml(formatCompactAddress(properties.normalizedAddress))}
           </div>
-          <div style="font-size: 0.82rem; line-height: 1.45;">
-            <div><strong>Members:</strong> ${properties.memberCount}</div>
-            <div><strong>Visited:</strong> ${properties.visited === 1 ? "Visited" : "Not visited"}</div>
-            <div><strong>Visit count:</strong> ${properties.visitCount}</div>
-            <div><strong>Last visit:</strong> ${escapeHtml(formatOptionalDate(properties.lastVisitDate))}</div>
+          <div style="display:flex; flex-wrap:wrap; gap:0.42rem; margin-bottom:0.55rem;">
+            ${renderMemberNameChips(properties.memberNames)}
+          </div>
+          <div style="color:#475569; font-size:0.74rem; line-height:1.25;">
+            ${properties.memberCount} member${properties.memberCount === 1 ? "" : "s"} · ${properties.visited === 1 ? "Visited" : "Not visited"} · ${properties.visitCount} visit${properties.visitCount === 1 ? "" : "s"} · ${escapeHtml(formatOptionalDate(properties.lastVisitDate))}${escapeHtml(formatLastVisitedBy(properties.lastVisitedBy))}
           </div>
         </div>
       `;

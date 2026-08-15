@@ -443,10 +443,13 @@ export type VisitationAreaSummary = {
 
 export type VisitationGeographyFeatureProperties = {
   householdId: string;
+  normalizedAddress?: string;
+  memberNames: string[];
   memberCount: number;
   visited: 0 | 1;
   visitCount: number;
   lastVisitDate?: string;
+  lastVisitedBy?: string;
   areaId?: string;
 };
 

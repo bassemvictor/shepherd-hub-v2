@@ -2931,14 +2931,17 @@ test("visitation geography report aggregates households and excludes unmapped co
   assert.deepEqual(alphaFeature.geometry.coordinates, [-75.6972, 45.4215]);
   assert.deepEqual(alphaFeature.properties, {
     householdId: "household-1",
+    memberNames: ["Member One", "Member Two"],
     memberCount: 2,
     visited: 1,
     visitCount: 3,
     lastVisitDate: "2026-06-18T10:00:00.000Z",
+    lastVisitedBy: "Visitor B",
     areaId: "CENTRAL",
   });
   assert.deepEqual(betaFeature.properties, {
     householdId: "household-2",
+    memberNames: ["Member Three"],
     memberCount: 1,
     visited: 0,
     visitCount: 0,

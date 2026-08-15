@@ -7339,7 +7339,7 @@ const getVisitationGeographyReport = async (
     ? visitations
     : visitations.filter((item) => normalizeVisitationType(item.type) === filters.type);
 
-  const householdMetrics = new Map<string, { visitCount: number; lastVisitDate?: string }>();
+  const householdMetrics = new Map<string, { visitCount: number; lastVisitDate?: string; lastVisitedBy?: string }>();
   const areaSummaryById = new Map<string, VisitationAreaSummary>(
     visitationAreaDefinitions.map((definition) => [definition.id, {
       areaId: definition.id,
@@ -7372,10 +7372,12 @@ const getVisitationGeographyReport = async (
     const current = householdMetrics.get(householdId) ?? {
       visitCount: 0,
       lastVisitDate: undefined,
+      lastVisitedBy: undefined,
     };
     current.visitCount += 1;
     if (!current.lastVisitDate || visitation.visitDate > current.lastVisitDate) {
       current.lastVisitDate = visitation.visitDate;
+      current.lastVisitedBy = visitation.visitorDisplayName;
     }
     householdMetrics.set(householdId, current);
   }
@@ -7413,10 +7415,15 @@ const getVisitationGeographyReport = async (
       },
       properties: {
         householdId: household.householdId,
+        normalizedAddress: household.normalizedAddress,
+        memberNames: (household.members ?? [])
+          .map((member) => normalizeWhitespace(member.fullName))
+          .filter(Boolean),
         memberCount: household.memberCount,
         visited,
         visitCount: metrics?.visitCount ?? 0,
         lastVisitDate: metrics?.lastVisitDate,
+        lastVisitedBy: metrics?.lastVisitedBy,
         areaId,
       },
     }];
