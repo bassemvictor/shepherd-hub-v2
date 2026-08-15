@@ -29,6 +29,7 @@ import { visitationTypes } from "../../../shared/types.js";
 import type {
   AppCognitoGroup,
   AdminManagedGroup,
+  AdminJobsResponse,
   AdminResetAction,
   AdminResetSummary,
   CalendarSyncConfig,
@@ -53,6 +54,9 @@ import type {
   HouseholdMatchResponse,
   HouseholdMemberSummary,
   HouseholdSummary,
+  HouseholdGeocodeJob,
+  HouseholdGeocodeJobMode,
+  HouseholdGeocodeJobStatus,
   Member,
   MemberActivity,
   MemberDetailResponse,
@@ -92,6 +96,7 @@ import type {
   UpdateCalendarSettingsInput,
   UpdateTenantUserGroupsInput,
   UpdateTenantUserGroupsResponse,
+  CreateHouseholdGeocodeJobInput,
   CurrentUserVisitationActivity,
   TenantUserSummary,
   TenantUsersResponse,
@@ -108,6 +113,10 @@ import type {
   UpdateManualVisitationInput,
   VisitorLeaderboardEntry,
   VisitationType,
+  VisitationGeographyFeature,
+  VisitationGeographyFeatureCollection,
+  VisitationGeographyReportResponse,
+  VisitationGeographySummary,
 } from "../../../shared/types.js";
 
 type BaseItem = {
@@ -237,6 +246,18 @@ type HouseholdConflictItem = BaseItem & {
   matchedHouseholdAddress?: string;
 };
 
+type GeocodeCacheItem = BaseItem & {
+  addressKey: string;
+  normalizedAddress?: string;
+  normalizedPostalCode?: string;
+  geocodeStatus: HouseholdGeocodeStatus;
+  latitude?: number;
+  longitude?: number;
+  geocodedAt?: string;
+  geocodeProvider: string;
+  failureReason?: string;
+};
+
 type EventMemberItem = BaseItem & {
   tenantId: string;
   calendarId: string;
@@ -300,6 +321,25 @@ type MemberImportChunkItem = BaseItem & {
   rows: ImportWorkbookRow[];
 };
 
+type HouseholdGeocodeJobItem = BaseItem & {
+  tenantId: string;
+  jobId: string;
+  mode: HouseholdGeocodeJobMode;
+  status: HouseholdGeocodeJobStatus;
+  total: number;
+  processed: number;
+  success: number;
+  failed: number;
+  remaining: number;
+  startedAt?: string;
+  completedAt?: string;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
+  lastProcessedHouseholdId?: string;
+  lastProcessedAddressKey?: string;
+  lastFailureReason?: string;
+};
+
 type AuditLogItem = BaseItem & {
   tenantId: string;
   auditId: string;
@@ -344,6 +384,42 @@ type HandlerDependencies = {
   uuid: () => string;
   randomState: () => string;
   fetchImpl: typeof fetch;
+};
+
+type GeocodingQuery = {
+  addressKey: string;
+  normalizedAddress?: string;
+  normalizedPostalCode?: string;
+};
+
+type GeocodingLookupResult =
+  | {
+    geocodeStatus: "success";
+    latitude: number;
+    longitude: number;
+    geocodedAt: string;
+    geocodeProvider: string;
+  }
+  | {
+    geocodeStatus: "failed";
+    geocodedAt: string;
+    geocodeProvider: string;
+    failureReason: "no_result" | "timeout" | "provider_error" | "invalid_coordinates";
+  };
+
+type GeocodingConfig = {
+  provider: string;
+  baseUrl: string;
+  userAgent: string;
+  email?: string;
+  timeoutMs: number;
+  countryCodes?: string;
+  acceptLanguage?: string;
+};
+
+type GeocodingService = {
+  provider: string;
+  geocode: (query: GeocodingQuery, deps: HandlerDependencies) => Promise<GeocodingLookupResult>;
 };
 
 type ImportExecutionState = {
@@ -398,6 +474,27 @@ const defaultDependencies: HandlerDependencies = {
   uuid: () => randomUUID(),
   randomState: () => randomBytes(24).toString("hex"),
   fetchImpl: fetch,
+};
+
+const pendingGeocodeRequests = new Map<string, Promise<GeocodingLookupResult>>();
+const nominatimMinIntervalMs = 1_000;
+let nextNominatimRequestAt = 0;
+
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, Math.max(0, milliseconds));
+  });
+
+const awaitNominatimWindow = async () => {
+  const now = Date.now();
+  const delay = Math.max(0, nextNominatimRequestAt - now);
+  nextNominatimRequestAt = Math.max(nextNominatimRequestAt, now) + nominatimMinIntervalMs;
+  if (delay > 0) {
+    logHouseholdGeocodingEvent("nominatim.rate_limit_wait", {
+      delayMs: delay,
+    });
+    await wait(delay);
+  }
 };
 
 const allGroups: AppCognitoGroup[] = [
@@ -552,12 +649,17 @@ const eventGsiPk = (userId: string, calendarId: string) => `USER#${userId}#CALEN
 const eventGsiSk = (start: string, eventId: string) => `EVENT#${start}#${eventId}`;
 const memberSk = (memberId: string) => `MEMBER#${memberId}`;
 const householdSk = (householdId: string) => `HOUSEHOLD#${householdId}`;
+const geocodeCachePk = (addressKey: string) => `GEOCODE_CACHE#ADDRESS#${addressKey}`;
+const geocodeCacheSk = () => "GEOCODE_CACHE";
 const householdConflictSk = (memberId: string) => `HOUSEHOLD_CONFLICT#MEMBER#${memberId}`;
 const householdConflictSkPrefix = () => "HOUSEHOLD_CONFLICT#";
 const memberImportJobSk = (jobId: string) => `MEMBER_IMPORT_JOB#${jobId}`;
+const memberImportJobSkPrefix = () => "MEMBER_IMPORT_JOB#";
 const memberImportChunkSk = (jobId: string, chunkIndex: number) =>
   `MEMBER_IMPORT_JOB#${jobId}#CHUNK#${String(chunkIndex).padStart(6, "0")}`;
 const memberImportChunkSkPrefix = (jobId: string) => `MEMBER_IMPORT_JOB#${jobId}#CHUNK#`;
+const householdGeocodeJobSk = (jobId: string) => `HOUSEHOLD_GEOCODE_JOB#${jobId}`;
+const householdGeocodeJobSkPrefix = () => "HOUSEHOLD_GEOCODE_JOB#";
 const memberGsiPk = (tenantId: string) => `TENANT#${tenantId}#MEMBERS`;
 const memberGsiSk = (normalizedName: string, memberId: string) => `NAME#${normalizedName}#MEMBER#${memberId}`;
 const memberUnityGsiPk = (tenantId: string) => `TENANT#${tenantId}#UNITY`;
@@ -592,12 +694,39 @@ const importJobChunkSize = 75;
 const importJobChunksPerRequest = 2;
 const importJobErrorLimit = 100;
 const importJobLeaseDurationMs = 60_000;
+const householdGeocodeJobLeaseDurationMs = 60_000;
 const importTimingWarnThresholdMs = 200;
 
 const defaultCalendarListRefreshThresholdMinutes = 0;
+const defaultGeocodingTimeoutMs = 4_000;
 
 const getElapsedMs = (startedAt: number) => Date.now() - startedAt;
 const addMillisecondsToIso = (value: string, milliseconds: number) => new Date(Date.parse(value) + milliseconds).toISOString();
+
+const getGeocodingConfig = (): GeocodingConfig => {
+  const provider = normalizeWhitespace(process.env.GEOCODING_PROVIDER).toLowerCase() || "nominatim";
+  const baseUrl = normalizeWhitespace(process.env.NOMINATIM_BASE_URL).replace(/\/+$/, "")
+    || "https://nominatim.openstreetmap.org";
+  const userAgent = normalizeWhitespace(process.env.NOMINATIM_USER_AGENT)
+    || "ShepherdHub/0.2 (household geocoding)";
+  const email = toOptionalString(process.env.NOMINATIM_EMAIL);
+  const acceptLanguage = toOptionalString(process.env.NOMINATIM_ACCEPT_LANGUAGE);
+  const countryCodes = toOptionalString(process.env.NOMINATIM_COUNTRY_CODES);
+  const timeoutMs = Math.max(
+    500,
+    normalizeNonNegativeNumber(process.env.NOMINATIM_TIMEOUT_MS, defaultGeocodingTimeoutMs),
+  );
+
+  return {
+    provider,
+    baseUrl,
+    userAgent,
+    email,
+    timeoutMs,
+    countryCodes,
+    acceptLanguage,
+  };
+};
 
 const logImportTiming = (
   stage: string,
@@ -623,6 +752,16 @@ const logImportEvent = (
   details: Record<string, unknown> = {},
 ) => {
   console.log("[member-import]", JSON.stringify({
+    stage,
+    ...details,
+  }));
+};
+
+const logHouseholdGeocodingEvent = (
+  stage: string,
+  details: Record<string, unknown> = {},
+) => {
+  console.log("[household-geocoding]", JSON.stringify({
     stage,
     ...details,
   }));
@@ -1259,19 +1398,24 @@ const normalizeHouseholdLocation = (value: unknown): HouseholdLocation | undefin
   }
 
   const location = value as Record<string, unknown>;
+  const hasLatitude = location.latitude !== undefined && location.latitude !== null && location.latitude !== "";
+  const hasLongitude = location.longitude !== undefined && location.longitude !== null && location.longitude !== "";
   const latitude = toOptionalCoordinate(location.latitude);
   const longitude = toOptionalCoordinate(location.longitude);
+  const geocodeStatus = normalizeHouseholdGeocodeStatus(location.geocodeStatus);
+  const geocodedAt = toOptionalString(location.geocodedAt);
+  const geocodeProvider = toOptionalString(location.geocodeProvider);
 
-  if (latitude === undefined || longitude === undefined) {
+  if (!hasLatitude && !hasLongitude && !geocodeStatus && !geocodedAt && !geocodeProvider) {
     return undefined;
   }
 
   return {
-    latitude,
-    longitude,
-    geocodeStatus: normalizeHouseholdGeocodeStatus(location.geocodeStatus),
-    geocodedAt: toOptionalString(location.geocodedAt),
-    geocodeProvider: toOptionalString(location.geocodeProvider),
+    ...(latitude !== undefined ? { latitude } : {}),
+    ...(longitude !== undefined ? { longitude } : {}),
+    ...(geocodeStatus !== undefined ? { geocodeStatus } : {}),
+    ...(geocodedAt !== undefined ? { geocodedAt } : {}),
+    ...(geocodeProvider !== undefined ? { geocodeProvider } : {}),
   };
 };
 
@@ -1302,15 +1446,22 @@ const validateHouseholdInput = (input: Partial<CreateHouseholdInput | UpdateHous
 
   const location = normalizeHouseholdLocation(input.location);
   if (input.location && !location) {
-    return "Household location must include both latitude and longitude.";
+    return "Household location must include coordinates or geocode metadata.";
   }
 
   if (location) {
-    if (!Number.isFinite(location.latitude) || location.latitude < -90 || location.latitude > 90) {
+    const hasLatitude = location.latitude !== undefined;
+    const hasLongitude = location.longitude !== undefined;
+
+    if (hasLatitude !== hasLongitude) {
+      return "Household location must include both latitude and longitude.";
+    }
+
+    if (hasLatitude && (!Number.isFinite(location.latitude!) || location.latitude! < -90 || location.latitude! > 90)) {
       return "Latitude must be between -90 and 90.";
     }
 
-    if (!Number.isFinite(location.longitude) || location.longitude < -180 || location.longitude > 180) {
+    if (hasLongitude && (!Number.isFinite(location.longitude!) || location.longitude! < -180 || location.longitude! > 180)) {
       return "Longitude must be between -180 and 180.";
     }
 
@@ -1574,6 +1725,26 @@ const toMemberImportJob = (item: MemberImportJobItem): MemberImportJob => ({
   startedAt: item.startedAt,
   completedAt: item.completedAt,
   result: item.result,
+});
+
+const toHouseholdGeocodeJob = (item: HouseholdGeocodeJobItem): HouseholdGeocodeJob => ({
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+  entityType: item.entityType,
+  tenantId: item.tenantId,
+  jobId: item.jobId,
+  mode: item.mode,
+  status: item.status,
+  total: item.total,
+  processed: item.processed,
+  success: item.success,
+  failed: item.failed,
+  remaining: item.remaining,
+  startedAt: item.startedAt,
+  completedAt: item.completedAt,
+  lastProcessedHouseholdId: item.lastProcessedHouseholdId,
+  lastProcessedAddressKey: item.lastProcessedAddressKey,
+  lastFailureReason: item.lastFailureReason,
 });
 
 const putItemsInBatches = async (
@@ -2460,6 +2631,506 @@ const buildHouseholdItem = (
   };
 };
 
+const getGeocodeCache = async (addressKey: string, deps: HandlerDependencies) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: geocodeCachePk(addressKey),
+        SK: geocodeCacheSk(),
+      },
+      TableName: process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "",
+    }),
+  );
+
+  const item = response.Item as GeocodeCacheItem | undefined;
+  const cacheItem = item?.entityType === "GEOCODE_CACHE" ? item : null;
+  logHouseholdGeocodingEvent("cache.lookup", {
+    addressKey,
+    hit: Boolean(cacheItem),
+    ...(cacheItem ? {
+      cachedAt: cacheItem.geocodedAt ?? cacheItem.updatedAt,
+      cachedFailureReason: cacheItem.failureReason,
+      cachedStatus: cacheItem.geocodeStatus,
+      geocodeProvider: cacheItem.geocodeProvider,
+    } : {}),
+  });
+  return cacheItem;
+};
+
+const putGeocodeCache = async (
+  query: GeocodingQuery,
+  result: GeocodingLookupResult,
+  deps: HandlerDependencies,
+) => {
+  logHouseholdGeocodingEvent("cache.store", {
+    addressKey: query.addressKey,
+    failureReason: result.geocodeStatus === "failed" ? result.failureReason : undefined,
+    geocodedAt: result.geocodedAt,
+    geocodeProvider: result.geocodeProvider,
+    geocodeStatus: result.geocodeStatus,
+    latitude: result.geocodeStatus === "success" ? result.latitude : undefined,
+    longitude: result.geocodeStatus === "success" ? result.longitude : undefined,
+  });
+  await deps.documentClient.send(
+    new PutCommand({
+      Item: {
+        PK: geocodeCachePk(query.addressKey),
+        SK: geocodeCacheSk(),
+        createdAt: result.geocodedAt,
+        updatedAt: result.geocodedAt,
+        entityType: "GEOCODE_CACHE",
+        addressKey: query.addressKey,
+        normalizedAddress: query.normalizedAddress,
+        normalizedPostalCode: query.normalizedPostalCode,
+        geocodeStatus: result.geocodeStatus,
+        latitude: result.geocodeStatus === "success" ? result.latitude : undefined,
+        longitude: result.geocodeStatus === "success" ? result.longitude : undefined,
+        geocodedAt: result.geocodedAt,
+        geocodeProvider: result.geocodeProvider,
+        failureReason: result.geocodeStatus === "failed" ? result.failureReason : undefined,
+      } satisfies GeocodeCacheItem,
+      TableName: process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "",
+    }),
+  );
+};
+
+const toHouseholdLocationFromLookup = (result: GeocodingLookupResult): HouseholdLocation => (
+  result.geocodeStatus === "success"
+    ? {
+      latitude: result.latitude,
+      longitude: result.longitude,
+      geocodeStatus: result.geocodeStatus,
+      geocodedAt: result.geocodedAt,
+      geocodeProvider: result.geocodeProvider,
+    }
+    : {
+      geocodeStatus: result.geocodeStatus,
+      geocodedAt: result.geocodedAt,
+      geocodeProvider: result.geocodeProvider,
+    }
+);
+
+const toGeocodingLookupFromCache = (item: GeocodeCacheItem): GeocodingLookupResult => (
+  item.geocodeStatus === "success"
+  && Number.isFinite(item.latitude)
+  && Number.isFinite(item.longitude)
+  && item.latitude! >= -90
+  && item.latitude! <= 90
+  && item.longitude! >= -180
+  && item.longitude! <= 180
+    ? {
+      geocodeStatus: "success",
+      latitude: item.latitude!,
+      longitude: item.longitude!,
+      geocodedAt: item.geocodedAt ?? item.updatedAt,
+      geocodeProvider: item.geocodeProvider,
+    }
+    : {
+      geocodeStatus: "failed",
+      geocodedAt: item.geocodedAt ?? item.updatedAt,
+      geocodeProvider: item.geocodeProvider,
+      failureReason:
+        item.failureReason === "no_result"
+        || item.failureReason === "timeout"
+        || item.failureReason === "provider_error"
+        || item.failureReason === "invalid_coordinates"
+          ? item.failureReason
+          : "provider_error",
+    }
+);
+
+const nominatimGeocodingService: GeocodingService = {
+  provider: "nominatim",
+  geocode: async (query, deps) => {
+    const config = getGeocodingConfig();
+    const geocodedAt = deps.now();
+    const params = new URLSearchParams();
+    params.set("format", "jsonv2");
+    params.set("limit", "1");
+    params.set("q", [query.normalizedAddress, query.normalizedPostalCode].filter(Boolean).join(", "));
+    if (config.countryCodes) {
+      params.set("countrycodes", config.countryCodes);
+    }
+    if (config.acceptLanguage) {
+      params.set("accept-language", config.acceptLanguage);
+    }
+    if (config.email) {
+      params.set("email", config.email);
+    }
+
+    const requestUrl = `${config.baseUrl}/search?${params.toString()}`;
+    logHouseholdGeocodingEvent("provider.request.prepared", {
+      acceptLanguage: config.acceptLanguage,
+      addressKey: query.addressKey,
+      countryCodes: config.countryCodes,
+      emailConfigured: Boolean(config.email),
+      geocodeProvider: nominatimGeocodingService.provider,
+      normalizedAddress: query.normalizedAddress,
+      normalizedPostalCode: query.normalizedPostalCode,
+      timeoutMs: config.timeoutMs,
+      url: requestUrl,
+      userAgent: config.userAgent,
+    });
+
+    try {
+      await awaitNominatimWindow();
+
+      const response = await deps.fetchImpl(requestUrl, {
+        headers: {
+          "user-agent": config.userAgent,
+        },
+        signal: AbortSignal.timeout(config.timeoutMs),
+      });
+
+      logHouseholdGeocodingEvent("provider.response.received", {
+        addressKey: query.addressKey,
+        geocodeProvider: nominatimGeocodingService.provider,
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+      });
+
+      if (!response.ok) {
+        let responseBody: unknown = undefined;
+        try {
+          responseBody = await response.text();
+        } catch {
+          responseBody = "<unavailable>";
+        }
+        logHouseholdGeocodingEvent("provider.response.error", {
+          addressKey: query.addressKey,
+          body: responseBody,
+          failureReason: "provider_error",
+          geocodeProvider: nominatimGeocodingService.provider,
+          status: response.status,
+          statusText: response.statusText,
+        });
+        return {
+          geocodeStatus: "failed",
+          geocodedAt,
+          geocodeProvider: nominatimGeocodingService.provider,
+          failureReason: "provider_error",
+        };
+      }
+
+      const payload = await response.json() as Array<{ lat?: string; lon?: string }>;
+      const first = payload[0];
+      logHouseholdGeocodingEvent("provider.response.parsed", {
+        addressKey: query.addressKey,
+        candidateCount: payload.length,
+        firstCandidate: first ?? null,
+        geocodeProvider: nominatimGeocodingService.provider,
+      });
+      if (!first) {
+        logHouseholdGeocodingEvent("provider.result.no_result", {
+          addressKey: query.addressKey,
+          failureReason: "no_result",
+          geocodeProvider: nominatimGeocodingService.provider,
+        });
+        return {
+          geocodeStatus: "failed",
+          geocodedAt,
+          geocodeProvider: nominatimGeocodingService.provider,
+          failureReason: "no_result",
+        };
+      }
+
+      const latitude = Number(first.lat);
+      const longitude = Number(first.lon);
+      if (
+        !Number.isFinite(latitude)
+        || !Number.isFinite(longitude)
+        || latitude < -90
+        || latitude > 90
+        || longitude < -180
+        || longitude > 180
+      ) {
+        logHouseholdGeocodingEvent("provider.result.invalid_coordinates", {
+          addressKey: query.addressKey,
+          failureReason: "invalid_coordinates",
+          geocodeProvider: nominatimGeocodingService.provider,
+          rawLatitude: first.lat,
+          rawLongitude: first.lon,
+        });
+        return {
+          geocodeStatus: "failed",
+          geocodedAt,
+          geocodeProvider: nominatimGeocodingService.provider,
+          failureReason: "invalid_coordinates",
+        };
+      }
+
+      logHouseholdGeocodingEvent("provider.result.success", {
+        addressKey: query.addressKey,
+        geocodeProvider: nominatimGeocodingService.provider,
+        latitude,
+        longitude,
+      });
+      return {
+        geocodeStatus: "success",
+        latitude,
+        longitude,
+        geocodedAt,
+        geocodeProvider: nominatimGeocodingService.provider,
+      };
+    } catch (error) {
+      const failureReason = error instanceof Error && error.name === "TimeoutError"
+        ? "timeout"
+        : "provider_error";
+      logHouseholdGeocodingEvent("provider.request.failed", {
+        addressKey: query.addressKey,
+        errorMessage: error instanceof Error ? error.message : "Unknown geocoding error",
+        errorName: error instanceof Error ? error.name : typeof error,
+        failureReason,
+        geocodeProvider: nominatimGeocodingService.provider,
+      });
+
+      return {
+        geocodeStatus: "failed",
+        geocodedAt,
+        geocodeProvider: nominatimGeocodingService.provider,
+        failureReason,
+      };
+    }
+  },
+};
+
+const getGeocodingService = (): GeocodingService => {
+  const config = getGeocodingConfig();
+  return config.provider === "nominatim" ? nominatimGeocodingService : nominatimGeocodingService;
+};
+
+const geocodeAddress = async (query: GeocodingQuery, deps: HandlerDependencies) => {
+  logHouseholdGeocodingEvent("lookup.started", {
+    addressKey: query.addressKey,
+    normalizedAddress: query.normalizedAddress,
+    normalizedPostalCode: query.normalizedPostalCode,
+  });
+  const cached = await getGeocodeCache(query.addressKey, deps);
+  if (cached) {
+    const cachedResult = toGeocodingLookupFromCache(cached);
+    logHouseholdGeocodingEvent("lookup.cache_hit", {
+      addressKey: query.addressKey,
+      failureReason: cachedResult.geocodeStatus === "failed" ? cachedResult.failureReason : undefined,
+      geocodeProvider: cachedResult.geocodeProvider,
+      geocodeStatus: cachedResult.geocodeStatus,
+      latitude: cachedResult.geocodeStatus === "success" ? cachedResult.latitude : undefined,
+      longitude: cachedResult.geocodeStatus === "success" ? cachedResult.longitude : undefined,
+    });
+    return cachedResult;
+  }
+
+  const inFlight = pendingGeocodeRequests.get(query.addressKey);
+  if (inFlight) {
+    logHouseholdGeocodingEvent("lookup.inflight_reused", {
+      addressKey: query.addressKey,
+    });
+    return inFlight;
+  }
+
+  const request = (async () => {
+    logHouseholdGeocodingEvent("lookup.provider_start", {
+      addressKey: query.addressKey,
+      geocodeProvider: getGeocodingService().provider,
+    });
+    const service = getGeocodingService();
+    const result = await service.geocode(query, deps);
+    if (result.geocodeStatus === "success" || result.failureReason === "no_result" || result.failureReason === "invalid_coordinates") {
+      await putGeocodeCache(query, result, deps);
+    }
+    logHouseholdGeocodingEvent("lookup.completed", {
+      addressKey: query.addressKey,
+      failureReason: result.geocodeStatus === "failed" ? result.failureReason : undefined,
+      geocodeProvider: result.geocodeProvider,
+      geocodeStatus: result.geocodeStatus,
+      latitude: result.geocodeStatus === "success" ? result.latitude : undefined,
+      longitude: result.geocodeStatus === "success" ? result.longitude : undefined,
+    });
+    return result;
+  })();
+
+  pendingGeocodeRequests.set(query.addressKey, request);
+  try {
+    return await request;
+  } finally {
+    pendingGeocodeRequests.delete(query.addressKey);
+  }
+};
+
+const updateHouseholdLocation = async (
+  context: RequestContext,
+  household: HouseholdItem,
+  location: HouseholdLocation | undefined,
+  deps: HandlerDependencies,
+) => {
+  const updatedAt = deps.now();
+  logHouseholdGeocodingEvent("household.location_update", {
+    addressKey: household.addressKey,
+    geocodeProvider: location?.geocodeProvider,
+    geocodeStatus: location?.geocodeStatus,
+    householdId: household.householdId,
+    latitude: location?.latitude,
+    longitude: location?.longitude,
+    updatedAt,
+  });
+  await deps.documentClient.send(
+    new UpdateCommand({
+      ConditionExpression: "#updatedAt = :expectedUpdatedAt",
+      ExpressionAttributeNames: {
+        "#location": "location",
+        "#updatedAt": "updatedAt",
+      },
+      ExpressionAttributeValues: {
+        ":expectedUpdatedAt": household.updatedAt,
+        ":location": location,
+        ":updatedAt": updatedAt,
+      },
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: householdSk(household.householdId),
+      },
+      TableName: context.tableName,
+      UpdateExpression: "SET #location = :location, #updatedAt = :updatedAt",
+    }),
+  );
+
+  return {
+    ...household,
+    location,
+    updatedAt,
+  };
+};
+
+const prepareAutoGeocodeLocation = (_existing?: HouseholdItem | null): HouseholdLocation => ({
+  geocodeStatus: "pending",
+  geocodeProvider: getGeocodingService().provider,
+});
+
+const buildBatchPendingGeocodeLocation = (): HouseholdLocation => ({
+  geocodeStatus: "pending",
+  geocodeProvider: getGeocodingService().provider,
+});
+
+const normalizeHouseholdGeocodeJobMode = (value: unknown): HouseholdGeocodeJobMode =>
+  value === "retry_failed" ? "retry_failed" : "unmapped_only";
+
+const isHouseholdEligibleForGeocodeJob = (
+  household: HouseholdItem,
+  job: Pick<HouseholdGeocodeJobItem, "mode" | "startedAt">,
+) => {
+  const status = household.location?.geocodeStatus;
+
+  if (status === "success" && hasValidHouseholdCoordinates(household)) {
+    return false;
+  }
+
+  if (!household.addressKey) {
+    return false;
+  }
+
+  if (!household.location) {
+    return true;
+  }
+
+  if (status === "pending" || status === "not_started" || status === undefined) {
+    return true;
+  }
+
+  if (status === "failed" && job.mode === "retry_failed") {
+    if (!job.startedAt || !household.location.geocodedAt) {
+      return true;
+    }
+
+    return household.location.geocodedAt < job.startedAt;
+  }
+
+  return false;
+};
+
+const selectNextHouseholdForGeocodeJob = (
+  households: HouseholdItem[],
+  job: Pick<HouseholdGeocodeJobItem, "mode" | "startedAt">,
+) =>
+  households
+    .filter((household) => isHouseholdEligibleForGeocodeJob(household, job))
+    .sort((left, right) => {
+      const leftStatus = left.location?.geocodeStatus ?? "not_started";
+      const rightStatus = right.location?.geocodeStatus ?? "not_started";
+      const leftRank = leftStatus === "pending" ? 0 : leftStatus === "not_started" ? 1 : leftStatus === "failed" ? 2 : 3;
+      const rightRank = rightStatus === "pending" ? 0 : rightStatus === "not_started" ? 1 : rightStatus === "failed" ? 2 : 3;
+      return leftRank - rightRank || left.householdId.localeCompare(right.householdId);
+    })[0] ?? null;
+
+const shouldTriggerAutoGeocoding = (
+  nextHousehold: Pick<HouseholdItem, "addressKey">,
+  existing: HouseholdItem | null | undefined,
+  hasExplicitLocation: boolean,
+) => {
+  if (hasExplicitLocation || !nextHousehold.addressKey) {
+    return false;
+  }
+
+  return !existing || existing.addressKey !== nextHousehold.addressKey;
+};
+
+const applyAutomaticHouseholdGeocoding = async (
+  context: RequestContext,
+  household: HouseholdItem,
+  deps: HandlerDependencies,
+) => {
+  if (!household.addressKey) {
+    logHouseholdGeocodingEvent("household.skipped", {
+      householdId: household.householdId,
+      reason: "missing_address_key",
+    });
+    return household;
+  }
+
+  logHouseholdGeocodingEvent("household.autogeocode.started", {
+    addressKey: household.addressKey,
+    householdId: household.householdId,
+    normalizedAddress: household.normalizedAddress,
+    normalizedPostalCode: household.normalizedPostalCode,
+  });
+  const result = await geocodeAddress({
+    addressKey: household.addressKey,
+    normalizedAddress: household.normalizedAddress,
+    normalizedPostalCode: household.normalizedPostalCode,
+  }, deps);
+
+  try {
+    const updatedHousehold = await updateHouseholdLocation(context, household, toHouseholdLocationFromLookup(result), deps);
+    logHouseholdGeocodingEvent("household.autogeocode.finished", {
+      addressKey: household.addressKey,
+      failureReason: result.geocodeStatus === "failed" ? result.failureReason : undefined,
+      geocodeProvider: result.geocodeProvider,
+      geocodeStatus: result.geocodeStatus,
+      householdId: household.householdId,
+      latitude: result.geocodeStatus === "success" ? result.latitude : undefined,
+      longitude: result.geocodeStatus === "success" ? result.longitude : undefined,
+    });
+    return updatedHousehold;
+  } catch (error) {
+    if (isDynamoCancellationError(error)) {
+      logHouseholdGeocodingEvent("household.location_update_skipped", {
+        addressKey: household.addressKey,
+        errorMessage: error instanceof Error ? error.message : "Conditional update failed",
+        householdId: household.householdId,
+        reason: "concurrent_household_update",
+      });
+      return household;
+    }
+
+    logHouseholdGeocodingEvent("household.location_update_failed", {
+      addressKey: household.addressKey,
+      errorMessage: error instanceof Error ? error.message : "Unknown location update error",
+      errorName: error instanceof Error ? error.name : typeof error,
+      householdId: household.householdId,
+    });
+    throw error;
+  }
+};
+
 const getHouseholdConflict = async (
   context: RequestContext,
   memberId: string,
@@ -2618,6 +3289,150 @@ const getMemberImportJob = async (context: RequestContext, jobId: string, deps: 
   return (response.Item as MemberImportJobItem | undefined) ?? null;
 };
 
+const getHouseholdGeocodeJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      Key: {
+        PK: tenantPk(context.tenantId),
+        SK: householdGeocodeJobSk(jobId),
+      },
+      TableName: context.tableName,
+    }),
+  );
+
+  return (response.Item as HouseholdGeocodeJobItem | undefined) ?? null;
+};
+
+const listMemberImportJobs = async (context: RequestContext, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantPk(context.tenantId),
+      ":sk": memberImportJobSkPrefix(),
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :sk)",
+    TableName: context.tableName,
+  });
+
+  return items
+    .filter((item): item is MemberImportJobItem => item.entityType === "MEMBER_IMPORT_JOB")
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+};
+
+const listHouseholdGeocodeJobs = async (context: RequestContext, deps: HandlerDependencies) => {
+  const items = await queryAll(deps.documentClient, {
+    ExpressionAttributeNames: {
+      "#pk": "PK",
+      "#sk": "SK",
+    },
+    ExpressionAttributeValues: {
+      ":pk": tenantPk(context.tenantId),
+      ":sk": householdGeocodeJobSkPrefix(),
+    },
+    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :sk)",
+    TableName: context.tableName,
+  });
+
+  return (items as HouseholdGeocodeJobItem[]).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+};
+
+const getAdminJobs = async (context: RequestContext, deps: HandlerDependencies) => {
+  await requireAdminContext(context, deps, "admin.jobs.list");
+
+  const [memberImportJobs, householdGeocodeJobs, households] = await Promise.all([
+    listMemberImportJobs(context, deps),
+    listHouseholdGeocodeJobs(context, deps),
+    listHouseholds(context, deps),
+  ]);
+
+  const householdGeocodeCounts = households.reduce(
+    (counts, household) => {
+      const status = household.location?.geocodeStatus;
+      const hasCoordinates = household.location?.latitude !== undefined && household.location?.longitude !== undefined;
+
+      if (status === "failed") {
+        counts.failed += 1;
+      } else if (status === "pending" || status === "not_started" || (!status && !hasCoordinates)) {
+        counts.unmapped += 1;
+      }
+
+      return counts;
+    },
+    { failed: 0, unmapped: 0 },
+  );
+
+  const response: AdminJobsResponse = {
+    memberImportJobs: memberImportJobs.map((job) => toMemberImportJob(job)),
+    householdGeocodeJobs: householdGeocodeJobs.map((job) => toHouseholdGeocodeJob(job)),
+    householdGeocodeCounts,
+  };
+
+  return json(200, response);
+};
+
+const cancelMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+  await requireAdminContext(context, deps, "admin.member_import.cancel");
+
+  const job = await getMemberImportJob(context, jobId, deps);
+  if (!job) {
+    return json(404, { message: "Import job not found." });
+  }
+
+  if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+    return json(200, toMemberImportJob(job));
+  }
+
+  const cancelledAt = deps.now();
+  const cancelledJob: MemberImportJobItem = {
+    ...job,
+    updatedAt: cancelledAt,
+    completedAt: cancelledAt,
+    status: "cancelled",
+    leaseOwner: undefined,
+    leaseExpiresAt: undefined,
+  };
+
+  await putImportJob(context, cancelledJob, deps);
+  await logAuditEvent(context, "admin.member_import.cancel", "success", deps, {
+    metadata: { jobId, previousStatus: job.status },
+  });
+
+  return json(200, toMemberImportJob(cancelledJob));
+};
+
+const cancelHouseholdGeocodeJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+  await requireAdminContext(context, deps, "admin.household_geocode.cancel");
+
+  const job = await getHouseholdGeocodeJob(context, jobId, deps);
+  if (!job) {
+    return json(404, { message: "Household geocode job not found." });
+  }
+
+  if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+    return json(200, toHouseholdGeocodeJob(job));
+  }
+
+  const cancelledAt = deps.now();
+  const cancelledJob: HouseholdGeocodeJobItem = {
+    ...job,
+    updatedAt: cancelledAt,
+    completedAt: cancelledAt,
+    status: "cancelled",
+    leaseOwner: undefined,
+    leaseExpiresAt: undefined,
+  };
+
+  await putHouseholdGeocodeJob(context, cancelledJob, deps);
+  await logAuditEvent(context, "admin.household_geocode.cancel", "success", deps, {
+    metadata: { jobId, mode: job.mode, previousStatus: job.status },
+  });
+
+  return json(200, toHouseholdGeocodeJob(cancelledJob));
+};
+
 const tryAcquireMemberImportJobLease = async (
   context: RequestContext,
   jobId: string,
@@ -2636,7 +3451,7 @@ const tryAcquireMemberImportJobLease = async (
         },
         TableName: context.tableName,
         UpdateExpression: "SET updatedAt = :updatedAt, startedAt = if_not_exists(startedAt, :startedAt), #status = :status, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt",
-        ConditionExpression: "#status <> :completed AND #status <> :failed AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)",
+        ConditionExpression: "#status <> :completed AND #status <> :failed AND #status <> :cancelled AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)",
         ExpressionAttributeNames: {
           "#status": "status",
         },
@@ -2648,6 +3463,7 @@ const tryAcquireMemberImportJobLease = async (
           ":leaseExpiresAt": leaseExpiresAt,
           ":completed": "completed",
           ":failed": "failed",
+          ":cancelled": "cancelled",
           ":now": now,
         },
         ReturnValues: "ALL_NEW",
@@ -2655,6 +3471,69 @@ const tryAcquireMemberImportJobLease = async (
     );
 
     return (response.Attributes as MemberImportJobItem | undefined) ?? null;
+  } catch (error) {
+    if (
+      error instanceof Error
+      && (error.name === "ConditionalCheckFailedException" || error.name === "TransactionCanceledException")
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
+};
+
+const putHouseholdGeocodeJob = async (
+  context: RequestContext,
+  item: HouseholdGeocodeJobItem,
+  deps: HandlerDependencies,
+) => {
+  await deps.documentClient.send(
+    new PutCommand({
+      Item: item,
+      TableName: context.tableName,
+    }),
+  );
+};
+
+const tryAcquireHouseholdGeocodeJobLease = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
+  const now = deps.now();
+  const leaseOwner = deps.uuid();
+  const leaseExpiresAt = addMillisecondsToIso(now, householdGeocodeJobLeaseDurationMs);
+
+  try {
+    const response = await deps.documentClient.send(
+      new UpdateCommand({
+        Key: {
+          PK: tenantPk(context.tenantId),
+          SK: householdGeocodeJobSk(jobId),
+        },
+        TableName: context.tableName,
+        UpdateExpression: "SET updatedAt = :updatedAt, startedAt = if_not_exists(startedAt, :startedAt), #status = :status, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt",
+        ConditionExpression: "#status <> :completed AND #status <> :failed AND #status <> :cancelled AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)",
+        ExpressionAttributeNames: {
+          "#status": "status",
+        },
+        ExpressionAttributeValues: {
+          ":updatedAt": now,
+          ":startedAt": now,
+          ":status": "running",
+          ":leaseOwner": leaseOwner,
+          ":leaseExpiresAt": leaseExpiresAt,
+          ":completed": "completed",
+          ":failed": "failed",
+          ":cancelled": "cancelled",
+          ":now": now,
+        },
+        ReturnValues: "ALL_NEW",
+      }),
+    );
+
+    return (response.Attributes as HouseholdGeocodeJobItem | undefined) ?? null;
   } catch (error) {
     if (
       error instanceof Error
@@ -2853,6 +3732,7 @@ const resolveImportHouseholdAssignment = async (
     address: member.address,
     postalCode: member.postalCode,
     notes: undefined,
+    location: buildBatchPendingGeocodeLocation(),
     memberIds: [member.memberId],
   }, deps, null);
   upsertHouseholdInImportState(state, createdHousehold);
@@ -4909,15 +5789,27 @@ const createHousehold = async (
     allowReassign?: boolean;
   } = {},
 ) => {
-  const validationError = validateHouseholdInput(input);
-  if (validationError) {
-    return json(400, { message: validationError });
-  }
-
   const normalized = normalizeAddress({
     address: toOptionalString(input.address),
     postalCode: toOptionalString(input.postalCode),
   });
+  const shouldAutoGeocode = shouldTriggerAutoGeocoding(
+    { addressKey: normalized.addressKey },
+    null,
+    input.location !== undefined,
+  );
+  const geocodingInput = shouldAutoGeocode
+    ? {
+      ...input,
+      location: prepareAutoGeocodeLocation(),
+    }
+    : input;
+
+  const validationError = validateHouseholdInput(geocodingInput);
+  if (validationError) {
+    return json(400, { message: validationError });
+  }
+
   if (normalized.addressKey) {
     const existing = await getHouseholdByAddressKey(context, normalized.addressKey, deps);
     if (existing) {
@@ -4925,8 +5817,23 @@ const createHousehold = async (
     }
   }
   const householdId = buildAutoHouseholdId(normalized.addressKey, deps);
-  const household = await updateHouseholdMembership(context, householdId, input, deps, null, options);
-  return json(201, toHouseholdSummary(household));
+  const household = await updateHouseholdMembership(context, householdId, geocodingInput, deps, null, options);
+
+  let responseHousehold = household;
+  if (shouldAutoGeocode) {
+    try {
+      responseHousehold = await applyAutomaticHouseholdGeocoding(context, household, deps);
+    } catch (error) {
+      console.warn("[household-geocoding]", JSON.stringify({
+        action: "create",
+        addressKey: household.addressKey,
+        error: error instanceof Error ? error.message : "Unexpected geocoding error",
+        householdId: household.householdId,
+      }));
+    }
+  }
+
+  return json(201, toHouseholdSummary(responseHousehold));
 };
 
 const updateHousehold = async (
@@ -4951,13 +5858,44 @@ const updateHousehold = async (
     memberIds: input.memberIds ?? membership.map((member) => member.memberId),
     primaryContactMemberId: input.primaryContactMemberId ?? existing.primaryContactMemberId,
   };
-  const validationError = validateHouseholdInput(merged);
+  const nextNormalized = normalizeAddress({
+    address: toOptionalString(merged.address),
+    postalCode: toOptionalString(merged.postalCode),
+  });
+  const shouldAutoGeocode = shouldTriggerAutoGeocoding(
+    { addressKey: nextNormalized.addressKey },
+    existing,
+    input.location !== undefined,
+  );
+  const geocodingInput = shouldAutoGeocode
+    ? {
+      ...merged,
+      location: prepareAutoGeocodeLocation(existing),
+    }
+    : merged;
+
+  const validationError = validateHouseholdInput(geocodingInput);
   if (validationError) {
     return json(400, { message: validationError });
   }
 
-  const household = await updateHouseholdMembership(context, householdId, merged, deps, existing);
-  return json(200, toHouseholdSummary(household));
+  const household = await updateHouseholdMembership(context, householdId, geocodingInput, deps, existing);
+
+  let responseHousehold = household;
+  if (shouldAutoGeocode) {
+    try {
+      responseHousehold = await applyAutomaticHouseholdGeocoding(context, household, deps);
+    } catch (error) {
+      console.warn("[household-geocoding]", JSON.stringify({
+        action: "update",
+        addressKey: household.addressKey,
+        error: error instanceof Error ? error.message : "Unexpected geocoding error",
+        householdId: household.householdId,
+      }));
+    }
+  }
+
+  return json(200, toHouseholdSummary(responseHousehold));
 };
 
 const deleteHousehold = async (context: RequestContext, householdId: string, deps: HandlerDependencies) => {
@@ -5381,6 +6319,52 @@ const createMemberImportJob = async (context: RequestContext, input: MemberImpor
   return json(202, toMemberImportJob(jobItem));
 };
 
+const createHouseholdGeocodeJob = async (
+  context: RequestContext,
+  input: CreateHouseholdGeocodeJobInput,
+  deps: HandlerDependencies,
+) => {
+  await requireAdminContext(context, deps, "admin.household_geocode.start");
+
+  const mode = normalizeHouseholdGeocodeJobMode(input.mode);
+  const existingJobs = await listHouseholdGeocodeJobs(context, deps);
+  const activeJob = existingJobs.find((job) => job.mode === mode && (job.status === "queued" || job.status === "running"));
+  if (activeJob) {
+    return json(200, toHouseholdGeocodeJob(activeJob));
+  }
+
+  const households = await listHouseholds(context, deps);
+  const createdAt = deps.now();
+  const startedAt = createdAt;
+  const total = households.filter((household) => isHouseholdEligibleForGeocodeJob(household, { mode, startedAt })).length;
+  const jobId = deps.uuid();
+  const job: HouseholdGeocodeJobItem = {
+    PK: tenantPk(context.tenantId),
+    SK: householdGeocodeJobSk(jobId),
+    createdAt,
+    updatedAt: createdAt,
+    entityType: "HOUSEHOLD_GEOCODE_JOB",
+    tenantId: context.tenantId,
+    jobId,
+    mode,
+    status: total > 0 ? "queued" : "completed",
+    total,
+    processed: 0,
+    success: 0,
+    failed: 0,
+    remaining: total,
+    startedAt,
+    completedAt: total > 0 ? undefined : createdAt,
+  };
+
+  await putHouseholdGeocodeJob(context, job, deps);
+  await logAuditEvent(context, "admin.household_geocode.start", "success", deps, {
+    metadata: { jobId, mode, total },
+  });
+
+  return json(202, toHouseholdGeocodeJob(job));
+};
+
 const putImportJob = async (context: RequestContext, item: MemberImportJobItem, deps: HandlerDependencies) => {
   await deps.documentClient.send(
     new PutCommand({
@@ -5397,7 +6381,7 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
     return json(404, { message: "Import job not found." });
   }
 
-  if (job.status === "completed" || job.status === "failed") {
+  if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
     logImportEvent("processMemberImportJob.skipped", {
       jobId,
       status: job.status,
@@ -5523,6 +6507,10 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
     leaseOwner: undefined,
     leaseExpiresAt: undefined,
   };
+  const currentJob = await getMemberImportJob(context, jobId, deps);
+  if (currentJob?.status === "cancelled") {
+    return json(200, toMemberImportJob(currentJob));
+  }
   await putImportJob(context, nextJob, deps);
   logImportEvent("processMemberImportJob.completed", {
     jobId,
@@ -5545,6 +6533,101 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
   });
 
   return json(200, toMemberImportJob(nextJob));
+};
+
+const processHouseholdGeocodeJob = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
+  await requireAdminContext(context, deps, "admin.household_geocode.process");
+
+  const job = await getHouseholdGeocodeJob(context, jobId, deps);
+  if (!job) {
+    return json(404, { message: "Household geocode job not found." });
+  }
+
+  if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+    return json(200, toHouseholdGeocodeJob(job));
+  }
+
+  const leasedJob = await tryAcquireHouseholdGeocodeJobLease(context, jobId, deps);
+  if (!leasedJob) {
+    const currentJob = await getHouseholdGeocodeJob(context, jobId, deps);
+    return json(200, toHouseholdGeocodeJob(currentJob ?? job));
+  }
+
+  const households = await listHouseholds(context, deps);
+  const nextHousehold = selectNextHouseholdForGeocodeJob(households, leasedJob);
+
+  if (!nextHousehold) {
+    const completedAt = deps.now();
+    const completedJob: HouseholdGeocodeJobItem = {
+      ...leasedJob,
+      updatedAt: completedAt,
+      completedAt,
+      status: "completed",
+      remaining: 0,
+      leaseOwner: undefined,
+      leaseExpiresAt: undefined,
+    };
+    await putHouseholdGeocodeJob(context, completedJob, deps);
+    return json(200, toHouseholdGeocodeJob(completedJob));
+  }
+
+  let updatedHousehold: HouseholdItem;
+  let jobFailureReason: string | undefined;
+
+  try {
+    updatedHousehold = await applyAutomaticHouseholdGeocoding(
+      context,
+      {
+        ...nextHousehold,
+        location: nextHousehold.location ?? buildBatchPendingGeocodeLocation(),
+      },
+      deps,
+    );
+    jobFailureReason = updatedHousehold.location?.geocodeStatus === "failed"
+      ? "failed"
+      : undefined;
+  } catch (error) {
+    logHouseholdGeocodingEvent("job.household_processing_failed", {
+      addressKey: nextHousehold.addressKey,
+      errorMessage: error instanceof Error ? error.message : "Unexpected job error",
+      errorName: error instanceof Error ? error.name : typeof error,
+      householdId: nextHousehold.householdId,
+      jobId,
+    });
+    updatedHousehold = nextHousehold;
+    jobFailureReason = "job_error";
+  }
+
+  const success = leasedJob.success + (updatedHousehold.location?.geocodeStatus === "success" ? 1 : 0);
+  const failed = leasedJob.failed + (updatedHousehold.location?.geocodeStatus === "success" ? 0 : 1);
+  const processed = leasedJob.processed + 1;
+  const remaining = Math.max(0, leasedJob.total - processed);
+  const completedAt = remaining === 0 ? deps.now() : undefined;
+  const nextJob: HouseholdGeocodeJobItem = {
+    ...leasedJob,
+    updatedAt: deps.now(),
+    completedAt,
+    failed,
+    lastFailureReason: jobFailureReason,
+    lastProcessedAddressKey: nextHousehold.addressKey,
+    lastProcessedHouseholdId: nextHousehold.householdId,
+    processed,
+    remaining,
+    status: remaining === 0 ? "completed" : "running",
+    success,
+    leaseOwner: undefined,
+    leaseExpiresAt: undefined,
+  };
+  const currentJob = await getHouseholdGeocodeJob(context, jobId, deps);
+  if (currentJob?.status === "cancelled") {
+    return json(200, toHouseholdGeocodeJob(currentJob));
+  }
+  await putHouseholdGeocodeJob(context, nextJob, deps);
+  return json(200, toHouseholdGeocodeJob(nextJob));
 };
 
 const getMemberEventsResponse = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
@@ -6207,6 +7290,123 @@ const getVisitationReport = async (
       .slice(0, 5),
     currentUserActivity,
     generatedAt: deps.now(),
+  };
+
+  return json(200, response);
+};
+
+const hasValidHouseholdCoordinates = (household: Pick<HouseholdItem, "location">) => {
+  const latitude = household.location?.latitude;
+  const longitude = household.location?.longitude;
+
+  return Number.isFinite(latitude)
+    && Number.isFinite(longitude)
+    && latitude! >= -90
+    && latitude! <= 90
+    && longitude! >= -180
+    && longitude! <= 180;
+};
+
+const getVisitationGeographyReport = async (
+  context: RequestContext,
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  deps: HandlerDependencies,
+) => {
+  const filters = parseVisitationReportFilters(event);
+  const [households, visitations] = await Promise.all([
+    listHouseholds(context, deps),
+    listTenantVisitations(context, deps),
+  ]);
+
+  const householdById = new Map(households.map((household) => [household.householdId, household]));
+  const householdIdByMemberId = new Map<string, string>();
+  for (const household of households) {
+    for (const member of household.members ?? []) {
+      householdIdByMemberId.set(member.memberId, household.householdId);
+    }
+  }
+
+  const reportVisitations = filters.type === "all"
+    ? visitations
+    : visitations.filter((item) => normalizeVisitationType(item.type) === filters.type);
+
+  const householdMetrics = new Map<string, { visitCount: number; lastVisitDate?: string }>();
+
+  for (const visitation of reportVisitations) {
+    const householdId = householdIdByMemberId.get(visitation.memberId);
+    if (!householdId || !householdById.has(householdId)) {
+      continue;
+    }
+
+    if (!matchesReportVisitorFilter(visitation, filters, context.actorSub)) {
+      continue;
+    }
+
+    const inFromRange = !filters.from || visitation.visitDate >= filters.from;
+    const inToRange = !filters.to || visitation.visitDate <= filters.to;
+    if (!inFromRange || !inToRange) {
+      continue;
+    }
+
+    const current = householdMetrics.get(householdId) ?? {
+      visitCount: 0,
+      lastVisitDate: undefined,
+    };
+    current.visitCount += 1;
+    if (!current.lastVisitDate || visitation.visitDate > current.lastVisitDate) {
+      current.lastVisitDate = visitation.visitDate;
+    }
+    householdMetrics.set(householdId, current);
+  }
+
+  const totalMembers = households.reduce((sum, household) => sum + household.memberCount, 0);
+  const totalHouseholds = households.length;
+  const visitedHouseholds = households.filter((household) => (householdMetrics.get(household.householdId)?.visitCount ?? 0) > 0).length;
+  const notVisitedHouseholds = Math.max(0, totalHouseholds - visitedHouseholds);
+  const visitationsCount = [...householdMetrics.values()].reduce((sum, item) => sum + item.visitCount, 0);
+  const mappedHouseholds = households.filter(hasValidHouseholdCoordinates).length;
+  const unmappedHouseholds = Math.max(0, totalHouseholds - mappedHouseholds);
+
+  const features: VisitationGeographyFeature[] = households.flatMap((household) => {
+    if (!hasValidHouseholdCoordinates(household)) {
+      return [];
+    }
+
+    const metrics = householdMetrics.get(household.householdId);
+    return [{
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [household.location!.longitude!, household.location!.latitude!],
+      },
+      properties: {
+        householdId: household.householdId,
+        memberCount: household.memberCount,
+        visited: metrics?.visitCount ? 1 : 0,
+        visitCount: metrics?.visitCount ?? 0,
+        lastVisitDate: metrics?.lastVisitDate,
+        areaId: household.areaId,
+      },
+    }];
+  });
+
+  const summary: VisitationGeographySummary = {
+    totalMembers,
+    totalHouseholds,
+    visitedHouseholds,
+    notVisitedHouseholds,
+    coverage: totalHouseholds ? (visitedHouseholds / totalHouseholds) * 100 : 0,
+    visitations: visitationsCount,
+    mappedHouseholds,
+    unmappedHouseholds,
+  };
+
+  const response: VisitationGeographyReportResponse = {
+    summary,
+    households: {
+      type: "FeatureCollection",
+      features,
+    } satisfies VisitationGeographyFeatureCollection,
   };
 
   return json(200, response);
@@ -7011,6 +8211,31 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         return await processMemberImportJob(context, importJobId, deps);
       }
 
+      if (path === `/members/import/${importJobId}/cancel` && importJobId && method === "POST") {
+        return await cancelMemberImportJob(context, importJobId, deps);
+      }
+
+      const householdGeocodeJobId = typedEvent.pathParameters?.jobId;
+      if (method === "POST" && path === "/admin/household-geocoding") {
+        return await createHouseholdGeocodeJob(
+          context,
+          parseBody<CreateHouseholdGeocodeJobInput>(typedEvent.body),
+          deps,
+        );
+      }
+
+      if (method === "GET" && path === "/admin/jobs") {
+        return await getAdminJobs(context, deps);
+      }
+
+      if (path === `/admin/household-geocoding/${householdGeocodeJobId}` && householdGeocodeJobId && method === "GET") {
+        return await processHouseholdGeocodeJob(context, householdGeocodeJobId, deps);
+      }
+
+      if (path === `/admin/household-geocoding/${householdGeocodeJobId}/cancel` && householdGeocodeJobId && method === "POST") {
+        return await cancelHouseholdGeocodeJob(context, householdGeocodeJobId, deps);
+      }
+
       const memberId = typedEvent.pathParameters?.memberId;
 
       if (path === `/members/${memberId}` && memberId) {
@@ -7125,6 +8350,10 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       if (method === "GET" && path === "/reports/visitations") {
         return await getVisitationReport(context, typedEvent, deps);
+      }
+
+      if (method === "GET" && path === "/reports/visitation-geography") {
+        return await getVisitationGeographyReport(context, typedEvent, deps);
       }
 
       if (method === "POST" && path === "/schedule/google/connect") {

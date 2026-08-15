@@ -69,6 +69,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
           label: "Admin",
           items: [
             { label: "User Groups", href: "/admin/user-groups", icon: Users },
+            { label: "Data Jobs", href: "/admin/jobs", icon: ClipboardList },
             { label: "Tenant Reset", href: "/admin/tenant-reset", icon: Settings2 },
           ],
         } satisfies NavigationSection,

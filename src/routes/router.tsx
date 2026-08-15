@@ -4,6 +4,7 @@ import { ProtectedRoute } from "../components/auth/protected-route";
 import { RequireGroups } from "../components/auth/require-groups";
 import { AppShell } from "../components/layout/app-shell";
 import { AuthPage } from "../pages/auth-page";
+import { AdminJobsPage } from "../pages/admin-jobs-page";
 import { AdminTenantResetPage } from "../pages/admin-tenant-reset-page";
 import { AdminUserGroupsPage } from "../pages/admin-user-groups-page";
 import { CalendarSettingsPage } from "../pages/calendar-settings-page";
@@ -94,6 +95,18 @@ export const router = createBrowserRouter([
             <AdminUserGroupsPage />
           </RequireGroups>
         ),
+      },
+      {
+        path: "admin/jobs",
+        element: (
+          <RequireGroups groups={["admin"]}>
+            <AdminJobsPage />
+          </RequireGroups>
+        ),
+      },
+      {
+        path: "admin/household-geocoding",
+        element: <Navigate replace to="/admin/jobs" />,
       },
       {
         path: "admin/tenant-reset",

@@ -1,3 +1,5 @@
+import type { Feature, FeatureCollection, Point } from "geojson";
+
 export type EntityEnvelope = {
   entityType: string;
   tenantId: string;
@@ -417,6 +419,35 @@ export type VisitationReportResponse = {
   generatedAt: string;
 };
 
+export type VisitationGeographySummary = {
+  totalMembers: number;
+  totalHouseholds: number;
+  visitedHouseholds: number;
+  notVisitedHouseholds: number;
+  coverage: number;
+  visitations: number;
+  mappedHouseholds: number;
+  unmappedHouseholds: number;
+};
+
+export type VisitationGeographyFeatureProperties = {
+  householdId: string;
+  memberCount: number;
+  visited: 0 | 1;
+  visitCount: number;
+  lastVisitDate?: string;
+  areaId?: string;
+};
+
+export type VisitationGeographyFeature = Feature<Point, VisitationGeographyFeatureProperties>;
+
+export type VisitationGeographyFeatureCollection = FeatureCollection<Point, VisitationGeographyFeatureProperties>;
+
+export type VisitationGeographyReportResponse = {
+  summary: VisitationGeographySummary;
+  households: VisitationGeographyFeatureCollection;
+};
+
 export type MemberActivity = {
   activityId: string;
   action: string;
@@ -459,8 +490,8 @@ export type HouseholdMemberSummary = Pick<
 export type HouseholdGeocodeStatus = "not_started" | "pending" | "success" | "failed";
 
 export type HouseholdLocation = {
-  latitude: number;
-  longitude: number;
+  latitude?: number;
+  longitude?: number;
   geocodeStatus?: HouseholdGeocodeStatus;
   geocodedAt?: string;
   geocodeProvider?: string;
@@ -551,7 +582,7 @@ export type MemberImportResult = {
   errors: Array<{ row: number; message: string }>;
 };
 
-export type MemberImportJobStatus = "queued" | "running" | "completed" | "failed";
+export type MemberImportJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 export type MemberImportJob = EntityEnvelope & {
   jobId: string;
@@ -608,6 +639,15 @@ export type MemberImportInput = {
   workbookBase64: string;
 };
 
+export type AdminJobsResponse = {
+  memberImportJobs: MemberImportJob[];
+  householdGeocodeJobs: HouseholdGeocodeJob[];
+  householdGeocodeCounts: {
+    unmapped: number;
+    failed: number;
+  };
+};
+
 export type TenantUserSummary = {
   username: string;
   sub: string;
@@ -647,4 +687,27 @@ export type AdminResetSummary = {
     deleted: number;
   }>;
   status: "success" | "error";
+};
+
+export type HouseholdGeocodeJobMode = "unmapped_only" | "retry_failed";
+export type HouseholdGeocodeJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export type HouseholdGeocodeJob = EntityEnvelope & {
+  jobId: string;
+  mode: HouseholdGeocodeJobMode;
+  status: HouseholdGeocodeJobStatus;
+  total: number;
+  processed: number;
+  success: number;
+  failed: number;
+  remaining: number;
+  startedAt?: string;
+  completedAt?: string;
+  lastProcessedHouseholdId?: string;
+  lastProcessedAddressKey?: string;
+  lastFailureReason?: string;
+};
+
+export type CreateHouseholdGeocodeJobInput = {
+  mode?: HouseholdGeocodeJobMode;
 };

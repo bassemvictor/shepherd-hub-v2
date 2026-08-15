@@ -1,39 +1,24 @@
-import { ArrowUpDown, Download, Plus, RefreshCcw } from "lucide-react";
+import { ArrowUpDown, Plus, RefreshCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
-import type { CreateMemberInput, MemberImportJob } from "../../shared/types";
-import { MemberAvatar, MemberFormDialog, MemberImportDialog, UnityBadge } from "../components/members/member-ui";
+import type { CreateMemberInput } from "../../shared/types";
+import { MemberAvatar, MemberFormDialog, UnityBadge } from "../components/members/member-ui";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
 import { PageHeader } from "../components/common/page-header";
 import { Button } from "../components/ui/button";
 import { api, isApiConfigured } from "../lib/api";
-import { useAuth } from "../lib/auth";
-import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { refreshMembersIndexCache, useMembersIndex } from "../lib/members-index";
 
 type SortMode = "az" | "recent";
 const PAGE_SIZE = 25;
-const activeImportJobStorageKey = "members-import-job-id";
-
-const fileToBase64 = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result ?? "");
-      resolve(result.split(",")[1] ?? "");
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Unable to read file."));
-    reader.readAsDataURL(file);
-  });
 
 export const MembersPage = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
   const {
     cacheScope,
     items: members,
@@ -43,16 +28,12 @@ export const MembersPage = () => {
     refresh,
     status: authStatus,
   } = useMembersIndex();
-  const { cacheScope: householdCacheScope } = useHouseholdsIndex();
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [sortMode, setSortMode] = useState<SortMode>("az");
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importJob, setImportJob] = useState<MemberImportJob | null>(null);
 
   useEffect(() => {
     if (searchParams.get("mobileAction") !== "new-member") {
@@ -69,22 +50,6 @@ export const MembersPage = () => {
     const nextQuery = searchParams.get("q") ?? "";
     setQuery((current) => (current === nextQuery ? current : nextQuery));
   }, [searchParams]);
-
-  useEffect(() => {
-    const persistedJobId = window.sessionStorage.getItem(activeImportJobStorageKey);
-    if (!persistedJobId || importJob) {
-      return;
-    }
-
-    void (async () => {
-      try {
-        const nextJob = await api.get<MemberImportJob>(`/members/import/${persistedJobId}`);
-        setImportJob(nextJob);
-      } catch {
-        window.sessionStorage.removeItem(activeImportJobStorageKey);
-      }
-    })();
-  }, [importJob]);
 
   const filteredMembers = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -118,52 +83,7 @@ export const MembersPage = () => {
     } finally {
       setSavingMember(false);
     }
-  }, [queryClient, user?.tenantId]);
-
-  const handleImport = useCallback(async (file: File) => {
-    setImporting(true);
-    setImportJob(null);
-    setError(null);
-    try {
-      const workbookBase64 = await fileToBase64(file);
-      const nextJob = await api.post<MemberImportJob>("/members/import", {
-        fileName: file.name,
-        workbookBase64,
-      });
-      window.sessionStorage.setItem(activeImportJobStorageKey, nextJob.jobId);
-      setImportJob(nextJob);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to import members.");
-    } finally {
-      setImporting(false);
-    }
-  }, [user?.tenantId]);
-
-  useEffect(() => {
-    if (!importJob || !["queued", "running"].includes(importJob.status)) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const nextJob = await api.get<MemberImportJob>(`/members/import/${importJob.jobId}`);
-          setImportJob(nextJob);
-          if (nextJob.status === "completed") {
-            window.sessionStorage.removeItem(activeImportJobStorageKey);
-            await Promise.all([
-              refreshMembersIndexCache(queryClient, cacheScope),
-              refreshHouseholdsIndexCache(queryClient, householdCacheScope),
-            ]);
-          }
-        } catch (reason) {
-          setError(reason instanceof Error ? reason.message : "Unable to refresh import status.");
-        }
-      })();
-    }, 1200);
-
-    return () => window.clearTimeout(timer);
-  }, [cacheScope, householdCacheScope, importJob, queryClient]);
+  }, [cacheScope, queryClient]);
 
   if (!isApiConfigured) {
     return <ErrorState description="Set `VITE_API_BASE_URL` or regenerate `amplify_outputs.json` before using member APIs." title="API not configured" />;
@@ -221,17 +141,6 @@ export const MembersPage = () => {
             >
               <ArrowUpDown className="h-4 w-4" />
               <span className="sr-only sm:not-sr-only">{sortMode === "az" ? "A-Z" : "Recent"}</span>
-            </Button>
-            <Button
-              aria-label="Import Excel"
-              className="w-full sm:w-auto"
-              onClick={() => setImportOpen(true)}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <Download className="h-4 w-4" />
-              <span className="sr-only sm:not-sr-only">Import Excel</span>
             </Button>
             <Button
               aria-label="Refresh members"
@@ -325,13 +234,6 @@ export const MembersPage = () => {
         onSubmit={handleCreateMember}
         open={createOpen}
         title="Add Member"
-      />
-      <MemberImportDialog
-        busy={importing}
-        job={importJob}
-        onClose={() => setImportOpen(false)}
-        onImport={handleImport}
-        open={importOpen}
       />
     </div>
   );

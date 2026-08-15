@@ -101,6 +101,19 @@ backend.shepherdHubApi.addEnvironment(
   "GOOGLE_OAUTH_SUCCESS_REDIRECT_URL",
   process.env.GOOGLE_OAUTH_SUCCESS_REDIRECT_URL ?? "",
 );
+backend.shepherdHubApi.addEnvironment("GEOCODING_PROVIDER", process.env.GEOCODING_PROVIDER ?? "nominatim");
+backend.shepherdHubApi.addEnvironment(
+  "NOMINATIM_BASE_URL",
+  process.env.NOMINATIM_BASE_URL ?? "https://nominatim.openstreetmap.org",
+);
+backend.shepherdHubApi.addEnvironment(
+  "NOMINATIM_USER_AGENT",
+  process.env.NOMINATIM_USER_AGENT ?? "ShepherdHub/0.2 (household geocoding)",
+);
+backend.shepherdHubApi.addEnvironment("NOMINATIM_EMAIL", process.env.NOMINATIM_EMAIL ?? "");
+backend.shepherdHubApi.addEnvironment("NOMINATIM_TIMEOUT_MS", process.env.NOMINATIM_TIMEOUT_MS ?? "4000");
+backend.shepherdHubApi.addEnvironment("NOMINATIM_COUNTRY_CODES", process.env.NOMINATIM_COUNTRY_CODES ?? "ca");
+backend.shepherdHubApi.addEnvironment("NOMINATIM_ACCEPT_LANGUAGE", process.env.NOMINATIM_ACCEPT_LANGUAGE ?? "en");
 recordsTable.grantReadWriteData(backend.shepherdHubApi.resources.lambda);
 backend.shepherdHubApi.resources.lambda.addToRolePolicy(
   new PolicyStatement({
@@ -190,6 +203,7 @@ addProtectedRoutes("/households/{householdId}/members", [HttpMethod.POST]);
 addProtectedRoutes("/households/{householdId}/members/{memberId}", [HttpMethod.DELETE]);
 addProtectedRoutes("/events/{eventId}/members", [HttpMethod.GET, HttpMethod.PUT]);
 addProtectedRoutes("/reports/visitations", [HttpMethod.GET]);
+addProtectedRoutes("/reports/visitation-geography", [HttpMethod.GET]);
 addProtectedRoutes("/schedule/overview", [HttpMethod.GET]);
 addProtectedRoutes("/schedule/google/connect", [HttpMethod.POST]);
 addProtectedRoutes("/schedule/google/connection", [HttpMethod.DELETE]);
@@ -205,6 +219,11 @@ addProtectedRoutes("/schedule/events/{eventId}", [HttpMethod.GET, HttpMethod.PUT
 addProtectedRoutes("/admin/users", [HttpMethod.GET]);
 addProtectedRoutes("/admin/users/{username}/groups", [HttpMethod.PUT]);
 addProtectedRoutes("/admin/reset/{action}", [HttpMethod.POST]);
+addProtectedRoutes("/admin/jobs", [HttpMethod.GET]);
+addProtectedRoutes("/admin/household-geocoding", [HttpMethod.POST]);
+addProtectedRoutes("/admin/household-geocoding/{jobId}", [HttpMethod.GET]);
+addProtectedRoutes("/admin/household-geocoding/{jobId}/cancel", [HttpMethod.POST]);
+addProtectedRoutes("/members/import/{jobId}/cancel", [HttpMethod.POST]);
 
 httpApi.addRoutes({
   path: "/schedule/google/callback",

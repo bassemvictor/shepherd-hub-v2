@@ -128,6 +128,7 @@ export const HouseholdDetailPage = () => {
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{household.householdName}</h1>
           </div>
           <div className="mt-1 text-sm text-muted-foreground">{household.address || "No address"}</div>
+          <div className="mt-1 text-sm text-muted-foreground">{household.postalCode || "No postal code"}</div>
           {isAdminUser(user?.groups ?? []) && (household.normalizedAddress || household.addressKey) ? (
             <div className="mt-2 text-xs text-muted-foreground">
               {household.normalizedAddress || "No normalized address"} · {household.addressKey || "No address key"}
@@ -176,6 +177,7 @@ export const HouseholdDetailPage = () => {
         initialValue={{
           householdName: household.householdName,
           address: household.address,
+          postalCode: household.postalCode,
           notes: household.notes,
           memberIds: household.members.map((member) => member.memberId),
         }}

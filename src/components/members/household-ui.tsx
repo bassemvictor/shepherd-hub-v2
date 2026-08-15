@@ -122,6 +122,7 @@ export const HouseholdSearchAutocomplete = ({
 const householdDefaults: CreateHouseholdInput = {
   householdName: "",
   address: "",
+  postalCode: "",
   notes: "",
   memberIds: [],
 };
@@ -182,6 +183,13 @@ export const HouseholdFormDialog = ({
             onChange={(event) => setForm((current) => ({ ...current, address: event.target.value }))}
             rows={3}
             value={form.address ?? ""}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-sm font-medium">Postal Code</span>
+          <Input
+            onChange={(event) => setForm((current) => ({ ...current, postalCode: event.target.value }))}
+            value={form.postalCode ?? ""}
           />
         </label>
         <label className="space-y-1">
@@ -256,6 +264,7 @@ export const HouseholdFormDialog = ({
             onClick={() => void onSubmit({
               householdName: form.householdName ?? "",
               address: form.address,
+              postalCode: form.postalCode,
               notes: form.notes,
               memberIds: form.memberIds ?? [],
             })}

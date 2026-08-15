@@ -1,14 +1,24 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
+import { useSearchParams } from "react-router-dom";
 
+import type {
+  VisitationGeographyFeatureCollection,
+  VisitationGeographyFeatureProperties,
+} from "../../shared/types";
 import { ReportsLayout } from "../components/reports/reports-layout";
+import { EmptyState } from "../components/states/empty-state";
+import { ErrorState } from "../components/states/error-state";
+import { LoadingState } from "../components/states/loading-state";
+import { getPeriodDateRange, type ReportPeriod } from "../components/reports/visitation-report-utils";
+import { getDisplayErrorMessage, isApiConfigured } from "../lib/api";
 import {
-  mockVisitationGeographyHouseholds,
-  type MockHouseholdProperties,
-} from "../dev/mock/visitation-geography-households";
+  useVisitationGeographyReport,
+  type VisitationGeographyReportParams,
+} from "../lib/visitation-geography-report";
 import {
   deriveClusterSummary,
   formatCoveragePercent,
@@ -38,12 +48,16 @@ const OPEN_STREET_MAP_STYLE: StyleSpecification = {
   ],
 };
 const REQUIRED_ATTRIBUTION = "\u00A9 OpenStreetMap contributors";
-const HOUSEHOLD_SOURCE_ID = "mock-households";
-const CLUSTER_LAYER_ID = "mock-household-clusters";
-const HOUSEHOLD_LAYER_ID = "mock-household-points";
+const HOUSEHOLD_SOURCE_ID = "visitation-geography-households";
+const CLUSTER_LAYER_ID = "visitation-geography-household-clusters";
+const HOUSEHOLD_LAYER_ID = "visitation-geography-household-points";
 const CLUSTER_RADIUS = 56;
 const CLUSTER_MAX_ZOOM = 13;
-const CLUSTERED_SOURCE_ATTRIBUTION = "Mock household data";
+const CLUSTERED_SOURCE_ATTRIBUTION = "Visitation household data";
+const EMPTY_FEATURE_COLLECTION: VisitationGeographyFeatureCollection = {
+  type: "FeatureCollection",
+  features: [],
+};
 
 const escapeHtml = (value: string) =>
   value
@@ -53,8 +67,62 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-const cloneMockHouseholdGeoJson = () =>
-  JSON.parse(JSON.stringify(mockVisitationGeographyHouseholds)) as typeof mockVisitationGeographyHouseholds;
+const cloneFeatureCollection = (featureCollection: VisitationGeographyFeatureCollection) =>
+  JSON.parse(JSON.stringify(featureCollection)) as VisitationGeographyFeatureCollection;
+
+const getQueryPeriod = (params: URLSearchParams): ReportPeriod => {
+  const period = params.get("period");
+
+  if (
+    period === "all_time"
+    || period === "last_30_days"
+    || period === "last_90_days"
+    || period === "this_year"
+    || period === "custom"
+  ) {
+    return period;
+  }
+
+  return "last_90_days";
+};
+
+const buildGeographyQueryParams = (params: URLSearchParams): VisitationGeographyReportParams => {
+  const period = getQueryPeriod(params);
+  const customFrom = params.get("from") || undefined;
+  const customTo = params.get("to") || undefined;
+  const range = getPeriodDateRange(period, customFrom, customTo);
+  const type = params.get("type") || undefined;
+  const visitorMode = params.get("visitorMode") || undefined;
+  const visitorUserId = params.get("visitorUserId") || params.get("visitor") || undefined;
+
+  return {
+    from: range.from,
+    to: range.to,
+    sinceBeginning: range.sinceBeginning,
+    type,
+    visitorMode,
+    visitorUserId,
+  };
+};
+
+const formatMetricValue = (value: number) => new Intl.NumberFormat().format(value);
+
+const formatOptionalDate = (value?: string) => {
+  if (!value) {
+    return "Never";
+  }
+
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
+};
+
+const formatHouseholdLabel = (householdId: string) => {
+  const trimmed = householdId.trim();
+  if (!trimmed) {
+    return "Household";
+  }
+
+  return `Household ${trimmed.slice(0, 8)}`;
+};
 
 const getCoveragePalette = (tone: ClusterCoverageTone) => {
   switch (tone) {
@@ -183,24 +251,19 @@ const installHouseholdLayers = (map: maplibregl.Map) => {
     return;
   }
 
-  const plainGeoJson = cloneMockHouseholdGeoJson();
-
   map.addSource(HOUSEHOLD_SOURCE_ID, {
     type: "geojson",
     attribution: CLUSTERED_SOURCE_ATTRIBUTION,
-    data: plainGeoJson,
+    data: EMPTY_FEATURE_COLLECTION,
     cluster: true,
     clusterRadius: CLUSTER_RADIUS,
     clusterMaxZoom: CLUSTER_MAX_ZOOM,
     clusterProperties: {
       memberCount: ["+", ["coalesce", ["get", "memberCount"], 0]],
-      visitedCount: ["+", ["case", ["==", ["get", "visited"], true], 1, 0]],
+      visitedCount: ["+", ["coalesce", ["get", "visited"], 0]],
       visitCount: ["+", ["coalesce", ["get", "visitCount"], 0]],
     },
   });
-
-  const clusteredSource = map.getSource(HOUSEHOLD_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-  clusteredSource?.setData(cloneMockHouseholdGeoJson());
 
   map.addLayer({
     id: CLUSTER_LAYER_ID,
@@ -231,7 +294,7 @@ const installHouseholdLayers = (map: maplibregl.Map) => {
     paint: {
       "circle-color": [
         "case",
-        ["==", ["get", "visited"], true],
+        ["==", ["get", "visited"], 1],
         "#2563eb",
         "#f97316",
       ],
@@ -246,13 +309,19 @@ const installHouseholdLayers = (map: maplibregl.Map) => {
 };
 
 export const VisitationGeographyReportPage = () => {
+  const [searchParams] = useSearchParams();
+  const queryParams = useMemo(() => buildGeographyQueryParams(searchParams), [searchParams]);
+  const reportQuery = useVisitationGeographyReport(queryParams);
+  const report = reportQuery.data ?? null;
+  const featureCollection = report?.households ?? EMPTY_FEATURE_COLLECTION;
+  const hasMappedHouseholds = (report?.summary.mappedHouseholds ?? 0) > 0;
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const clusterMarkersRef = useRef<Record<string, maplibregl.Marker>>({});
   const activeClusterMarkersRef = useRef<Record<string, maplibregl.Marker>>({});
 
   useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) {
+    if (!mapContainerRef.current || mapRef.current || !hasMappedHouseholds) {
       return;
     }
 
@@ -310,21 +379,22 @@ export const VisitationGeographyReportPage = () => {
         return;
       }
 
-      const properties = householdFeature.properties as MockHouseholdProperties | undefined;
+      const properties = householdFeature.properties as VisitationGeographyFeatureProperties | undefined;
 
       if (!properties) {
         return;
       }
 
       const popupHtml = `
-        <div style="min-width: 12rem; color: #10213d;">
+          <div style="min-width: 12rem; color: #10213d;">
           <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 0.35rem;">
-            ${escapeHtml(properties.householdName)}
+            ${escapeHtml(formatHouseholdLabel(properties.householdId))}
           </div>
           <div style="font-size: 0.82rem; line-height: 1.45;">
             <div><strong>Members:</strong> ${properties.memberCount}</div>
-            <div><strong>Visited:</strong> ${properties.visited ? "Visited" : "Not visited"}</div>
+            <div><strong>Visited:</strong> ${properties.visited === 1 ? "Visited" : "Not visited"}</div>
             <div><strong>Visit count:</strong> ${properties.visitCount}</div>
+            <div><strong>Last visit:</strong> ${escapeHtml(formatOptionalDate(properties.lastVisitDate))}</div>
           </div>
         </div>
       `;
@@ -431,6 +501,8 @@ export const VisitationGeographyReportPage = () => {
 
     const bindInteractiveLayers = () => {
       installHouseholdLayers(map);
+      const householdSource = map.getSource(HOUSEHOLD_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+      householdSource?.setData(cloneFeatureCollection(featureCollection));
       renderClusterMarkers();
 
       map.off("click", CLUSTER_LAYER_ID, handleClusterClick);
@@ -472,28 +544,94 @@ export const VisitationGeographyReportPage = () => {
       map.remove();
       mapRef.current = null;
     };
-  }, []);
+  }, [featureCollection, hasMappedHouseholds]);
+
+  useEffect(() => {
+    if (!mapRef.current || !hasMappedHouseholds) {
+      return;
+    }
+
+    const source = mapRef.current.getSource(HOUSEHOLD_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+    source?.setData(cloneFeatureCollection(featureCollection));
+  }, [featureCollection, hasMappedHouseholds]);
+
+  const summary = report?.summary ?? null;
+  const loadError = reportQuery.error
+    ? getDisplayErrorMessage(reportQuery.error, "Unable to load the visitation geography report.")
+    : null;
 
   return (
     <ReportsLayout
       title="Visitation Geography Report"
-      subtitle="Explore clustered mock household points across Ottawa and Gatineau using local development data."
+      subtitle="Explore mapped households across Ottawa and Gatineau using visitation report data."
     >
-      <section className="overflow-hidden rounded-lg border border-border bg-card panel-shadow">
-        <div className="border-b border-border/80 px-4 py-3 sm:px-5">
-          <p className="text-sm text-muted-foreground">
-            Zoom out to see clusters, zoom in to split them, and click a household marker to view mock visitation details.
-          </p>
-        </div>
-        <div className="p-3 sm:p-4">
-          <div className="overflow-hidden rounded-lg border border-border/80 bg-background/40">
-            <div
-              className="h-[24rem] w-full min-w-0 sm:h-[30rem] lg:h-[calc(100vh-19rem)] lg:min-h-[34rem]"
-              ref={mapContainerRef}
-            />
+      {!isApiConfigured ? (
+        <ErrorState
+          title="API configuration required"
+          description="The visitation geography report needs a configured API endpoint before it can load mapped households."
+        />
+      ) : null}
+      {summary ? (
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <article className="rounded-lg border border-border bg-card p-4 panel-shadow">
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Total Members</div>
+            <div className="mt-2 text-2xl font-semibold text-foreground">{formatMetricValue(summary.totalMembers)}</div>
+          </article>
+          <article className="rounded-lg border border-border bg-card p-4 panel-shadow">
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Total Households</div>
+            <div className="mt-2 text-2xl font-semibold text-foreground">{formatMetricValue(summary.totalHouseholds)}</div>
+          </article>
+          <article className="rounded-lg border border-border bg-card p-4 panel-shadow">
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Visited Households</div>
+            <div className="mt-2 text-2xl font-semibold text-foreground">{formatMetricValue(summary.visitedHouseholds)}</div>
+          </article>
+          <article className="rounded-lg border border-border bg-card p-4 panel-shadow">
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Not Visited</div>
+            <div className="mt-2 text-2xl font-semibold text-foreground">{formatMetricValue(summary.notVisitedHouseholds)}</div>
+          </article>
+          <article className="rounded-lg border border-border bg-card p-4 panel-shadow">
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Mapped / Unmapped</div>
+            <div className="mt-2 text-2xl font-semibold text-foreground">
+              {formatMetricValue(summary.mappedHouseholds)} / {formatMetricValue(summary.unmappedHouseholds)}
+            </div>
+          </article>
+        </section>
+      ) : null}
+      {isApiConfigured && reportQuery.isLoading ? (
+        <LoadingState
+          title="Loading geography report"
+          description="Preparing mapped households and visitation totals for the current report filters."
+        />
+      ) : null}
+      {isApiConfigured && loadError ? (
+        <ErrorState
+          title="Unable to load geography report"
+          description={loadError}
+        />
+      ) : null}
+      {isApiConfigured && report && !hasMappedHouseholds ? (
+        <EmptyState
+          title="No mapped households yet"
+          description="No households with saved coordinates matched the current report filters, so there is nothing to plot on the map."
+        />
+      ) : null}
+      {isApiConfigured && report && hasMappedHouseholds ? (
+        <section className="overflow-hidden rounded-lg border border-border bg-card panel-shadow">
+          <div className="border-b border-border/80 px-4 py-3 sm:px-5">
+            <p className="text-sm text-muted-foreground">
+              Zoom out to see clusters, zoom in to split them, and click a household marker to view visitation details.
+            </p>
           </div>
-        </div>
-      </section>
+          <div className="p-3 sm:p-4">
+            <div className="overflow-hidden rounded-lg border border-border/80 bg-background/40">
+              <div
+                className="h-[24rem] w-full min-w-0 sm:h-[30rem] lg:h-[calc(100vh-19rem)] lg:min-h-[34rem]"
+                ref={mapContainerRef}
+              />
+            </div>
+          </div>
+        </section>
+      ) : null}
     </ReportsLayout>
   );
 };
