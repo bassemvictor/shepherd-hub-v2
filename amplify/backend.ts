@@ -94,6 +94,10 @@ recordsTable.addGlobalSecondaryIndex({
 
 backend.shepherdHubApi.addEnvironment("SHEPHERD_HUB_RECORDS_TABLE", recordsTable.tableName);
 backend.shepherdHubApi.addEnvironment("COGNITO_USER_POOL_ID", backend.auth.resources.userPool.userPoolId);
+backend.shepherdHubApi.addEnvironment(
+  "ENABLE_MEMBER_ACTIVITY_LOGGING",
+  process.env.ENABLE_MEMBER_ACTIVITY_LOGGING ?? "false",
+);
 backend.shepherdHubApi.addEnvironment("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID ?? "");
 backend.shepherdHubApi.addEnvironment("GOOGLE_CLIENT_SECRET", process.env.GOOGLE_CLIENT_SECRET ?? "");
 backend.shepherdHubApi.addEnvironment("GOOGLE_REDIRECT_URI", process.env.GOOGLE_REDIRECT_URI ?? "");

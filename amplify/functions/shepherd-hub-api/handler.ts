@@ -734,6 +734,9 @@ const getGeocodingConfig = (): GeocodingConfig => {
   };
 };
 
+const isMemberActivityLoggingEnabled = () =>
+  normalizeWhitespace(process.env.ENABLE_MEMBER_ACTIVITY_LOGGING).toLowerCase() === "true";
+
 const logImportTiming = (
   stage: string,
   startedAt: number,
@@ -4153,6 +4156,10 @@ const logMemberActivity = async (
   deps: HandlerDependencies,
   metadata?: Record<string, unknown>,
 ) => {
+  if (!isMemberActivityLoggingEnabled()) {
+    return;
+  }
+
   const createdAt = deps.now();
   const activityId = deps.uuid();
   const item: MemberActivityItem = {
