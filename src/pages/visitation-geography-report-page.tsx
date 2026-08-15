@@ -1,11 +1,13 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
 import { useSearchParams } from "react-router-dom";
 
 import type {
+  VisitationAreaSummary,
+  VisitationGeographyFeature,
   VisitationGeographyFeatureCollection,
   VisitationGeographyFeatureProperties,
 } from "../../shared/types";
@@ -13,6 +15,7 @@ import { ReportsLayout } from "../components/reports/reports-layout";
 import { EmptyState } from "../components/states/empty-state";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { getPeriodDateRange, type ReportPeriod } from "../components/reports/visitation-report-utils";
 import { getDisplayErrorMessage, isApiConfigured } from "../lib/api";
 import {
@@ -122,6 +125,37 @@ const formatHouseholdLabel = (householdId: string) => {
   }
 
   return `Household ${trimmed.slice(0, 8)}`;
+};
+
+const focusMapOnAreaHouseholds = (
+  map: maplibregl.Map,
+  areaFeatures: VisitationGeographyFeature[],
+) => {
+  if (!areaFeatures.length) {
+    return;
+  }
+
+  if (areaFeatures.length === 1) {
+    map.easeTo({
+      center: areaFeatures[0].geometry.coordinates as [number, number],
+      zoom: Math.max(map.getZoom(), 13),
+      duration: 600,
+    });
+    return;
+  }
+
+  const bounds = new maplibregl.LngLatBounds();
+  for (const feature of areaFeatures) {
+    bounds.extend(feature.geometry.coordinates as [number, number]);
+  }
+
+  if (!bounds.isEmpty()) {
+    map.fitBounds(bounds, {
+      padding: 64,
+      duration: 700,
+      maxZoom: 13.5,
+    });
+  }
 };
 
 const getCoveragePalette = (tone: ClusterCoverageTone) => {
@@ -314,11 +348,13 @@ export const VisitationGeographyReportPage = () => {
   const reportQuery = useVisitationGeographyReport(queryParams);
   const report = reportQuery.data ?? null;
   const featureCollection = report?.households ?? EMPTY_FEATURE_COLLECTION;
+  const areaSummaries = report?.areas ?? [];
   const hasMappedHouseholds = (report?.summary.mappedHouseholds ?? 0) > 0;
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const clusterMarkersRef = useRef<Record<string, maplibregl.Marker>>({});
   const activeClusterMarkersRef = useRef<Record<string, maplibregl.Marker>>({});
+  const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current || !hasMappedHouseholds) {
@@ -555,6 +591,19 @@ export const VisitationGeographyReportPage = () => {
     source?.setData(cloneFeatureCollection(featureCollection));
   }, [featureCollection, hasMappedHouseholds]);
 
+  const mappedFeaturesByAreaId = useMemo(() => {
+    const areas = new Map<string, VisitationGeographyFeature[]>();
+
+    for (const feature of featureCollection.features) {
+      const areaId = feature.properties.areaId ?? "UNASSIGNED";
+      const current = areas.get(areaId) ?? [];
+      current.push(feature);
+      areas.set(areaId, current);
+    }
+
+    return areas;
+  }, [featureCollection]);
+
   const summary = report?.summary ?? null;
   const loadError = reportQuery.error
     ? getDisplayErrorMessage(reportQuery.error, "Unable to load the visitation geography report.")
@@ -629,6 +678,66 @@ export const VisitationGeographyReportPage = () => {
                 ref={mapContainerRef}
               />
             </div>
+          </div>
+        </section>
+      ) : null}
+      {isApiConfigured && report ? (
+        <section className="rounded-lg border border-border bg-card panel-shadow">
+          <div className="border-b border-border/80 px-4 py-3 sm:px-5">
+            <p className="text-sm text-muted-foreground">
+              Area summaries are currently classified by configurable postal-code FSA rules until verified polygon boundaries are available.
+            </p>
+          </div>
+          <div className="p-3 sm:p-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Area</TableHead>
+                  <TableHead className="text-right">Members</TableHead>
+                  <TableHead className="text-right">Households</TableHead>
+                  <TableHead className="text-right">Visited</TableHead>
+                  <TableHead className="text-right">Not Visited</TableHead>
+                  <TableHead className="text-right">Visitations</TableHead>
+                  <TableHead className="text-right">Coverage</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {areaSummaries.map((area: VisitationAreaSummary) => {
+                  const hasMappedAreaHouseholds = (mappedFeaturesByAreaId.get(area.areaId)?.length ?? 0) > 0;
+
+                  return (
+                    <TableRow
+                      className={selectedAreaId === area.areaId ? "bg-muted/60" : undefined}
+                      key={area.areaId}
+                    >
+                      <TableCell>
+                        <button
+                          className="text-left font-medium text-foreground transition hover:text-primary disabled:cursor-default disabled:text-foreground"
+                          disabled={!hasMappedAreaHouseholds}
+                          onClick={() => {
+                            setSelectedAreaId(area.areaId);
+                            if (!mapRef.current) {
+                              return;
+                            }
+
+                            focusMapOnAreaHouseholds(mapRef.current, mappedFeaturesByAreaId.get(area.areaId) ?? []);
+                          }}
+                          type="button"
+                        >
+                          {area.areaName}
+                        </button>
+                      </TableCell>
+                      <TableCell className="text-right">{formatMetricValue(area.members)}</TableCell>
+                      <TableCell className="text-right">{formatMetricValue(area.households)}</TableCell>
+                      <TableCell className="text-right">{formatMetricValue(area.visited)}</TableCell>
+                      <TableCell className="text-right">{formatMetricValue(area.notVisited)}</TableCell>
+                      <TableCell className="text-right">{formatMetricValue(area.visitations)}</TableCell>
+                      <TableCell className="text-right">{formatCoveragePercent(area.coverage)}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           </div>
         </section>
       ) : null}

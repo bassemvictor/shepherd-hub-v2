@@ -24,6 +24,11 @@ import {
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
 import * as XLSX from "xlsx";
 import { buildAddressBasedHouseholdName, normalizeAddress } from "../../../shared/address-normalization.js";
+import {
+  getVisitationAreaDefinition,
+  resolveVisitationAreaId,
+  visitationAreaDefinitions,
+} from "../../../shared/visitation-areas.js";
 import { visitationTypes } from "../../../shared/types.js";
 
 import type {
@@ -116,6 +121,7 @@ import type {
   VisitationGeographyFeature,
   VisitationGeographyFeatureCollection,
   VisitationGeographyReportResponse,
+  VisitationAreaSummary,
   VisitationGeographySummary,
 } from "../../../shared/types.js";
 
@@ -1163,7 +1169,7 @@ const toHouseholdSummary = (
   addressKey: item.addressKey,
   notes: item.notes,
   location: item.location,
-  areaId: item.areaId,
+  areaId: resolveVisitationAreaId({ areaId: item.areaId, postalCode: item.postalCode }),
   memberCount: item.memberCount,
   primaryContactMemberId: item.primaryContactMemberId,
   members,
@@ -2583,7 +2589,10 @@ const buildHouseholdItem = (
   const address = toOptionalString(input.address);
   const postalCode = toOptionalString(input.postalCode) ?? existing?.postalCode;
   const location = normalizeHouseholdLocation(input.location) ?? existing?.location;
-  const areaId = toOptionalString(input.areaId) ?? existing?.areaId;
+  const areaId = resolveVisitationAreaId({
+    areaId: toOptionalString(input.areaId) ?? existing?.areaId,
+    postalCode,
+  });
   const normalized = normalizeAddress({
     address,
     postalCode,
@@ -7331,6 +7340,18 @@ const getVisitationGeographyReport = async (
     : visitations.filter((item) => normalizeVisitationType(item.type) === filters.type);
 
   const householdMetrics = new Map<string, { visitCount: number; lastVisitDate?: string }>();
+  const areaSummaryById = new Map<string, VisitationAreaSummary>(
+    visitationAreaDefinitions.map((definition) => [definition.id, {
+      areaId: definition.id,
+      areaName: definition.label,
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    }]),
+  );
 
   for (const visitation of reportVisitations) {
     const householdId = householdIdByMemberId.get(visitation.memberId);
@@ -7368,11 +7389,22 @@ const getVisitationGeographyReport = async (
   const unmappedHouseholds = Math.max(0, totalHouseholds - mappedHouseholds);
 
   const features: VisitationGeographyFeature[] = households.flatMap((household) => {
+    const areaId = resolveVisitationAreaId({ areaId: household.areaId, postalCode: household.postalCode });
+    const areaSummary = areaSummaryById.get(areaId) ?? areaSummaryById.get("UNASSIGNED");
+    const metrics = householdMetrics.get(household.householdId);
+    const visited = metrics?.visitCount ? 1 : 0;
+
+    if (areaSummary) {
+      areaSummary.households += 1;
+      areaSummary.members += household.memberCount;
+      areaSummary.visited += visited;
+      areaSummary.visitations += metrics?.visitCount ?? 0;
+    }
+
     if (!hasValidHouseholdCoordinates(household)) {
       return [];
     }
 
-    const metrics = householdMetrics.get(household.householdId);
     return [{
       type: "Feature",
       geometry: {
@@ -7382,12 +7414,30 @@ const getVisitationGeographyReport = async (
       properties: {
         householdId: household.householdId,
         memberCount: household.memberCount,
-        visited: metrics?.visitCount ? 1 : 0,
+        visited,
         visitCount: metrics?.visitCount ?? 0,
         lastVisitDate: metrics?.lastVisitDate,
-        areaId: household.areaId,
+        areaId,
       },
     }];
+  });
+
+  const areas = visitationAreaDefinitions.map((definition) => {
+    const summary = areaSummaryById.get(definition.id) ?? {
+      areaId: definition.id,
+      areaName: definition.label,
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    };
+
+    summary.notVisited = Math.max(0, summary.households - summary.visited);
+    summary.coverage = summary.households ? (summary.visited / summary.households) * 100 : 0;
+    summary.areaName = getVisitationAreaDefinition(summary.areaId).label;
+    return summary;
   });
 
   const summary: VisitationGeographySummary = {
@@ -7403,6 +7453,7 @@ const getVisitationGeographyReport = async (
 
   const response: VisitationGeographyReportResponse = {
     summary,
+    areas,
     households: {
       type: "FeatureCollection",
       features,

@@ -1487,7 +1487,7 @@ test("creating a household accepts valid optional geographic fields", async () =
     geocodedAt: "2026-06-01T10:30:00.000Z",
     geocodeProvider: "manual",
   });
-  assert.equal(body.areaId, "area-central");
+  assert.equal(body.areaId, "CENTRAL");
 
   const transactWrite = commands.find((command) => command.name === "TransactWriteCommand");
   const createdHousehold = (transactWrite?.input.TransactItems as Array<{ Put?: { Item?: Record<string, unknown> } }> | undefined)
@@ -1500,7 +1500,7 @@ test("creating a household accepts valid optional geographic fields", async () =
     geocodedAt: "2026-06-01T10:30:00.000Z",
     geocodeProvider: "manual",
   });
-  assert.equal(createdHousehold?.areaId, "area-central");
+  assert.equal(createdHousehold?.areaId, "CENTRAL");
 });
 
 test("creating a household rejects invalid latitude", async () => {
@@ -1771,7 +1771,7 @@ test("updating a household preserves location fields through round-trip", async 
     geocodedAt: "2026-06-03T11:45:00.000Z",
     geocodeProvider: "manual",
   });
-  assert.equal(body.areaId, "area-central");
+  assert.equal(body.areaId, "CENTRAL");
 
   const transactWrite = commands.find((command) => command.name === "TransactWriteCommand");
   const updatedHousehold = (transactWrite?.input.TransactItems as Array<{ Put?: { Item?: Record<string, unknown> } }> | undefined)
@@ -1784,7 +1784,7 @@ test("updating a household preserves location fields through round-trip", async 
     geocodedAt: "2026-06-03T11:45:00.000Z",
     geocodeProvider: "manual",
   });
-  assert.equal(updatedHousehold?.areaId, "area-central");
+  assert.equal(updatedHousehold?.areaId, "CENTRAL");
 });
 
 test("creating a household geocodes the normalized address and stores the result", async () => {
@@ -2831,6 +2831,98 @@ test("visitation geography report aggregates households and excludes unmapped co
 
   assert.equal(body.households.type, "FeatureCollection");
   assert.equal(body.households.features.length, 2);
+  assert.deepEqual(body.areas, [
+    {
+      areaId: "KANATA",
+      areaName: "Kanata",
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    },
+    {
+      areaId: "NEPEAN",
+      areaName: "Nepean",
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    },
+    {
+      areaId: "BARRHAVEN",
+      areaName: "Barrhaven",
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    },
+    {
+      areaId: "ORLEANS",
+      areaName: "Orleans",
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    },
+    {
+      areaId: "CENTRAL",
+      areaName: "Central",
+      members: 2,
+      households: 1,
+      visited: 1,
+      notVisited: 0,
+      visitations: 3,
+      coverage: 100,
+    },
+    {
+      areaId: "GLOUCESTER",
+      areaName: "Gloucester",
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    },
+    {
+      areaId: "SOUTH_OTTAWA",
+      areaName: "South Ottawa",
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    },
+    {
+      areaId: "GATINEAU",
+      areaName: "Gatineau",
+      members: 0,
+      households: 0,
+      visited: 0,
+      notVisited: 0,
+      visitations: 0,
+      coverage: 0,
+    },
+    {
+      areaId: "UNASSIGNED",
+      areaName: "Other / Unassigned",
+      members: 2,
+      households: 2,
+      visited: 0,
+      notVisited: 2,
+      visitations: 0,
+      coverage: 0,
+    },
+  ]);
 
   const alphaFeature = body.households.features.find((feature: { properties: { householdId: string } }) => feature.properties.householdId === "household-1");
   const betaFeature = body.households.features.find((feature: { properties: { householdId: string } }) => feature.properties.householdId === "household-2");
@@ -2843,13 +2935,14 @@ test("visitation geography report aggregates households and excludes unmapped co
     visited: 1,
     visitCount: 3,
     lastVisitDate: "2026-06-18T10:00:00.000Z",
-    areaId: "area-central",
+    areaId: "CENTRAL",
   });
   assert.deepEqual(betaFeature.properties, {
     householdId: "household-2",
     memberCount: 1,
     visited: 0,
     visitCount: 0,
+    areaId: "UNASSIGNED",
   });
   assert.equal(gammaFeature, undefined);
 });

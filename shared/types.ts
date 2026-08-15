@@ -430,6 +430,17 @@ export type VisitationGeographySummary = {
   unmappedHouseholds: number;
 };
 
+export type VisitationAreaSummary = {
+  areaId: string;
+  areaName: string;
+  members: number;
+  households: number;
+  visited: number;
+  notVisited: number;
+  visitations: number;
+  coverage: number;
+};
+
 export type VisitationGeographyFeatureProperties = {
   householdId: string;
   memberCount: number;
@@ -445,6 +456,7 @@ export type VisitationGeographyFeatureCollection = FeatureCollection<Point, Visi
 
 export type VisitationGeographyReportResponse = {
   summary: VisitationGeographySummary;
+  areas: VisitationAreaSummary[];
   households: VisitationGeographyFeatureCollection;
 };
 
