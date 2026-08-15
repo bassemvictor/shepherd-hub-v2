@@ -15,6 +15,8 @@ import { ReportsLayout } from "../components/reports/reports-layout";
 import { EmptyState } from "../components/states/empty-state";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { getPeriodDateRange, type ReportPeriod } from "../components/reports/visitation-report-utils";
 import { getDisplayErrorMessage, isApiConfigured } from "../lib/api";
@@ -61,6 +63,13 @@ const EMPTY_FEATURE_COLLECTION: VisitationGeographyFeatureCollection = {
   type: "FeatureCollection",
   features: [],
 };
+const ADDRESS_SEARCH_ZOOM = 15;
+
+type NominatimSearchResult = {
+  lat: string;
+  lon: string;
+  display_name?: string;
+};
 
 const escapeHtml = (value: string) =>
   value
@@ -72,6 +81,44 @@ const escapeHtml = (value: string) =>
 
 const cloneFeatureCollection = (featureCollection: VisitationGeographyFeatureCollection) =>
   JSON.parse(JSON.stringify(featureCollection)) as VisitationGeographyFeatureCollection;
+
+const geocodeAddress = async (query: string, signal?: AbortSignal) => {
+  const search = new URLSearchParams({
+    format: "jsonv2",
+    limit: "1",
+    q: query,
+  });
+
+  const response = await fetch(`https://nominatim.openstreetmap.org/search?${search.toString()}`, {
+    headers: {
+      accept: "application/json",
+    },
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Address lookup failed with status ${response.status}.`);
+  }
+
+  const results = await response.json() as NominatimSearchResult[];
+  const match = results[0];
+
+  if (!match) {
+    return null;
+  }
+
+  const latitude = Number(match.lat);
+  const longitude = Number(match.lon);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new Error("Address lookup returned invalid coordinates.");
+  }
+
+  return {
+    coordinates: [longitude, latitude] as [number, number],
+    label: match.display_name?.trim() || query,
+  };
+};
 
 const getQueryPeriod = (params: URLSearchParams): ReportPeriod => {
   const period = params.get("period");
@@ -391,6 +438,11 @@ export const VisitationGeographyReportPage = () => {
   const clusterMarkersRef = useRef<Record<string, maplibregl.Marker>>({});
   const activeClusterMarkersRef = useRef<Record<string, maplibregl.Marker>>({});
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
+  const [addressQuery, setAddressQuery] = useState("");
+  const [addressSearchBusy, setAddressSearchBusy] = useState(false);
+  const [addressSearchMessage, setAddressSearchMessage] = useState<string | null>(null);
+  const [addressSearchError, setAddressSearchError] = useState<string | null>(null);
+  const addressSearchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current || !hasMappedHouseholds) {
@@ -645,6 +697,53 @@ export const VisitationGeographyReportPage = () => {
     ? getDisplayErrorMessage(reportQuery.error, "Unable to load the visitation geography report.")
     : null;
 
+  const handleAddressZoom = async () => {
+    const query = addressQuery.trim();
+    if (!query || !mapRef.current) {
+      return;
+    }
+
+    addressSearchAbortRef.current?.abort();
+    const abortController = new AbortController();
+    addressSearchAbortRef.current = abortController;
+
+    setAddressSearchBusy(true);
+    setAddressSearchError(null);
+    setAddressSearchMessage(null);
+
+    try {
+      const result = await geocodeAddress(query, abortController.signal);
+
+      if (!result) {
+        setAddressSearchError("No matching address was found.");
+        return;
+      }
+
+      mapRef.current.easeTo({
+        center: result.coordinates,
+        zoom: Math.max(mapRef.current.getZoom(), ADDRESS_SEARCH_ZOOM),
+        duration: 700,
+      });
+      setSelectedAreaId(null);
+      setAddressSearchMessage(`Zoomed to ${result.label}.`);
+    } catch (error) {
+      if (abortController.signal.aborted) {
+        return;
+      }
+
+      setAddressSearchError(getDisplayErrorMessage(error, "Unable to look up that address."));
+    } finally {
+      if (addressSearchAbortRef.current === abortController) {
+        addressSearchAbortRef.current = null;
+      }
+      setAddressSearchBusy(false);
+    }
+  };
+
+  useEffect(() => () => {
+    addressSearchAbortRef.current?.abort();
+  }, []);
+
   return (
     <ReportsLayout
       title="Visitation Geography Report"
@@ -706,6 +805,34 @@ export const VisitationGeographyReportPage = () => {
             <p className="text-sm text-muted-foreground">
               Zoom out to see clusters, zoom in to split them, and click a household marker to view visitation details.
             </p>
+            <div className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-center">
+              <Input
+                className="h-10"
+                onChange={(event) => setAddressQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleAddressZoom();
+                  }
+                }}
+                placeholder="Type an address to zoom the map"
+                value={addressQuery}
+              />
+              <Button
+                className="h-10 shrink-0 px-4 text-sm font-semibold"
+                disabled={addressSearchBusy || !addressQuery.trim()}
+                onClick={() => void handleAddressZoom()}
+                type="button"
+              >
+                {addressSearchBusy ? "Finding address..." : "Zoom to address"}
+              </Button>
+            </div>
+            {addressSearchError ? (
+              <p className="mt-2 text-sm text-rose-600">{addressSearchError}</p>
+            ) : null}
+            {!addressSearchError && addressSearchMessage ? (
+              <p className="mt-2 text-sm text-muted-foreground">{addressSearchMessage}</p>
+            ) : null}
           </div>
           <div className="p-3 sm:p-4">
             <div className="overflow-hidden rounded-lg border border-border/80 bg-background/40">
