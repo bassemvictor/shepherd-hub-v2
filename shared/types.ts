@@ -480,12 +480,14 @@ export type HouseholdConflict = {
   currentHouseholdName?: string;
   currentHouseholdAddress?: string;
   currentHouseholdAddressKey?: string;
+  currentHouseholdGeocodeStatus?: HouseholdGeocodeStatus;
   importedAddress?: string;
   importedPostalCode?: string;
   importedAddressKey?: string;
   matchedHouseholdId?: string;
   matchedHouseholdName?: string;
   matchedHouseholdAddress?: string;
+  matchedHouseholdGeocodeStatus?: HouseholdGeocodeStatus;
   createdAt: string;
   updatedAt: string;
 };

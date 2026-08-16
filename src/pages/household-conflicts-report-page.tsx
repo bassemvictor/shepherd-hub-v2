@@ -5,16 +5,34 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import type {
   HouseholdConflict,
+  HouseholdGeocodeStatus,
   HouseholdConflictListResponse,
   ResolveHouseholdConflictAction,
 } from "../../shared/types";
 import { ReportsLayout } from "../components/reports/reports-layout";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { api, getDisplayErrorMessage } from "../lib/api";
 import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { refreshMembersIndexCache, useMembersIndex } from "../lib/members-index";
+
+const geocodeStatusMeta: Record<HouseholdGeocodeStatus, { label: string; variant: "success" | "warning" | "neutral" }> = {
+  success: { label: "Geocoded", variant: "success" },
+  pending: { label: "Pending", variant: "warning" },
+  failed: { label: "Failed", variant: "warning" },
+  not_started: { label: "Not geocoded", variant: "neutral" },
+};
+
+const GeocodeStatusBadge = ({ status }: { status?: HouseholdGeocodeStatus }) => {
+  if (!status) {
+    return null;
+  }
+
+  const meta = geocodeStatusMeta[status];
+  return <Badge variant={meta.variant}>{meta.label}</Badge>;
+};
 
 export const HouseholdConflictsReportPage = () => {
   const navigate = useNavigate();
@@ -99,7 +117,10 @@ export const HouseholdConflictsReportPage = () => {
                         <Home className="h-3.5 w-3.5" />
                         Current Household
                       </div>
-                      <div className="mt-1 text-sm font-medium text-slate-900">{conflict.currentHouseholdName || "No household"}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-medium text-slate-900">{conflict.currentHouseholdName || "No household"}</div>
+                        <GeocodeStatusBadge status={conflict.currentHouseholdGeocodeStatus} />
+                      </div>
                       <div className="text-xs text-muted-foreground">{conflict.currentHouseholdAddress || "No address"}</div>
                     </div>
                     <div className="rounded-md border border-border bg-background/40 p-3">
@@ -115,7 +136,10 @@ export const HouseholdConflictsReportPage = () => {
                         <ArrowRight className="h-3.5 w-3.5" />
                         Suggested Match
                       </div>
-                      <div className="mt-1 text-sm font-medium text-slate-900">{conflict.matchedHouseholdName || "No exact household match"}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-medium text-slate-900">{conflict.matchedHouseholdName || "No exact household match"}</div>
+                        <GeocodeStatusBadge status={conflict.matchedHouseholdGeocodeStatus} />
+                      </div>
                       <div className="text-xs text-muted-foreground">{conflict.matchedHouseholdAddress || "Create a new household if needed"}</div>
                     </div>
                   </div>

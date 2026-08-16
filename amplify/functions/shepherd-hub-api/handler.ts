@@ -244,12 +244,14 @@ type HouseholdConflictItem = BaseItem & {
   currentHouseholdName?: string;
   currentHouseholdAddress?: string;
   currentHouseholdAddressKey?: string;
+  currentHouseholdGeocodeStatus?: HouseholdGeocodeStatus;
   importedAddress?: string;
   importedPostalCode?: string;
   importedAddressKey?: string;
   matchedHouseholdId?: string;
   matchedHouseholdName?: string;
   matchedHouseholdAddress?: string;
+  matchedHouseholdGeocodeStatus?: HouseholdGeocodeStatus;
 };
 
 type GeocodeCacheItem = BaseItem & {
@@ -866,6 +868,11 @@ const parseGoogleMemberIds = (value: unknown) => {
 
 const normalizeWhitespace = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
 
+const stripDiacritics = (value: unknown) =>
+  normalizeWhitespace(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
 const normalizeSearchText = (...values: Array<unknown>) =>
   values
     .map((value) => normalizeWhitespace(value).toLowerCase())
@@ -873,13 +880,13 @@ const normalizeSearchText = (...values: Array<unknown>) =>
     .join(" ");
 
 const normalizeName = (value: unknown) =>
-  normalizeWhitespace(value)
+  stripDiacritics(value)
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, "")
     .trim();
 
 const slugifyReadableIdPart = (value: unknown) =>
-  normalizeWhitespace(value)
+  stripDiacritics(value)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
@@ -1186,12 +1193,14 @@ const toHouseholdConflict = (item: HouseholdConflictItem): HouseholdConflict => 
   currentHouseholdName: item.currentHouseholdName,
   currentHouseholdAddress: item.currentHouseholdAddress,
   currentHouseholdAddressKey: item.currentHouseholdAddressKey,
+  currentHouseholdGeocodeStatus: item.currentHouseholdGeocodeStatus,
   importedAddress: item.importedAddress,
   importedPostalCode: item.importedPostalCode,
   importedAddressKey: item.importedAddressKey,
   matchedHouseholdId: item.matchedHouseholdId,
   matchedHouseholdName: item.matchedHouseholdName,
   matchedHouseholdAddress: item.matchedHouseholdAddress,
+  matchedHouseholdGeocodeStatus: item.matchedHouseholdGeocodeStatus,
   createdAt: item.createdAt,
   updatedAt: item.updatedAt,
 });
@@ -3279,12 +3288,16 @@ const buildHouseholdConflictItem = (
   currentHouseholdName: currentHousehold.householdName,
   currentHouseholdAddress: currentHousehold.address,
   currentHouseholdAddressKey: currentHousehold.addressKey,
+  currentHouseholdGeocodeStatus: currentHousehold.location?.geocodeStatus
+    ?? (currentHousehold.location?.latitude !== undefined && currentHousehold.location?.longitude !== undefined ? "success" : undefined),
   importedAddress: member.address,
   importedPostalCode: member.postalCode,
   importedAddressKey: options.importedAddressKey,
   matchedHouseholdId: options.matchedHousehold?.householdId,
   matchedHouseholdName: options.matchedHousehold?.householdName,
   matchedHouseholdAddress: options.matchedHousehold?.address,
+  matchedHouseholdGeocodeStatus: options.matchedHousehold?.location?.geocodeStatus
+    ?? (options.matchedHousehold?.location?.latitude !== undefined && options.matchedHousehold.location?.longitude !== undefined ? "success" : undefined),
 });
 
 const getMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {

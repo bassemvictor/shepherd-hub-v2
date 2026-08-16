@@ -24,3 +24,13 @@ test("keeps units as part of household identity", () => {
   assert.equal(apartment.addressKey, hashUnit.addressKey);
   assert.notEqual(apartment.addressKey, otherUnit.addressKey);
 });
+
+test("preserves accented French characters in normalized addresses", () => {
+  const normalized = normalizeAddress({
+    address: "123 rue d'Orléans, Québec",
+    postalCode: "G1A 0A2",
+  });
+
+  assert.equal(normalized.normalizedAddress, "123 RUE DORLÉANS QUÉBEC");
+  assert.equal(normalized.addressKey, "123 RUE DORLÉANS QUÉBEC|G1A0A2");
+});

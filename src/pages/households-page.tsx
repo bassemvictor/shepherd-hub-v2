@@ -10,12 +10,15 @@ import { LoadingState } from "../components/states/loading-state";
 import { PageHeader } from "../components/common/page-header";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Select } from "../components/ui/select";
 import { api, isApiConfigured } from "../lib/api";
 import { isAdminUser, useAuth } from "../lib/auth";
 import { useHouseholdsIndex, refreshHouseholdsIndexCache } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
 
 type SortMode = "az" | "recent";
+type GeocodeFilter = "all" | HouseholdGeocodeStatus | "unmapped" | "not_geocoded";
+type MemberFilter = "all" | "empty";
 const PAGE_SIZE = 25;
 
 const getHouseholdGeocodeStatus = (household: HouseholdSummary): HouseholdGeocodeStatus | "unmapped" => {
@@ -78,6 +81,8 @@ export const HouseholdsPage = () => {
   const { items: members } = useMembersIndex();
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
+  const [geocodeFilter, setGeocodeFilter] = useState<GeocodeFilter>("all");
+  const [memberFilter, setMemberFilter] = useState<MemberFilter>("all");
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -85,16 +90,35 @@ export const HouseholdsPage = () => {
 
   const filteredHouseholds = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    const next = normalized
-      ? households.filter((household) => household.normalizedSearchText.includes(normalized))
-      : households;
+    const next = households.filter((household) => {
+      const matchesQuery = normalized
+        ? household.normalizedSearchText.includes(normalized)
+        : true;
+
+      if (!matchesQuery) {
+        return false;
+      }
+
+      if (memberFilter === "empty" && household.memberCount > 0) {
+        return false;
+      }
+
+      if (geocodeFilter === "all") {
+        return true;
+      }
+
+      const status = getHouseholdGeocodeStatus(household);
+      return geocodeFilter === "not_geocoded"
+        ? status === "not_started" || status === "unmapped"
+        : status === geocodeFilter;
+    });
 
     return [...next].sort((left, right) =>
       sortMode === "az"
         ? left.householdName.localeCompare(right.householdName)
         : right.updatedAt.localeCompare(left.updatedAt),
     );
-  }, [households, query, sortMode]);
+  }, [geocodeFilter, households, memberFilter, query, sortMode]);
 
   const totalPages = Math.max(1, Math.ceil(filteredHouseholds.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -153,6 +177,37 @@ export const HouseholdsPage = () => {
             />
             <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{filteredHouseholds.length} households</span>
           </label>
+          <div className="grid grid-cols-1 gap-2 sm:min-w-[190px]">
+            <Select
+              aria-label="Filter households by geocode status"
+              className="bg-white"
+              onChange={(event) => {
+                setGeocodeFilter(event.target.value as GeocodeFilter);
+                setPage(1);
+              }}
+              value={geocodeFilter}
+            >
+              <option value="all">All geocode statuses</option>
+              <option value="success">Geocoded</option>
+              <option value="pending">Pending</option>
+              <option value="failed">Failed</option>
+              <option value="not_geocoded">Not geocoded</option>
+            </Select>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:min-w-[180px]">
+            <Select
+              aria-label="Filter households by member count"
+              className="bg-white"
+              onChange={(event) => {
+                setMemberFilter(event.target.value as MemberFilter);
+                setPage(1);
+              }}
+              value={memberFilter}
+            >
+              <option value="all">All households</option>
+              <option value="empty">0 members attached</option>
+            </Select>
+          </div>
           <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center">
             <Button onClick={() => setSortMode((current) => current === "az" ? "recent" : "az")} size="sm" type="button" variant="outline">
               <ArrowUpDown className="h-4 w-4" />

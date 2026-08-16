@@ -1,5 +1,6 @@
 const unitPrefixPattern = /\b(?:unit|apt|apartment|suite|ste)\s*([a-z0-9-]+)\b/i;
 const leadingUnitPattern = /^([a-z0-9]+)\s*-\s*(\d[\w\s.'#,-]*)$/i;
+const nonLetterOrNumberPattern = /[^\p{L}\p{N}]/gu;
 
 const directionalMap: Record<string, string> = {
   north: "N",
@@ -55,7 +56,7 @@ const canonicalizeAddressTokens = (value: string) =>
     .split(" ")
     .filter(Boolean)
     .map((token) => {
-      const cleaned = token.replace(/[^A-Z0-9]/g, "");
+      const cleaned = token.replace(nonLetterOrNumberPattern, "");
       const streetType = streetTypeMap[cleaned.toLowerCase()];
       if (streetType) {
         return streetType;
@@ -74,7 +75,7 @@ const extractUnit = (address: string) => {
   const explicitUnit = address.match(unitPrefixPattern);
   if (explicitUnit) {
     const [, rawUnit] = explicitUnit;
-    const unit = rawUnit?.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    const unit = rawUnit?.replace(nonLetterOrNumberPattern, "").toUpperCase();
     const remainder = address.replace(explicitUnit[0], " ");
     return { remainder, unit: unit || undefined };
   }
@@ -82,7 +83,7 @@ const extractUnit = (address: string) => {
   const hashUnit = address.match(/#\s*([a-z0-9-]+)/i);
   if (hashUnit) {
     const [, rawUnit] = hashUnit;
-    const unit = rawUnit?.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    const unit = rawUnit?.replace(nonLetterOrNumberPattern, "").toUpperCase();
     const remainder = address.replace(hashUnit[0], " ");
     return { remainder, unit: unit || undefined };
   }
@@ -90,7 +91,7 @@ const extractUnit = (address: string) => {
   const leadingUnit = address.match(leadingUnitPattern);
   if (leadingUnit) {
     const [, rawUnit, remainder] = leadingUnit;
-    const unit = rawUnit?.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    const unit = rawUnit?.replace(nonLetterOrNumberPattern, "").toUpperCase();
     return { remainder, unit: unit || undefined };
   }
 

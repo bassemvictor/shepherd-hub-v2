@@ -25,6 +25,7 @@ import type {
   CreateHouseholdInput,
   CreateManualVisitationInput,
   HouseholdConflict,
+  HouseholdGeocodeStatus,
   HouseholdSummary,
   Member,
   MemberActivity,
@@ -65,6 +66,22 @@ import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/househol
 import { useMembersIndex } from "../lib/members-index";
 
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+const householdGeocodeStatusMeta: Record<HouseholdGeocodeStatus, { label: string; variant: "success" | "warning" | "neutral" }> = {
+  success: { label: "Geocoded", variant: "success" },
+  pending: { label: "Pending", variant: "warning" },
+  failed: { label: "Failed", variant: "warning" },
+  not_started: { label: "Not geocoded", variant: "neutral" },
+};
+
+const HouseholdGeocodeStatusBadge = ({ status }: { status?: HouseholdGeocodeStatus }) => {
+  if (!status) {
+    return null;
+  }
+
+  const meta = householdGeocodeStatusMeta[status];
+  return <Badge variant={meta.variant}>{meta.label}</Badge>;
+};
 
 const getVisitationDateValue = (visitation: MemberVisitation) => {
   const visit = visitation as MemberVisitation & {
@@ -653,7 +670,10 @@ export const MemberDetailPage = () => {
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   <div className="rounded-md border border-amber-200/80 bg-white/70 p-2">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-700">Current household</div>
-                    <div className="mt-1 text-sm font-medium text-slate-900">{householdConflict.currentHouseholdName || "No household"}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <div className="text-sm font-medium text-slate-900">{householdConflict.currentHouseholdName || "No household"}</div>
+                      <HouseholdGeocodeStatusBadge status={householdConflict.currentHouseholdGeocodeStatus} />
+                    </div>
                     <div className="text-xs text-muted-foreground">{householdConflict.currentHouseholdAddress || "No household address"}</div>
                   </div>
                   <div className="rounded-md border border-amber-200/80 bg-white/70 p-2">
@@ -665,7 +685,10 @@ export const MemberDetailPage = () => {
                 {householdConflict.matchedHouseholdName ? (
                   <div className="mt-2 rounded-md border border-amber-200/80 bg-white/70 p-2">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-700">Suggested household</div>
-                    <div className="mt-1 text-sm font-medium text-slate-900">{householdConflict.matchedHouseholdName}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <div className="text-sm font-medium text-slate-900">{householdConflict.matchedHouseholdName}</div>
+                      <HouseholdGeocodeStatusBadge status={householdConflict.matchedHouseholdGeocodeStatus} />
+                    </div>
                     <div className="text-xs text-muted-foreground">{householdConflict.matchedHouseholdAddress || "No address"}</div>
                   </div>
                 ) : null}
