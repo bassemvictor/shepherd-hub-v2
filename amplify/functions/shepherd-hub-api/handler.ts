@@ -1681,7 +1681,7 @@ const parseImportWorkbook = async (input: MemberImportInput) => {
     .map(({ row, rowNumber }) => {
       const values = Array.isArray(row) ? row : [];
       const record = headers.reduce<Record<string, unknown>>((next, header, index) => {
-        next[header] = values[index] ?? "";
+        next[header] = normalizeImportWorkbookCellValue(values[index]);
         return next;
       }, {});
 
@@ -1690,6 +1690,14 @@ const parseImportWorkbook = async (input: MemberImportInput) => {
         values: record,
       };
     });
+};
+
+const normalizeImportWorkbookCellValue = (value: unknown) => {
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  return value ?? "";
 };
 
 const chunkItems = <T>(items: T[], size: number) => {

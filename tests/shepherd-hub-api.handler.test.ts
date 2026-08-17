@@ -504,6 +504,80 @@ test("creates an async Unity import job when headers start below a title row", a
   assert.equal(commands[1]?.name, "BatchWriteCommand");
 });
 
+test("serializes workbook date cells before writing import chunks", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const workbookBase64 = (await writeExcelFile([
+    ["UnityApp"],
+    [
+      "Family ID",
+      "Household Name",
+      "Member ID",
+      "Member Name",
+      "Date of Birth",
+      "Registration Date",
+    ],
+    [
+      "family-1",
+      "Abraham Household",
+      "17317",
+      "Adel Abraham",
+      new Date("2010-01-04T00:00:00.000Z"),
+      new Date("2026-06-03T00:00:00.000Z"),
+    ],
+  ], {
+    dateFormat: "yyyy-mm-dd",
+    sheet: "Sheet1",
+  }).toBuffer()).toString("base64");
+  const uuids = ["import-job-1"];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+        return {};
+      },
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => uuids.shift() ?? "fallback-id",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/members/import",
+      body: JSON.stringify({ fileName: "Adel.xlsx", workbookBase64 }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "POST",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 202);
+  const batchWrite = commands.find((command) => command.name === "BatchWriteCommand");
+  const requestItems = batchWrite?.input.RequestItems as Record<string, Array<{
+    PutRequest?: { Item?: { rows?: Array<{ values?: Record<string, unknown> }> } };
+  }>> | undefined;
+  const chunkWrites = requestItems?.["records-table"];
+  const firstRowValues = chunkWrites?.[0]?.PutRequest?.Item?.rows?.[0]?.values;
+
+  assert.equal(firstRowValues?.["Date of Birth"], "2010-01-04");
+  assert.equal(firstRowValues?.["Registration Date"], "2026-06-03");
+});
+
 test("processes multiple member import job chunks in one request and completes the job", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
