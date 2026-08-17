@@ -13,9 +13,9 @@
     "ampx:generate-outputs": "ampx generate outputs"
   },
   "dependencies": {
-    "@aws-sdk/client-cognito-identity-provider": "3.972.0",
-    "@aws-sdk/client-dynamodb": "3.972.0",
-    "@aws-sdk/lib-dynamodb": "3.972.0",
+    "@aws-sdk/client-cognito-identity-provider": "3.1111.0",
+    "@aws-sdk/client-dynamodb": "3.1111.0",
+    "@aws-sdk/lib-dynamodb": "3.1111.0",
     "@capacitor/android": "^8.4.1",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
@@ -35,7 +35,7 @@
     "@tanstack/query-sync-storage-persister": "^5.101.0",
     "@tanstack/react-query": "^5.101.0",
     "@tanstack/react-query-persist-client": "^5.101.0",
-    "aws-amplify": "6.16.3",
+    "aws-amplify": "6.20.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.14.0",
@@ -46,18 +46,19 @@
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.0",
-    "xlsx": "^0.18.5"
+    "read-excel-file": "9.3.10"
   },
   "devDependencies": {
-    "@aws-amplify/backend": "1.21.1",
-    "@aws-amplify/backend-cli": "1.8.2",
+    "@aws-amplify/backend": "1.24.0",
+    "@aws-amplify/backend-cli": "1.9.0",
     "@types/aws-lambda": "8.10.161",
     "@types/node": "24.0.13",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
-    "@vitejs/plugin-react": "4.3.4",
+    "@vitejs/plugin-react": "5.0.4",
     "typescript": "5.8.2",
-    "vite": "5.4.19"
+    "vite": "7.3.6",
+    "write-excel-file": "4.1.1"
   },
   "engines": {
     "node": ">=20.0.0"

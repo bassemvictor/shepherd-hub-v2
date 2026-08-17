@@ -22,7 +22,7 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
-import * as XLSX from "xlsx";
+import { readSheet } from "read-excel-file/node";
 import { buildAddressBasedHouseholdName, normalizeAddress } from "../../../shared/address-normalization.js";
 import {
   getVisitationAreaDefinition,
@@ -1657,18 +1657,8 @@ const matchesReportVisitorFilter = (
   return true;
 };
 
-const parseImportWorkbook = (input: MemberImportInput) => {
-  const workbook = XLSX.read(Buffer.from(input.workbookBase64, "base64"), { type: "buffer" });
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
-    return [];
-  }
-
-  const rows = XLSX.utils.sheet_to_json<Array<unknown>>(workbook.Sheets[sheetName], {
-    header: 1,
-    defval: "",
-    raw: false,
-  });
+const parseImportWorkbook = async (input: MemberImportInput) => {
+  const rows = await readSheet(Buffer.from(input.workbookBase64, "base64"));
 
   const headerRowIndex = rows.findIndex((row) => {
     const values = Array.isArray(row) ? row.map((cell) => normalizeWhitespace(cell)) : [];
@@ -6296,7 +6286,7 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
 };
 
 const createMemberImportJob = async (context: RequestContext, input: MemberImportInput, deps: HandlerDependencies) => {
-  const rows = parseImportWorkbook(input);
+  const rows = await parseImportWorkbook(input);
   if (!rows.length) {
     return json(400, { message: "No Unity member rows were found in this workbook." });
   }

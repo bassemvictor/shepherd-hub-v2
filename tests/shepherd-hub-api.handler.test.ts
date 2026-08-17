@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { APIGatewayProxyStructuredResultV2 } from "aws-lambda";
-import * as XLSX from "xlsx";
+import writeExcelFile from "write-excel-file/node";
 
 import { createHandler } from "../amplify/functions/shepherd-hub-api/handler.js";
 import type { VisitationReportResponse } from "../shared/types.js";
@@ -316,6 +316,8 @@ test("returns a validation error when required member fields are missing", async
 
 test("creates a member with tenant and member indexes", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const previousLogging = process.env.ENABLE_MEMBER_ACTIVITY_LOGGING;
+  process.env.ENABLE_MEMBER_ACTIVITY_LOGGING = "true";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const uuids = ["member-1", "activity-1"];
   const handler = createHandler({
@@ -329,93 +331,101 @@ test("creates a member with tenant and member indexes", async () => {
     uuid: () => uuids.shift() ?? "fallback-id",
   });
 
-  const response = await handler(
-    createEvent({
-      rawPath: "/members",
-      body: JSON.stringify({ fullName: "Adel Abraham", phone: "(613) 606-4114", source: "MANUAL" }),
-      requestContext: {
-        authorizer: {
-          jwt: {
-            claims: {
-              "custom:tenantId": "tenant-abc",
-              email: "owner@example.com",
-              name: "Owner Example",
-              sub: "user-123",
+  try {
+    const response = await handler(
+      createEvent({
+        rawPath: "/members",
+        body: JSON.stringify({ fullName: "Adel Abraham", phone: "(613) 606-4114", source: "MANUAL" }),
+        requestContext: {
+          authorizer: {
+            jwt: {
+              claims: {
+                "custom:tenantId": "tenant-abc",
+                email: "owner@example.com",
+                name: "Owner Example",
+                sub: "user-123",
+              },
             },
           },
+          http: {
+            method: "POST",
+          },
         },
-        http: {
-          method: "POST",
-        },
-      },
-    }) as never,
-    {} as never,
-    () => undefined,
-  ) as APIGatewayProxyStructuredResultV2;
+      }) as never,
+      {} as never,
+      () => undefined,
+    ) as APIGatewayProxyStructuredResultV2;
 
-  assert.equal(response.statusCode, 201);
-  assert.equal(commands[0]?.name, "PutCommand");
-  assert.deepEqual(commands[0]?.input.Item, {
-    PK: "TENANT#tenant-abc",
-    SK: "MEMBER#member-1",
-    GSI1PK: "TENANT#tenant-abc#MEMBERS",
-    GSI1SK: "NAME#adel abraham#MEMBER#member-1",
-    GSI2PK: undefined,
-    GSI2SK: undefined,
-    GSI5PK: undefined,
-    GSI5SK: undefined,
-    createdAt: "2026-06-03T12:00:00.000Z",
-    updatedAt: "2026-06-03T12:00:00.000Z",
-    entityType: "MEMBER",
-    tenantId: "tenant-abc",
-    memberId: "member-1",
-    unityId: undefined,
-    source: "MANUAL",
-    isUnityMember: false,
-    familyId: undefined,
-    householdId: undefined,
-    householdName: undefined,
-    fullName: "Adel Abraham",
-    firstName: "Adel",
-    lastName: "Abraham",
-    initials: "AA",
-    phone: "(613) 606-4114",
-    email: undefined,
-    whatsappPhone: "(613) 606-4114",
-    address: undefined,
-    postalCode: undefined,
-    dateOfBirth: undefined,
-    age: undefined,
-    gender: undefined,
-    familyStatus: undefined,
-    church: undefined,
-    fatherOfConfession: undefined,
-    deaconshipRank: undefined,
-    ordinationDate: undefined,
-    churchProvince: undefined,
-    churchCity: undefined,
-    churchRegion: undefined,
-    diocese: undefined,
-    activated: undefined,
-    approved: undefined,
-    locked: undefined,
-    visibility: undefined,
-    username: undefined,
-    registrationDate: undefined,
-    groups: undefined,
-    customFlag: undefined,
-    licensePlate: undefined,
-    notes: undefined,
-    normalizedSearchText: "adel abraham (613) 606-4114",
-  });
-  assert.equal(commands[1]?.name, "PutCommand");
-  assert.match(String(response.body), /Adel Abraham/);
+    assert.equal(response.statusCode, 201);
+    assert.equal(commands[0]?.name, "PutCommand");
+    assert.deepEqual(commands[0]?.input.Item, {
+      PK: "TENANT#tenant-abc",
+      SK: "MEMBER#member-1",
+      GSI1PK: "TENANT#tenant-abc#MEMBERS",
+      GSI1SK: "NAME#adel abraham#MEMBER#member-1",
+      GSI2PK: undefined,
+      GSI2SK: undefined,
+      GSI5PK: undefined,
+      GSI5SK: undefined,
+      createdAt: "2026-06-03T12:00:00.000Z",
+      updatedAt: "2026-06-03T12:00:00.000Z",
+      entityType: "MEMBER",
+      tenantId: "tenant-abc",
+      memberId: "member-1",
+      unityId: undefined,
+      source: "MANUAL",
+      isUnityMember: false,
+      familyId: undefined,
+      householdId: undefined,
+      householdName: undefined,
+      fullName: "Adel Abraham",
+      firstName: "Adel",
+      lastName: "Abraham",
+      initials: "AA",
+      phone: "(613) 606-4114",
+      email: undefined,
+      whatsappPhone: "(613) 606-4114",
+      address: undefined,
+      postalCode: undefined,
+      dateOfBirth: undefined,
+      age: undefined,
+      gender: undefined,
+      familyStatus: undefined,
+      church: undefined,
+      fatherOfConfession: undefined,
+      deaconshipRank: undefined,
+      ordinationDate: undefined,
+      churchProvince: undefined,
+      churchCity: undefined,
+      churchRegion: undefined,
+      diocese: undefined,
+      activated: undefined,
+      approved: undefined,
+      locked: undefined,
+      visibility: undefined,
+      username: undefined,
+      registrationDate: undefined,
+      groups: undefined,
+      customFlag: undefined,
+      licensePlate: undefined,
+      notes: undefined,
+      normalizedSearchText: "adel abraham (613) 606-4114",
+    });
+    assert.equal(commands[1]?.name, "PutCommand");
+    assert.match(String(response.body), /Adel Abraham/);
+  } finally {
+    if (previousLogging === undefined) {
+      delete process.env.ENABLE_MEMBER_ACTIVITY_LOGGING;
+    } else {
+      process.env.ENABLE_MEMBER_ACTIVITY_LOGGING = previousLogging;
+    }
+  }
 });
 
 test("creates an async Unity import job when headers start below a title row", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
-  const worksheet = XLSX.utils.aoa_to_sheet([
+  const workbookBase64 = (await writeExcelFile([
     ["UnityApp"],
     [
       "Family ID",
@@ -426,10 +436,7 @@ test("creates an async Unity import job when headers start below a title row", a
       "Email",
     ],
     ["family-1", "Abraham Household", "17317", "Adel Abraham", "(613) 606-4114", "adel@example.com"],
-  ]);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
-  const workbookBase64 = XLSX.write(workbook, { bookType: "xlsx", type: "base64" });
+  ], { sheet: "Sheet1" }).toBuffer()).toString("base64");
   const uuids = ["import-job-1"];
 
   const handler = createHandler({
