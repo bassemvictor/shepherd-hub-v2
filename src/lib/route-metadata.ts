@@ -33,7 +33,7 @@ const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
   "/reports": [{ label: "Insights" }, { label: "Reports" }],
   "/reports/dashboard": [{ label: "Insights" }, { label: "Reports" }],
   "/reports/member-visitation": [{ label: "Insights" }, { label: "Member Report" }],
-  "/reports/household-conflicts": [{ label: "Insights" }, { label: "Household Conflicts" }],
+  "/reports/household-conflicts": [{ label: "Admin" }, { label: "Household Conflicts" }],
   "/reports/visitation-geography": [{ label: "Insights" }, { label: "Visitation Geography Report" }],
   "/auth": [{ label: "Sign In" }],
 };

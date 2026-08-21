@@ -780,11 +780,11 @@ const logHouseholdGeocodingEvent = (
 
 const defaultInitialSyncRange = (nowIso: string): InitialSyncRange => {
   const now = new Date(nowIso);
-  const sixMonthsAgo = new Date(now);
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const threeMonthsAgo = new Date(now);
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
   return {
-    from: `${sixMonthsAgo.getFullYear()}-01-01`,
-    to: `${now.getFullYear() + 2}-12-31`,
+    from: threeMonthsAgo.toISOString().slice(0, 10),
+    to: "",
   };
 };
 
@@ -824,7 +824,11 @@ const normalizeInitialSyncRange = (value: Partial<InitialSyncRange> | undefined,
   const from = String(value?.from ?? "").trim();
   const to = String(value?.to ?? "").trim();
 
-  if (!from || !to || Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to)) || from > to) {
+  if (!from || Number.isNaN(Date.parse(from))) {
+    return fallback;
+  }
+
+  if (to && (Number.isNaN(Date.parse(to)) || from > to)) {
     return fallback;
   }
 
@@ -1002,7 +1006,7 @@ const splitName = (fullName: string) => {
 
 const buildInitialSyncWindow = (range: InitialSyncRange) => ({
   timeMin: `${range.from}T00:00:00.000Z`,
-  timeMax: `${range.to}T23:59:59.999Z`,
+  timeMax: range.to ? `${range.to}T23:59:59.999Z` : undefined,
 });
 
 const expandEventQueryStart = (timeMin: string) => {
@@ -1281,10 +1285,14 @@ const validateCalendarSettings = (input: Partial<UpdateCalendarSettingsInput>) =
 
   if (
     !String(input.initialSyncRange?.from ?? "").trim() ||
-    !String(input.initialSyncRange?.to ?? "").trim() ||
     Number.isNaN(Date.parse(String(input.initialSyncRange?.from))) ||
-    Number.isNaN(Date.parse(String(input.initialSyncRange?.to))) ||
-    String(input.initialSyncRange?.from) > String(input.initialSyncRange?.to)
+    (
+      String(input.initialSyncRange?.to ?? "").trim() &&
+      (
+        Number.isNaN(Date.parse(String(input.initialSyncRange?.to))) ||
+        String(input.initialSyncRange?.from) > String(input.initialSyncRange?.to)
+      )
+    )
   ) {
     return "Initial sync date range is invalid.";
   }
@@ -2330,10 +2338,11 @@ const listEventsForCalendar = async (
   context: RequestContext,
   calendarId: string,
   timeMin: string,
-  timeMax: string,
+  timeMax: string | undefined,
   deps: HandlerDependencies,
 ) => {
   const queryStart = expandEventQueryStart(timeMin);
+  const queryEnd = timeMax ?? "9999-12-31T23:59:59.999Z";
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI1PK",
@@ -2342,14 +2351,19 @@ const listEventsForCalendar = async (
     ExpressionAttributeValues: {
       ":gsiPk": eventGsiPk(context.actorSub, calendarId),
       ":from": `EVENT#${queryStart}`,
-      ":to": `EVENT#${timeMax}~`,
+      ":to": `EVENT#${queryEnd}~`,
     },
     IndexName: GSI1_NAME,
     KeyConditionExpression: "#gsiPk = :gsiPk AND #gsiSk BETWEEN :from AND :to",
     TableName: context.tableName,
   });
 
-  return (items as EventItem[]).filter((item) => hasMatchingTenant(context, item) && item.end >= timeMin && item.start <= timeMax);
+  return (items as EventItem[]).filter(
+    (item) =>
+      hasMatchingTenant(context, item) &&
+      item.end >= timeMin &&
+      (!timeMax || item.start <= timeMax),
+  );
 };
 
 const listAllEventsForCalendar = async (context: RequestContext, calendarId: string, deps: HandlerDependencies) => {
@@ -5384,8 +5398,10 @@ const applyFullSync = async (
     showDeleted: "true",
     orderBy: "startTime",
     timeMin,
-    timeMax,
   });
+  if (timeMax) {
+    params.set("timeMax", timeMax);
+  }
 
   const allExisting = await listAllEventsForCalendar(context, calendar.calendarId, deps);
   const existingByEventId = new Map(allExisting.map((event) => [event.eventId, event]));
@@ -5508,7 +5524,7 @@ const refreshCalendarEvents = async (
   calendar: CalendarItem,
   connection: GoogleConnectionItem,
   requestedTimeMin: string,
-  requestedTimeMax: string,
+  requestedTimeMax: string | undefined,
   deps: HandlerDependencies,
 ) => {
   try {
@@ -5594,7 +5610,7 @@ const getCachedCalendarEvents = async (
   context: RequestContext,
   calendar: CalendarItem,
   timeMin: string,
-  timeMax: string,
+  timeMax: string | undefined,
   deps: HandlerDependencies,
 ) => {
   const events = await listEventsForCalendar(context, calendar.calendarId, timeMin, timeMax, deps);
@@ -5623,7 +5639,7 @@ const syncSelectedCalendars = async (
   deps: HandlerDependencies,
   options: {
     timeMin: string;
-    timeMax: string;
+    timeMax: string | undefined;
     forceSync: boolean;
     cacheOnly?: boolean;
     calendarIds?: string[];

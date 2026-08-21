@@ -233,11 +233,11 @@ export const HouseholdsPage = () => {
         />
       ) : null}
 
-      <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-white px-3 py-2 text-sm">
-        <div className="text-muted-foreground">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-white px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 text-muted-foreground">
           Showing {filteredHouseholds.length ? (currentPage - 1) * PAGE_SIZE + 1 : 0} - {Math.min(currentPage * PAGE_SIZE, filteredHouseholds.length)} of {filteredHouseholds.length}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
           <Button disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} size="sm" type="button" variant="outline">Previous</Button>
           <div className="text-xs text-muted-foreground">Page {currentPage} of {totalPages}</div>
           <Button disabled={currentPage >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} size="sm" type="button" variant="outline">Next</Button>
@@ -260,27 +260,24 @@ export const HouseholdsPage = () => {
 
             return (
               <button
-                className="flex items-start gap-3 rounded-lg border border-border bg-white px-3 py-3 text-left transition-colors hover:border-primary/25 hover:bg-accent"
+                className="flex w-full items-start gap-3 overflow-hidden rounded-lg border border-border bg-white px-3 py-3 text-left transition-colors hover:border-primary/25 hover:bg-accent"
                 key={household.householdId}
                 onClick={() => navigate(`/households/${household.householdId}`)}
                 type="button"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="truncate text-sm font-semibold text-slate-900">{household.householdName}</div>
-                        <Badge className="gap-1" variant={statusMeta.badgeVariant}>
+                        <Badge className="max-w-full gap-1" variant={statusMeta.badgeVariant}>
                           <StatusIcon className="h-3 w-3" />
-                          {statusMeta.label}
+                          <span className="truncate">{statusMeta.label}</span>
                         </Badge>
                       </div>
-                      <div className="truncate text-xs text-muted-foreground">{household.address || "No address"}</div>
-                      {isAdminUser(user?.groups ?? []) && household.addressKey ? (
-                        <div className="mt-1 text-[11px] text-muted-foreground">
-                          {household.addressKey}
-                        </div>
-                      ) : null}
+                      <div className="break-all text-xs text-muted-foreground">
+                        {isAdminUser(user?.groups ?? []) && household.addressKey ? household.addressKey : household.address || "No address"}
+                      </div>
                     </div>
                     <MoreHorizontal className="h-4 w-4 shrink-0 text-muted-foreground" />
                   </div>

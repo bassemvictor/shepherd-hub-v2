@@ -53,7 +53,6 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
         children: [
           { label: "Reports Overview", href: "/reports/dashboard" },
           { label: "Member Report", href: "/reports/member-visitation" },
-          { label: "Household Conflicts", href: "/reports/household-conflicts" },
           { label: "Visitation Geography Report", href: "/reports/visitation-geography" },
         ],
       },
@@ -70,6 +69,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
           items: [
             { label: "User Groups", href: "/admin/user-groups", icon: Users },
             { label: "Data Jobs", href: "/admin/jobs", icon: ClipboardList },
+            { label: "Household Conflicts", href: "/reports/household-conflicts", icon: ClipboardList },
             { label: "Tenant Reset", href: "/admin/tenant-reset", icon: Settings2 },
           ],
         } satisfies NavigationSection,

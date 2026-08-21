@@ -7650,6 +7650,127 @@ test("clearing a calendar cache deletes cached events without deleting tenant-sh
   ]);
 });
 
+test("full Google sync omits timeMax when the initial sync range end date is empty", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  let googleEventsUrl = "";
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+          if (key.PK === "USER#user-123" && key.SK === "GOOGLE_CONNECTION") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "GOOGLE_CONNECTION",
+                createdAt: "2026-08-17T12:00:00.000Z",
+                updatedAt: "2026-08-17T12:00:00.000Z",
+                entityType: "google_connection",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                googleAccountId: "google-account",
+                email: "owner@example.com",
+                accessToken: "token-123",
+                scopes: ["https://www.googleapis.com/auth/calendar"],
+                status: "connected",
+                connectedAt: "2026-08-17T12:00:00.000Z",
+                lastConnectedAt: "2026-08-17T12:00:00.000Z",
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":calendarPrefix"] === "CALENDAR#") {
+            return {
+              Items: [
+                {
+                  PK: "USER#user-123",
+                  SK: "CALENDAR#calendar-1",
+                  createdAt: "2026-08-17T12:00:00.000Z",
+                  updatedAt: "2026-08-17T12:00:00.000Z",
+                  entityType: "schedule_calendar",
+                  userId: "user-123",
+                  tenantId: "tenant-abc",
+                  calendarId: "calendar-1",
+                  summary: "Main Calendar",
+                  primary: true,
+                  enabled: true,
+                  selected: true,
+                  sync: {
+                    syncMode: "ALWAYS_GOOGLE",
+                    refreshIntervalMinutes: 15,
+                    initialSyncRange: { from: "2026-08-17", to: "" },
+                    lastSyncStatus: "idle",
+                    requiresFullSync: true,
+                  },
+                },
+              ],
+            };
+          }
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":eventPrefix"] === "EVENT#calendar-1#") {
+            return { Items: [] };
+          }
+
+          if (command.input.IndexName === "GSI1") {
+            return { Items: [] };
+          }
+
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    fetchImpl: async (url) => {
+      googleEventsUrl = String(url);
+      return {
+        ok: true,
+        json: async () => ({
+          items: [],
+          nextSyncToken: "sync-token-1",
+        }),
+      } as Response;
+    },
+    now: () => "2026-08-17T12:00:00.000Z",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/events",
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "GET",
+        },
+      },
+      queryStringParameters: {
+        forceSync: "true",
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  assert.match(googleEventsUrl, /timeMin=2026-08-17T00%3A00%3A00.000Z/);
+  assert.doesNotMatch(googleEventsUrl, /timeMax=/);
+});
+
 test("creating a schedule event stores the Google event id as the canonical event id", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
