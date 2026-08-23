@@ -46,6 +46,8 @@ const toDraft = (calendar: ScheduleCalendar): CalendarSettingsDraft => ({
 const sortDrafts = (drafts: CalendarSettingsDraft[]) =>
   [...drafts].sort((left, right) => left.calendarId.localeCompare(right.calendarId));
 
+const isInitialSyncRangeLocked = (calendar: ScheduleCalendar) => !calendar.sync.requiresFullSync;
+
 export const CalendarSettingsPage = () => {
   const [overview, setOverview] = useState<ScheduleOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -483,6 +485,7 @@ export const CalendarSettingsPage = () => {
                   if (!draft) {
                     return null;
                   }
+                  const initialSyncRangeLocked = isInitialSyncRangeLocked(calendar);
 
                   return (
                     <div className="rounded-md border border-border/70 bg-white p-3 shadow-sm" key={calendar.calendarId}>
@@ -615,6 +618,7 @@ export const CalendarSettingsPage = () => {
                           </span>
                           <div className="grid gap-2 sm:grid-cols-2">
                             <Input
+                              disabled={initialSyncRangeLocked}
                               onChange={(event) =>
                                 setDrafts((current) => ({
                                   ...current,
@@ -631,6 +635,7 @@ export const CalendarSettingsPage = () => {
                               value={draft.initialSyncRange.from}
                             />
                             <Input
+                              disabled={initialSyncRangeLocked}
                               onChange={(event) =>
                                 setDrafts((current) => ({
                                   ...current,
@@ -647,6 +652,11 @@ export const CalendarSettingsPage = () => {
                               value={draft.initialSyncRange.to}
                             />
                           </div>
+                          {initialSyncRangeLocked ? (
+                            <p className="text-xs text-muted-foreground">
+                              Initial sync is already complete for this calendar.
+                            </p>
+                          ) : null}
                         </div>
 
                         <div className="flex gap-2 border-t border-border/70 pt-3">
@@ -696,6 +706,7 @@ export const CalendarSettingsPage = () => {
                       if (!draft) {
                         return null;
                       }
+                      const initialSyncRangeLocked = isInitialSyncRangeLocked(calendar);
 
                       return (
                         <TableRow key={calendar.calendarId}>
@@ -796,6 +807,7 @@ export const CalendarSettingsPage = () => {
                           <TableCell>
                             <div className="grid gap-2">
                               <Input
+                                disabled={initialSyncRangeLocked}
                                 onChange={(event) =>
                                   setDrafts((current) => ({
                                     ...current,
@@ -812,6 +824,7 @@ export const CalendarSettingsPage = () => {
                                 value={draft.initialSyncRange.from}
                               />
                               <Input
+                                disabled={initialSyncRangeLocked}
                                 onChange={(event) =>
                                   setDrafts((current) => ({
                                     ...current,
@@ -827,6 +840,11 @@ export const CalendarSettingsPage = () => {
                                 type="date"
                                 value={draft.initialSyncRange.to}
                               />
+                              {initialSyncRangeLocked ? (
+                                <p className="text-xs text-muted-foreground">
+                                  Initial sync is already complete for this calendar.
+                                </p>
+                              ) : null}
                             </div>
                           </TableCell>
                           <TableCell>

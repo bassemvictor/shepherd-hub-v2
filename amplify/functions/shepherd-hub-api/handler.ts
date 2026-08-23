@@ -7709,7 +7709,9 @@ const updateCalendarSettings = async (
   }
 
   const now = deps.now();
-  const nextRange = normalizeInitialSyncRange(input.initialSyncRange, now);
+  const nextRange = existing.sync.requiresFullSync
+    ? normalizeInitialSyncRange(input.initialSyncRange, now)
+    : existing.sync.initialSyncRange;
   const windowChanged =
     nextRange.from !== existing.sync.initialSyncRange.from ||
     nextRange.to !== existing.sync.initialSyncRange.to;
@@ -7752,7 +7754,9 @@ const saveScheduleSettings = async (
       return json(404, { message: `Calendar ${calendarInput.calendarId} not found.` });
     }
 
-    const nextRange = normalizeInitialSyncRange(calendarInput.initialSyncRange, now);
+    const nextRange = existing.sync.requiresFullSync
+      ? normalizeInitialSyncRange(calendarInput.initialSyncRange, now)
+      : existing.sync.initialSyncRange;
     const updated: CalendarItem = {
       ...existing,
       enabled: true,

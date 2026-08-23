@@ -7771,6 +7771,131 @@ test("full Google sync omits timeMax when the initial sync range end date is emp
   assert.doesNotMatch(googleEventsUrl, /timeMax=/);
 });
 
+test("saving schedule settings keeps the initial sync range unchanged after initial sync is complete", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ name: command.constructor.name, input: command.input });
+
+        if (command.constructor.name === "GetCommand") {
+          const key = command.input.Key as { PK: string; SK: string };
+
+          if (key.PK === "USER#user-123" && key.SK === "SCHEDULE_SETTINGS") {
+            return {
+              Item: {
+                PK: "USER#user-123",
+                SK: "SCHEDULE_SETTINGS",
+                createdAt: "2026-08-17T12:00:00.000Z",
+                updatedAt: "2026-08-17T12:00:00.000Z",
+                entityType: "schedule_settings",
+                userId: "user-123",
+                tenantId: "tenant-abc",
+                calendarListRefreshThresholdMinutes: 5,
+              },
+            };
+          }
+
+          return {};
+        }
+
+        if (command.constructor.name === "QueryCommand") {
+          const values = command.input.ExpressionAttributeValues as Record<string, string>;
+
+          if (values?.[":pk"] === "USER#user-123" && values?.[":calendarPrefix"] === "CALENDAR#") {
+            return {
+              Items: [
+                {
+                  PK: "USER#user-123",
+                  SK: "CALENDAR#calendar-1",
+                  createdAt: "2026-08-17T12:00:00.000Z",
+                  updatedAt: "2026-08-17T12:00:00.000Z",
+                  entityType: "schedule_calendar",
+                  userId: "user-123",
+                  tenantId: "tenant-abc",
+                  calendarId: "calendar-1",
+                  summary: "Main Calendar",
+                  primary: true,
+                  enabled: true,
+                  selected: true,
+                  calendarListRefreshedAt: "2026-08-22T19:58:00.000Z",
+                  sync: {
+                    syncMode: "ALWAYS_GOOGLE",
+                    refreshIntervalMinutes: 15,
+                    initialSyncRange: { from: "2026-08-17", to: "2026-08-22" },
+                    lastSyncedAt: "2026-08-22T19:58:00.000Z",
+                    lastSyncStatus: "success",
+                    requiresFullSync: false,
+                  },
+                },
+              ],
+            };
+          }
+
+          return { Items: [] };
+        }
+
+        return {};
+      },
+    },
+    now: () => "2026-08-22T20:00:00.000Z",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/schedule/settings",
+      body: JSON.stringify({
+        calendarListRefreshThresholdMinutes: 5,
+        calendars: [
+          {
+            calendarId: "calendar-1",
+            showInCalendar: true,
+            syncMode: "ALWAYS_GOOGLE",
+            cacheStaleThresholdMinutes: 15,
+            initialSyncRange: { from: "2026-08-01", to: "2026-08-31" },
+          },
+        ],
+      }),
+      requestContext: {
+        authorizer: {
+          jwt: {
+            claims: {
+              "custom:tenantId": "tenant-abc",
+              email: "owner@example.com",
+              name: "Owner Example",
+              sub: "user-123",
+            },
+          },
+        },
+        http: {
+          method: "PUT",
+        },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 200);
+  const calendarPut = commands.find(
+    (command) =>
+      command.name === "PutCommand" &&
+      (command.input.Item as { entityType?: string; calendarId?: string } | undefined)?.entityType === "schedule_calendar" &&
+      (command.input.Item as { calendarId?: string } | undefined)?.calendarId === "calendar-1",
+  );
+  assert.deepEqual(
+    (calendarPut?.input.Item as { sync?: { initialSyncRange?: { from: string; to: string } } } | undefined)?.sync
+      ?.initialSyncRange,
+    { from: "2026-08-17", to: "2026-08-22" },
+  );
+  assert.equal(
+    (calendarPut?.input.Item as { sync?: { requiresFullSync?: boolean } } | undefined)?.sync?.requiresFullSync,
+    false,
+  );
+});
+
 test("creating a schedule event stores the Google event id as the canonical event id", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
