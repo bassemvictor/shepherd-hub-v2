@@ -67,6 +67,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
         {
           label: "Admin",
           items: [
+            { label: "Tags", href: "/admin/tags", icon: ClipboardList },
             { label: "User Groups", href: "/admin/user-groups", icon: Users },
             { label: "Data Jobs", href: "/admin/jobs", icon: ClipboardList },
             { label: "Household Conflicts", href: "/reports/household-conflicts", icon: ClipboardList },

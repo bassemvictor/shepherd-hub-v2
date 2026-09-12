@@ -223,6 +223,7 @@ test("creates a member and scopes it to the tenant", async () => {
   assert.equal(commands[0]?.name, "PutCommand");
   assert.equal(commands[0]?.input.TableName, "records-table");
   assert.deepEqual(commands[0]?.input.Item, {
+    tagIds: undefined,
     PK: "TENANT#tenant-abc",
     SK: "MEMBER#member-1",
     GSI1PK: "TENANT#tenant-abc#MEMBERS",
@@ -359,6 +360,7 @@ test("creates a member with tenant and member indexes", async () => {
     assert.equal(response.statusCode, 201);
     assert.equal(commands[0]?.name, "PutCommand");
     assert.deepEqual(commands[0]?.input.Item, {
+    tagIds: undefined,
       PK: "TENANT#tenant-abc",
       SK: "MEMBER#member-1",
       GSI1PK: "TENANT#tenant-abc#MEMBERS",
@@ -578,7 +580,7 @@ test("serializes workbook date cells before writing import chunks", async () => 
   assert.equal(firstRowValues?.["Registration Date"], "2026-06-03");
 });
 
-test("processes multiple member import job chunks in one request and completes the job", async () => {
+test("processes multiple member import job chunks in one request and preserves existing member tags", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
   const uuids = ["member-1", "activity-1"];
@@ -661,7 +663,7 @@ test("processes multiple member import job chunks in one request and completes t
           }
 
           if (command.input.IndexName === "GSI1") {
-            return { Items: [] };
+            return { Items: [{ PK: "TENANT#tenant-abc", SK: "MEMBER#existing", entityType: "MEMBER", tenantId: "tenant-abc", memberId: "existing", unityId: "17317", fullName: "Adel", source: "UNITY", tagIds: ["tag-youth"], notes: "Keep notes", createdAt: "2026-01-01", updatedAt: "2026-01-01" }] };
           }
 
           return {
@@ -767,8 +769,8 @@ test("processes multiple member import job chunks in one request and completes t
     startedAt: "2026-06-03T12:00:00.000Z",
     completedAt: "2026-06-03T12:00:00.000Z",
     result: {
-      created: 2,
-      updated: 0,
+      created: 1,
+      updated: 1,
       skipped: 0,
       householdsCreated: 0,
       householdsMatched: 0,
@@ -779,6 +781,8 @@ test("processes multiple member import job chunks in one request and completes t
       errors: [],
     },
   });
+  const imported = commands.find((command) => command.name === "PutCommand" && (command.input.Item as { memberId?: string })?.memberId === "existing");
+  assert.deepEqual((imported?.input.Item as { tagIds?: string[] }).tagIds, ["tag-youth"]);
   assert.ok(commands.some((command) => command.name === "BatchWriteCommand"));
   assert.ok(commands.some((command) => command.name === "PutCommand"));
 });
@@ -3572,6 +3576,7 @@ test("member responses ignore legacy role and status fields from stored items", 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(JSON.parse(String(response.body)), {
     member: {
+      tagIds: [],
       createdAt: "2026-06-03T12:00:00.000Z",
       entityType: "MEMBER",
       tenantId: "tenant-abc",
@@ -3909,6 +3914,7 @@ test("members index returns only lightweight list fields for the tenant", async 
   assert.deepEqual(JSON.parse(String(response.body)), {
     items: [
       {
+        tagIds: [],
         memberId: "member-1",
         fullName: "Adel Abraham",
         initials: "AA",

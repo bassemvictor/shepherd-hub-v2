@@ -1,3 +1,4 @@
+import { TagList } from "../components/tags/tag-ui";
 import {
   AlignLeft,
   ArrowLeft,
@@ -742,6 +743,10 @@ export const MemberDetailPage = () => {
               <div className="rounded-md border border-border bg-white px-3 py-2.5">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{member.unityId ? "UNITY ID" : "MEMBER ID"}</div>
                 <div className="mt-1 text-sm text-slate-900">{member.unityId ?? member.memberId}</div>
+              </div>
+              <div className="rounded-md border border-border bg-white px-3 py-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Tags</div>
+                <div className="mt-1"><TagList ids={member.tagIds} limit={20} /></div>
               </div>
               <div className="rounded-md border border-border bg-white px-3 py-2.5">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Phone</div>

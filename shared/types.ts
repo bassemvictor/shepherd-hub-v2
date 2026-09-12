@@ -7,6 +7,21 @@ export type EntityEnvelope = {
   updatedAt: string;
 };
 
+export type TagTarget = "member" | "household" | "both";
+export type TagMatchMode = "any" | "all";
+export type Tag = EntityEnvelope & {
+  tagId: string;
+  name: string;
+  normalizedName: string;
+  description?: string;
+  color?: string;
+  target: TagTarget;
+  active: boolean;
+  assignmentCount: number;
+};
+export type TagInput = Pick<Tag, "name" | "target" | "description" | "color" | "active">;
+export type TagFilters = { tagIds?: string[]; tagMatchMode?: TagMatchMode };
+
 export type AppCognitoGroup =
   | "admin"
   | "priest"
@@ -177,6 +192,7 @@ export const visitationTypes = ["Visitation", "Confession", "Phone Call", "Meeti
 export type VisitationType = typeof visitationTypes[number];
 
 export type MemberIndexItem = {
+  tagIds?: string[];
   memberId: string;
   fullName: string;
   initials: string;
@@ -194,6 +210,7 @@ export type MemberIndexItem = {
 };
 
 export type Member = EntityEnvelope & {
+  tagIds?: string[];
   memberId: string;
   unityId?: string;
   source: MemberSource;
@@ -288,7 +305,9 @@ export type ReportsSortBy = "last_visit_date" | "visit_count" | "member_name";
 export type ReportsSortDirection = "asc" | "desc";
 export type ReportsMemberStatusFilter = "all" | "never_visited" | "not_visited_recently" | "low_visitation" | "visited";
 
-export type VisitationReportFilters = {
+export type VisitationReportFilters = TagFilters & {
+  householdTagIds?: string[];
+  householdTagMatchMode?: TagMatchMode;
   from?: string;
   to?: string;
   sinceBeginning: boolean;
@@ -515,6 +534,7 @@ export type HouseholdLocation = {
 };
 
 export type HouseholdSummary = EntityEnvelope & {
+  tagIds?: string[];
   householdId: string;
   householdName: string;
   address?: string;
@@ -545,6 +565,7 @@ export type HouseholdDetailResponse = {
 };
 
 export type CreateHouseholdInput = {
+  tagIds?: string[];
   householdName: string;
   address?: string;
   postalCode?: string;

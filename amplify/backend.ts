@@ -179,6 +179,8 @@ const addProtectedRoutes = (path: string, methods: HttpMethod[]) =>
     authorizer,
   });
 
+addProtectedRoutes("/tags", [HttpMethod.GET, HttpMethod.POST]);
+addProtectedRoutes("/tags/{tagId}", [HttpMethod.PUT, HttpMethod.DELETE]);
 addProtectedRoutes("/members", [HttpMethod.GET, HttpMethod.POST]);
 addProtectedRoutes("/members/index", [HttpMethod.GET]);
 httpApi.addRoutes({

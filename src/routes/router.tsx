@@ -1,3 +1,4 @@
+import { AdminTagsPage } from "../pages/admin-tags-page";
 import { createBrowserRouter, Navigate } from "react-router-dom";
 
 import { ProtectedRoute } from "../components/auth/protected-route";
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     children: [
+      { path: "admin/tags", element: <RequireGroups groups={["admin"]}><AdminTagsPage /></RequireGroups> },
       {
         path: "calendar",
         element: <CalendarSettingsPage />,

@@ -1,3 +1,6 @@
+import { TagFilterPopover } from "../components/tags/tag-filter-popover";
+import { ActiveTagFilters } from "../components/tags/active-tag-filters";
+import { useTags } from "../lib/tags";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -146,6 +149,8 @@ const buildGeographyQueryParams = (params: URLSearchParams): VisitationGeography
   const visitorUserId = params.get("visitorUserId") || params.get("visitor") || undefined;
 
   return {
+    householdTagIds: params.get("householdTagIds") || undefined,
+    householdTagMatchMode: params.get("householdTagMatchMode") === "all" ? "all" : "any",
     from: range.from,
     to: range.to,
     sinceBeginning: range.sinceBeginning,
@@ -426,9 +431,22 @@ const installHouseholdLayers = (map: maplibregl.Map) => {
 };
 
 export const VisitationGeographyReportPage = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryParams = useMemo(() => buildGeographyQueryParams(searchParams), [searchParams]);
   const reportQuery = useVisitationGeographyReport(queryParams);
+  const tagsQuery = useTags();
+  const tags = tagsQuery.data?.items ?? [];
+  const setHouseholdTags = (ids: string[], mode: "any" | "all") => {
+    const params = new URLSearchParams(searchParams);
+    if (ids.length) {
+      params.set("householdTagIds", ids.join(","));
+      params.set("householdTagMatchMode", ids.length < 2 ? "any" : mode);
+    } else {
+      params.delete("householdTagIds");
+      params.delete("householdTagMatchMode");
+    }
+    setSearchParams(params);
+  };
   const report = reportQuery.data ?? null;
   const featureCollection = report?.households ?? EMPTY_FEATURE_COLLECTION;
   const areaSummaries = report?.areas ?? [];
@@ -746,6 +764,16 @@ export const VisitationGeographyReportPage = () => {
 
   return (
     <ReportsLayout
+      controls={<div className="space-y-2">
+        <div className="w-full sm:max-w-[180px]">
+          <TagFilterPopover label="Household Tags" tags={tags.filter((tag) => tag.target === "household" || tag.target === "both")}
+            value={{ ids: queryParams.householdTagIds?.split(",").filter(Boolean) ?? [], mode: queryParams.householdTagMatchMode ?? "any" }}
+            onChange={({ ids, mode }) => setHouseholdTags(ids, mode)} loading={tagsQuery.isPending} error={!!tagsQuery.error} onRetry={() => void tagsQuery.refetch()} />
+        </div>
+        <ActiveTagFilters tags={tags} householdIds={queryParams.householdTagIds?.split(",").filter(Boolean)}
+          onRemove={(_, id) => setHouseholdTags(queryParams.householdTagIds?.split(",").filter((value) => value !== id) ?? [], queryParams.householdTagMatchMode ?? "any")}
+          onClear={() => setHouseholdTags([], "any")} />
+      </div>}
       title="Visitation Geography Report"
       subtitle="Explore mapped households across Ottawa and Gatineau using visitation report data."
     >

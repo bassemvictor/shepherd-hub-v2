@@ -1,6 +1,10 @@
+import { encodeCsv, loadReportExportRows } from "../../shared/report-export";
+import { TagFilterPopover } from "../components/tags/tag-filter-popover";
+import { ActiveTagFilters } from "../components/tags/active-tag-filters";
+import { useTags } from "../lib/tags";
+import type { TagMatchMode } from "../../shared/types";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Play } from "lucide-react";
 
 import type {
   ReportsSortBy,
@@ -9,13 +13,10 @@ import type {
   VisitationOverviewRow,
   VisitationReportResponse,
 } from "../../shared/types";
-import { visitationTypes } from "../../shared/types";
 import { CompactFilterBar } from "../components/reports/compact-filter-bar";
 import { MemberVisitationView } from "../components/reports/member-visitation-view";
 import { ReportsDashboard } from "../components/reports/reports-dashboard";
 import { ReportsLayout } from "../components/reports/reports-layout";
-import { Button } from "../components/ui/button";
-import { Select } from "../components/ui/select";
 import {
   getActivityCopy,
   buildReportFilters,
@@ -39,6 +40,10 @@ const MEMBER_VISITATION_ROUTE = "/reports/member-visitation";
 const REPORT_SCOPE: ReportScope = "everyone";
 
 const buildSearchState = (params: URLSearchParams) => ({
+  tagIds: params.get("tagIds") || "",
+  tagMatchMode: (params.get("tagMatchMode") === "all" ? "all" : "any") as TagMatchMode,
+  householdTagIds: params.get("householdTagIds") || "",
+  householdTagMatchMode: (params.get("householdTagMatchMode") === "all" ? "all" : "any") as TagMatchMode,
   period: (params.get("period") as ReportPeriod) || "last_90_days",
   selectedVisitorUserId: params.get("visitor") || undefined,
   visitationType: (params.get("type") as ReportsVisitationTypeFilter) || "all",
@@ -55,6 +60,7 @@ type SearchState = ReturnType<typeof buildSearchState>;
 
 const buildParams = (state: ReturnType<typeof buildSearchState>) => {
   const params = new URLSearchParams();
+  for (const key of ["tagIds", "tagMatchMode", "householdTagIds", "householdTagMatchMode"] as const) { if (state[key]) params.set(key, state[key]); }
   params.set("period", state.period);
   params.set("show", state.show);
   params.set("page", String(state.page));
@@ -122,9 +128,7 @@ const toCsv = (
     ];
   });
 
-  return [headers, ...lines]
-    .map((line) => line.map((value) => `"${String(value).replace(/"/g, "\"\"")}"`).join(","))
-    .join("\n");
+  return encodeCsv([headers, ...lines]);
 };
 
 const downloadCsv = (content: string, fileName: string) => {
@@ -148,6 +152,12 @@ const filtersToQueryString = (filters: ReturnType<typeof buildReportFilters>, pa
   if (filters.sinceBeginning) {
     params.set("sinceBeginning", "true");
   }
+  if (filters.search) params.set("search", filters.search);
+  if (filters.group) params.set("group", filters.group);
+  if (filters.tagIds?.length) params.set("tagIds", filters.tagIds.join(","));
+  if (filters.householdTagIds?.length) params.set("householdTagIds", filters.householdTagIds.join(","));
+  params.set("tagMatchMode", filters.tagMatchMode ?? "any");
+  params.set("householdTagMatchMode", filters.householdTagMatchMode ?? "any");
   params.set("visitCountMode", filters.visitCountMode);
   params.set("visitCountThreshold", String(filters.visitCountThreshold));
   params.set("visitorMode", filters.visitorMode);
@@ -169,6 +179,7 @@ const applyShowFilter = (
   filters: ReturnType<typeof buildReportFilters>,
   show: ReportShowFilter,
 ) => {
+  if (show === "never_visited") { filters.status = "never_visited"; return; }
   if (show === "need_visit") {
     filters.visitCountMode = "not_visited";
     filters.visitCountThreshold = 0;
@@ -186,6 +197,8 @@ const getActivityTypeLabel = (visitationType: ReportsVisitationTypeFilter) =>
 
 export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }) => {
   const { user } = useAuth();
+  const tagsQuery = useTags();
+  const tags = tagsQuery.data?.items ?? [];
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const searchState = useMemo(() => buildSearchState(searchParams), [searchParams]);
@@ -216,7 +229,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     }));
   }, [searchState, setSearchParams]);
 
-  const hasPendingChanges = draftState.period !== searchState.period
+  const hasPendingChanges = draftState.tagIds !== searchState.tagIds || draftState.tagMatchMode !== searchState.tagMatchMode || draftState.householdTagIds !== searchState.householdTagIds || draftState.householdTagMatchMode !== searchState.householdTagMatchMode || draftState.period !== searchState.period
     || draftState.selectedVisitorUserId !== searchState.selectedVisitorUserId
     || draftState.visitationType !== searchState.visitationType
     || draftState.sortBy !== searchState.sortBy
@@ -228,6 +241,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
 
   const runReport = useCallback(() => {
     setState({
+      tagIds: draftState.tagIds, tagMatchMode: draftState.tagMatchMode, householdTagIds: draftState.householdTagIds, householdTagMatchMode: draftState.householdTagMatchMode,
       period: draftState.period,
       selectedVisitorUserId: draftState.selectedVisitorUserId,
       visitationType: draftState.visitationType,
@@ -252,6 +266,10 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
         searchState.customFrom || undefined,
         searchState.customTo || undefined,
       );
+      filters.tagIds = searchState.tagIds.split(",").filter(Boolean);
+      filters.tagMatchMode = searchState.tagMatchMode;
+      filters.householdTagIds = searchState.householdTagIds.split(",").filter(Boolean);
+      filters.householdTagMatchMode = searchState.householdTagMatchMode;
       filters.page = reportView === "members" ? searchState.page : 1;
       filters.pageSize = DEFAULT_PAGE_SIZE;
       filters.search = reportView === "members" ? searchState.search.trim() || undefined : undefined;
@@ -272,6 +290,7 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     }
   }, [
     reportView,
+    searchState.tagIds, searchState.tagMatchMode, searchState.householdTagIds, searchState.householdTagMatchMode,
     searchState.customFrom,
     searchState.customTo,
     searchState.page,
@@ -302,16 +321,38 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
     });
   }, [navigate, searchState]);
 
-  const exportCsv = useCallback(() => {
-    if (!report) {
-      return;
-    }
+  const exportCsv = useCallback(async () => {
+    if (!report || loading) return;
+    try {
+      const rows = await loadReportExportRows(report.filters, (filters) =>
+        api.get<VisitationReportResponse>(`/reports/visitations?${filtersToQueryString(filters, filters.page)}`));
+      downloadCsv(toCsv(rows, REPORT_SCOPE, searchState.period, getActivityTypeLabel(searchState.visitationType), user?.name), "member-report.csv");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to export report."); }
+  }, [report, loading, searchState.period, searchState.visitationType, user?.name]);
 
-    downloadCsv(
-      toCsv(report.rows, REPORT_SCOPE, searchState.period, getActivityTypeLabel(searchState.visitationType), user?.name),
-      "member-report.csv",
-    );
-  }, [report, searchState.period, searchState.visitationType, user?.name]);
+  const setTagFilter = (target: "member" | "household", ids: string[], mode: TagMatchMode) => {
+    setDraftState((current) => target === "member"
+      ? { ...current, tagIds: ids.join(","), tagMatchMode: ids.length < 2 ? "any" : mode }
+      : { ...current, householdTagIds: ids.join(","), householdTagMatchMode: ids.length < 2 ? "any" : mode });
+  };
+  const tagControls = <>
+    {(["member", "household"] as const).map((target) => <TagFilterPopover
+      key={target}
+      label={target === "member" ? "Member Tags" : "Household Tags"}
+      tags={tags.filter((tag) => tag.target === target || tag.target === "both")}
+      value={{ ids: (target === "member" ? draftState.tagIds : draftState.householdTagIds).split(",").filter(Boolean), mode: target === "member" ? draftState.tagMatchMode : draftState.householdTagMatchMode }}
+      onChange={({ ids, mode }) => setTagFilter(target, ids, mode)}
+      loading={tagsQuery.isPending} error={!!tagsQuery.error} onRetry={() => void tagsQuery.refetch()}
+    />)}
+  </>;
+  const activeTagFilters = <ActiveTagFilters
+    tags={tags}
+    memberIds={draftState.tagIds.split(",").filter(Boolean)}
+    householdIds={draftState.householdTagIds.split(",").filter(Boolean)}
+    onRemove={(target, id) => setTagFilter(target, (target === "member" ? draftState.tagIds : draftState.householdTagIds).split(",").filter((value) => value && value !== id), target === "member" ? draftState.tagMatchMode : draftState.householdTagMatchMode)}
+    onClear={() => setDraftState((current) => ({ ...current, tagIds: "", householdTagIds: "", tagMatchMode: "any", householdTagMatchMode: "any" }))}
+    pending={hasPendingChanges}
+  />;
 
   if (!isApiConfigured) {
     return <div className="rounded-lg border border-border bg-white p-4 text-sm text-slate-700">Configure the API before using visitation reports.</div>;
@@ -320,83 +361,11 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
   return (
     <ReportsLayout
       controls={(
-        reportView === "dashboard" ? (
-          <div className="space-y-3">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                <label className="space-y-1">
-                  <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Period</span>
-                  <Select
-                    onChange={(event) => setDraftState((current) => ({ ...current, period: event.target.value as ReportPeriod }))}
-                    value={draftState.period}
-                  >
-                    <option value="all_time">All Time</option>
-                    <option value="last_30_days">Last 30 Days</option>
-                    <option value="last_90_days">Last 90 Days</option>
-                    <option value="this_year">This Year</option>
-                    <option value="custom">Custom</option>
-                  </Select>
-                </label>
-                <label className="space-y-1">
-                  <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Caregiver</span>
-                  <Select
-                    onChange={(event) => setDraftState((current) => ({ ...current, selectedVisitorUserId: event.target.value || undefined }))}
-                    value={draftState.selectedVisitorUserId ?? ""}
-                  >
-                    <option value="">Everyone</option>
-                    {(report?.visitors ?? []).map((visitor) => (
-                      <option key={visitor.visitorUserId} value={visitor.visitorUserId}>
-                        {visitor.visitorDisplayName}
-                    </option>
-                  ))}
-                  </Select>
-                </label>
-                <label className="space-y-1">
-                  <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Type</span>
-                  <Select
-                    onChange={(event) => setDraftState((current) => ({ ...current, visitationType: event.target.value as ReportsVisitationTypeFilter }))}
-                    value={draftState.visitationType}
-                  >
-                    <option value="all">All</option>
-                    {visitationTypes.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-              </div>
-              <Button className="w-full lg:w-auto" disabled={loading || !hasPendingChanges} onClick={runReport} type="button">
-                <Play className="h-3.5 w-3.5" />
-                Run Report
-              </Button>
-            </div>
-            {draftState.period === "custom" ? (
-              <div className="grid gap-3 sm:grid-cols-2 xl:max-w-[420px]">
-              <label className="space-y-1">
-                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">From</span>
-                <input
-                  className="h-8 w-full rounded-md border border-border bg-card px-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  onChange={(event) => setDraftState((current) => ({ ...current, customFrom: event.target.value }))}
-                  type="date"
-                  value={draftState.customFrom ?? ""}
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">To</span>
-                <input
-                  className="h-8 w-full rounded-md border border-border bg-card px-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  onChange={(event) => setDraftState((current) => ({ ...current, customTo: event.target.value }))}
-                  type="date"
-                  value={draftState.customTo ?? ""}
-                />
-              </label>
-              </div>
-            ) : null}
-          </div>
-        ) : (
           <div className="space-y-2">
             <CompactFilterBar
+              dashboard={reportView === "dashboard"}
+              tagControls={tagControls}
+              activeFilters={activeTagFilters}
               customFrom={draftState.customFrom}
               customTo={draftState.customTo}
               onCustomFromChange={(customFrom) => setDraftState((current) => ({ ...current, customFrom }))}
@@ -424,7 +393,6 @@ export const VisitationReportsPage = ({ reportView }: { reportView: ReportView }
               {getFilterSummary(searchState.show, searchState.period, searchState.visitationType)}
             </div>
           </div>
-        )
       )}
       subtitle={
         reportView === "dashboard"

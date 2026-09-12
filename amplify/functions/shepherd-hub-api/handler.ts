@@ -32,6 +32,9 @@ import {
 import { visitationTypes } from "../../../shared/types.js";
 
 import type {
+  Tag,
+  TagInput,
+  TagFilters,
   AppCognitoGroup,
   AdminManagedGroup,
   AdminJobsResponse,
@@ -1103,6 +1106,7 @@ const toScheduleEvent = (item: EventItem): ScheduleEvent => ({
 });
 
 const toMember = (item: MemberItem): Member => ({
+  tagIds: item.tagIds ?? [],
   createdAt: item.createdAt,
   entityType: item.entityType,
   tenantId: item.tenantId,
@@ -1149,6 +1153,7 @@ const toMember = (item: MemberItem): Member => ({
 });
 
 const toMemberIndexItem = (item: MemberItem): MemberIndexItem => ({
+  tagIds: item.tagIds ?? [],
   memberId: item.memberId,
   fullName: item.fullName,
   initials: item.initials,
@@ -1169,6 +1174,7 @@ const toHouseholdSummary = (
   item: HouseholdItem,
   members: HouseholdMemberSummary[] = item.members ?? [],
 ): HouseholdSummary => ({
+  tagIds: item.tagIds ?? [],
   createdAt: item.createdAt,
   entityType: item.entityType,
   tenantId: item.tenantId,
@@ -1625,6 +1631,9 @@ const parseVisitationReportFilters = (event: APIGatewayProxyEventV2WithJWTAuthor
   const visitorUserId = visitorMode === "specific" ? toOptionalString(params.visitorUserId) : undefined;
 
   return {
+    ...parseTagFilters(params),
+    householdTagIds: parseTagIds(params.householdTagIds?.split(",").filter(Boolean)),
+    householdTagMatchMode: parseTagMode(params.householdTagMatchMode),
     from: sinceBeginning ? undefined : (from ?? startOfCurrentYear()),
     to: sinceBeginning ? undefined : to,
     sinceBeginning,
@@ -2604,7 +2613,7 @@ const buildHouseholdSearchText = (
 const buildHouseholdItem = (
   context: RequestContext,
   householdId: string,
-  input: Pick<CreateHouseholdInput, "householdName" | "address" | "postalCode" | "notes" | "primaryContactMemberId" | "location" | "areaId">,
+  input: Pick<CreateHouseholdInput, "householdName" | "address" | "postalCode" | "notes" | "primaryContactMemberId" | "location" | "areaId" | "tagIds">,
   members: MemberItem[],
   deps: HandlerDependencies,
   existing?: HouseholdItem | null,
@@ -2644,6 +2653,7 @@ const buildHouseholdItem = (
     GSI2SK: normalized.addressKey ? householdAddressGsiSk(normalized.addressKey) : undefined,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
+    tagIds: input.tagIds ?? existing?.tagIds,
     entityType: "HOUSEHOLD",
     tenantId: context.tenantId,
     householdId,
@@ -4167,6 +4177,7 @@ const listEventMembers = async (
 const putMember = async (context: RequestContext, member: MemberItem, deps: HandlerDependencies) => {
   await deps.documentClient.send(
     new PutCommand({
+      ...tagSnapshotGuard(member.tagIds),
       Item: member,
       TableName: context.tableName,
     }),
@@ -4238,6 +4249,7 @@ const buildMemberItem = (
     GSI5SK: householdId ? householdMemberGsiSk(normalizedName, memberId) : undefined,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
+    tagIds: input.tagIds ?? existing?.tagIds,
     entityType: "MEMBER",
     tenantId: context.tenantId,
     memberId,
@@ -4601,13 +4613,10 @@ const updateHouseholdMembership = async (
     }
   }
 
+  const tagWrites = await tagAssignmentWrites(context, household, existing, deps);
   const transactItems: Array<Record<string, unknown>> = [
-    {
-      Put: {
-        Item: household,
-        TableName: context.tableName,
-      },
-    },
+    { Put: { Item: household, TableName: context.tableName, ...tagSnapshotGuard(existing?.tagIds) } },
+    ...tagWrites,
   ];
 
   for (const priorHouseholdId of priorHouseholdIds) {
@@ -4640,6 +4649,7 @@ const updateHouseholdMembership = async (
 
     transactItems.push({
       Put: {
+        ...tagSnapshotGuard(updatedPriorHousehold.tagIds),
         Item: updatedPriorHousehold,
         TableName: context.tableName,
       },
@@ -4660,6 +4670,7 @@ const updateHouseholdMembership = async (
 
     transactItems.push({
       Put: {
+        ...tagSnapshotGuard(updatedMember.tagIds),
         Item: updatedMember,
         TableName: context.tableName,
       },
@@ -4686,6 +4697,7 @@ const updateHouseholdMembership = async (
     if (member) {
       transactItems.push({
         Put: {
+          ...tagSnapshotGuard(member.tagIds),
           Item: buildMemberItem(
             context,
             {
@@ -4703,7 +4715,12 @@ const updateHouseholdMembership = async (
   }
 
   try {
-    await transactWriteInChunks(deps.documentClient, transactItems);
+    if (tagWrites.length) {
+      await deps.documentClient.send(new TransactWriteCommand({ TransactItems: transactItems.slice(0, 100) }));
+      await transactWriteInChunks(deps.documentClient, transactItems.slice(100));
+    } else {
+      await transactWriteInChunks(deps.documentClient, transactItems);
+    }
   } catch (error) {
     if (household.addressKey && isDynamoCancellationError(error)) {
       throw new HttpError(409, "A household already exists for this address.");
@@ -5018,10 +5035,16 @@ const resetMembers = async (context: RequestContext, deps: HandlerDependencies) 
   const members = records.filter((item): item is MemberItem => item.entityType === "MEMBER");
   const memberActivities = records.filter((item): item is MemberActivityItem => item.entityType === "MEMBER_ACTIVITY");
   const households = records.filter((item): item is HouseholdItem => item.entityType === "HOUSEHOLD");
+  let tagAssignments = 0;
+  for (const entity of [...members, ...households]) {
+    tagAssignments += entity.tagIds?.length ?? 0;
+    if (entity.tagIds?.length) await persistTaggedEntity(context, { ...entity, tagIds: [] }, entity, deps);
+  }
   await deleteItemsInBatches(context, [...toDeleteKeys(members), ...toDeleteKeys(memberActivities)], deps);
   await deleteItemsInBatches(context, toDeleteKeys(households), deps);
 
   return buildResetSummary("members", {
+    TAG_ASSIGNMENT: tagAssignments,
     MEMBER: members.length,
     MEMBER_ACTIVITY: memberActivities.length,
     HOUSEHOLD: households.length,
@@ -5699,8 +5722,382 @@ const syncSelectedCalendars = async (
   };
 };
 
-const getMembers = async (context: RequestContext, deps: HandlerDependencies) => {
-  const items = await listMembers(context, deps);
+type TagItem = Tag & BaseItem & { revision: string };
+const parseTagIds = (value: unknown): string[] => {
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    value.length > 20 ||
+    value.some((id) => typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))
+  ) {
+    throw new HttpError(400, "Select up to 20 valid tags.");
+  }
+  return [...new Set(value as string[])].sort();
+};
+const parseTagMode = (value: unknown): "any" | "all" => {
+  if (value !== undefined && value !== "any" && value !== "all")
+    throw new HttpError(400, "Tag match mode must be any or all.");
+  return value === "all" ? "all" : "any";
+};
+const parseTagFilters = (params: Record<string, string | undefined>): TagFilters => ({
+  tagIds: parseTagIds(params.tagIds?.split(",").filter(Boolean)),
+  tagMatchMode: parseTagMode(params.tagMatchMode),
+});
+const tagKey = (context: RequestContext, id: string) => ({ PK: tenantPk(context.tenantId), SK: `TAG#${id}` });
+const tagNameKey = (context: RequestContext, name: string) => ({
+  PK: tenantPk(context.tenantId),
+  SK: `TAG_NAME#${name}`,
+});
+const tagPartition = (context: RequestContext, id: string) => `${tenantPk(context.tenantId)}#TAG#${id}`;
+const toTag = ({ PK: _pk, SK: _sk, revision: _revision, ...tag }: TagItem): Tag => tag;
+const getTag = async (context: RequestContext, id: string, deps: HandlerDependencies) => {
+  const result = await deps.documentClient.send(
+    new GetCommand({ TableName: context.tableName, Key: tagKey(context, id), ConsistentRead: true }),
+  );
+  return result.Item as TagItem | undefined;
+};
+const normalizeTagInput = (input: TagInput): TagInput & { normalizedName: string } => {
+  if (typeof input.name !== "string") throw new HttpError(400, "Tag name is required.");
+  const name = input.name.normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (!name || name.length > 60 || /[\x00-\x1f\x7f]/.test(name))
+    throw new HttpError(400, "Tag name must contain 1–60 printable characters.");
+  if (!["member", "household", "both"].includes(input.target))
+    throw new HttpError(400, "Invalid tag target.");
+  if (input.active !== undefined && typeof input.active !== "boolean")
+    throw new HttpError(400, "Active must be a boolean.");
+  if (
+    input.description !== undefined &&
+    (typeof input.description !== "string" || input.description.length > 500)
+  )
+    throw new HttpError(400, "Description must be at most 500 characters.");
+  if (input.color && !/^#[0-9a-f]{6}$/i.test(input.color))
+    throw new HttpError(400, "Color must be a six-digit hex color.");
+  return {
+    name,
+    normalizedName: name.toLocaleLowerCase("en-US"),
+    target: input.target,
+    active: input.active ?? true,
+    description: input.description?.trim() || undefined,
+    color: input.color || undefined,
+  };
+};
+const handleTags = async (
+  context: RequestContext,
+  method: string,
+  id: string | undefined,
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  deps: HandlerDependencies,
+) => {
+  if (method === "GET" && !id) {
+    const target = event.queryStringParameters?.target;
+    if (target && !["member", "household", "both"].includes(target))
+      throw new HttpError(400, "Invalid tag target.");
+    const items = await queryAll(deps.documentClient, {
+      TableName: context.tableName,
+      ConsistentRead: true,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+      ExpressionAttributeValues: { ":pk": tenantPk(context.tenantId), ":prefix": "TAG#" },
+    });
+    return json(200, {
+      items: (items as TagItem[])
+        .filter(
+          (tag) =>
+            (event.queryStringParameters?.includeInactive === "true" || tag.active) &&
+            (!target || tag.target === target || tag.target === "both"),
+        )
+        .map(toTag)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    });
+  }
+  await requireAdminContext(context, deps, `admin.tags.${method.toLowerCase()}`);
+  const existing = id ? await getTag(context, id, deps) : undefined;
+  if (id && !existing) throw new HttpError(404, "Tag not found.");
+  if (method === "DELETE" && existing) {
+    // A counter is updated in the same transaction as every assignment. The
+    // conditional delete also closes the race with a simultaneous assignment.
+    if (existing.assignmentCount)
+      throw new HttpError(
+        409,
+        "This tag is assigned. Deactivate it, or remove its assignments before deleting.",
+      );
+    try {
+      await deps.documentClient.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Delete: {
+                TableName: context.tableName,
+                Key: tagKey(context, existing.tagId),
+                ConditionExpression: "assignmentCount = :zero AND revision = :version",
+                ExpressionAttributeValues: { ":zero": 0, ":version": existing.revision },
+              },
+            },
+            { Delete: { TableName: context.tableName, Key: tagNameKey(context, existing.normalizedName) } },
+          ],
+        }),
+      );
+    } catch (error) {
+      if (isDynamoCancellationError(error))
+        throw new HttpError(409, "The tag changed or was assigned while deleting. Refresh and try again.");
+      throw error;
+    }
+    return json(200, { deleted: true });
+  }
+  if ((method !== "POST" || id) && (method !== "PUT" || !id)) throw new HttpError(405, "Method not allowed.");
+  let raw: TagInput;
+  try {
+    raw = parseBody<TagInput>(event.body);
+  } catch {
+    throw new HttpError(400, "Invalid JSON body.");
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "Invalid tag input.");
+  const input = normalizeTagInput({ ...existing, ...raw });
+  if (existing && existing.target !== input.target && existing.assignmentCount)
+    throw new HttpError(409, "Remove assignments before changing the tag target.");
+  const tagId = existing?.tagId ?? deps.uuid();
+  const timestamp = deps.now();
+  const item: TagItem = {
+    ...tagKey(context, tagId),
+    ...input,
+    entityType: "TAG",
+    tenantId: context.tenantId,
+    tagId,
+    assignmentCount: existing?.assignmentCount ?? 0,
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+    revision: deps.uuid(),
+  };
+  const writes: Array<Record<string, unknown>> = [
+    {
+      Put: {
+        TableName: context.tableName,
+        Item: item,
+        ConditionExpression: existing
+          ? "revision = :version AND assignmentCount = :count"
+          : "attribute_not_exists(PK)",
+        ...(existing
+          ? {
+              ExpressionAttributeValues: {
+                ":version": existing.revision,
+                ":count": existing.assignmentCount,
+              },
+            }
+          : {}),
+      },
+    },
+  ];
+  if (!existing || existing.normalizedName !== item.normalizedName) {
+    writes.push({
+      Put: {
+        TableName: context.tableName,
+        Item: {
+          ...tagNameKey(context, item.normalizedName),
+          tenantId: context.tenantId,
+          entityType: "TAG_NAME",
+          tagId,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        ConditionExpression: "attribute_not_exists(PK)",
+      },
+    });
+    if (existing)
+      writes.push({
+        Delete: { TableName: context.tableName, Key: tagNameKey(context, existing.normalizedName) },
+      });
+  }
+  try {
+    await deps.documentClient.send(new TransactWriteCommand({ TransactItems: writes }));
+  } catch (error) {
+    if (isDynamoCancellationError(error))
+      throw new HttpError(
+        409,
+        "A tag with this name already exists, or the tag changed. Refresh and try again.",
+      );
+    throw error;
+  }
+  return json(existing ? 200 : 201, toTag(item));
+};
+
+// Every full entity write guards its tag snapshot, including imports and moves.
+// This prevents an unrelated stale write from undoing a concurrent tag edit.
+const tagSnapshotGuard = (ids: string[] | undefined) => ({
+  ConditionExpression: ids === undefined ? "attribute_not_exists(tagIds)" : "tagIds = :previousTags",
+  ...(ids === undefined ? {} : { ExpressionAttributeValues: { ":previousTags": ids } }),
+});
+const tagAssignmentWrites = async (
+  context: RequestContext,
+  entity: MemberItem | HouseholdItem,
+  previous: MemberItem | HouseholdItem | null | undefined,
+  deps: HandlerDependencies,
+) => {
+  const next = parseTagIds(entity.tagIds);
+  const before = previous?.tagIds ?? [];
+  if (entity.tagIds !== undefined) entity.tagIds = next;
+  const target = entity.entityType === "MEMBER" ? "member" : "household";
+  const added = next.filter((id) => !before.includes(id));
+  const removed = before.filter((id) => !next.includes(id));
+  const definitions = await Promise.all(added.map((id) => getTag(context, id, deps)));
+  if (definitions.some((tag) => !tag || !tag.active || (tag.target !== target && tag.target !== "both")))
+    throw new HttpError(400, "One or more tags are missing, inactive, or do not apply to this entity.");
+  const writes: Array<Record<string, unknown>> = [];
+  for (const id of [...added, ...removed]) {
+    const adding = added.includes(id);
+    writes.push({
+      Update: {
+        TableName: context.tableName,
+        Key: tagKey(context, id),
+        UpdateExpression: "ADD assignmentCount :delta",
+        ConditionExpression: adding
+          ? "attribute_exists(PK) AND #active = :active AND (#target = :target OR #target = :both)"
+          : "attribute_exists(PK) AND assignmentCount > :zero",
+        ...(adding ? { ExpressionAttributeNames: { "#target": "target", "#active": "active" } } : {}),
+        ExpressionAttributeValues: adding
+          ? { ":delta": 1, ":active": true, ":target": target, ":both": "both" }
+          : { ":delta": -1, ":zero": 0 },
+      },
+    });
+    const key = { PK: tagPartition(context, id), SK: entity.SK };
+    writes.push(
+      adding
+        ? {
+            Put: {
+              TableName: context.tableName,
+              Item: {
+                ...key,
+                tenantId: context.tenantId,
+                entityType: "TAG_ASSIGNMENT",
+                tagId: id,
+                createdAt: deps.now(),
+                updatedAt: deps.now(),
+              },
+            },
+          }
+        : { Delete: { TableName: context.tableName, Key: key } },
+    );
+  }
+  return writes;
+};
+const persistTaggedEntity = async (
+  context: RequestContext,
+  entity: MemberItem | HouseholdItem,
+  previous: MemberItem | HouseholdItem | undefined,
+  deps: HandlerDependencies,
+) => {
+  const writes = await tagAssignmentWrites(context, entity, previous, deps);
+  try {
+    const put = { TableName: context.tableName, Item: entity, ...tagSnapshotGuard(previous?.tagIds) };
+    if (!writes.length) await deps.documentClient.send(new PutCommand(put));
+    else
+      await deps.documentClient.send(new TransactWriteCommand({ TransactItems: [{ Put: put }, ...writes] }));
+  } catch (error) {
+    if (isDynamoCancellationError(error))
+      throw new HttpError(409, "Tags changed while saving. Refresh and try again.");
+    throw error;
+  }
+};
+const deleteTaggedEntity = async (
+  context: RequestContext,
+  entity: MemberItem | HouseholdItem,
+  deps: HandlerDependencies,
+) => {
+  const writes = await tagAssignmentWrites(context, { ...entity, tagIds: [] }, entity, deps);
+  const deletion = {
+    TableName: context.tableName,
+    Key: { PK: entity.PK, SK: entity.SK },
+    ...tagSnapshotGuard(entity.tagIds),
+  };
+  try {
+    if (writes.length)
+      await deps.documentClient.send(
+        new TransactWriteCommand({ TransactItems: [{ Delete: deletion }, ...writes] }),
+      );
+    else await deps.documentClient.send(new DeleteCommand(deletion));
+  } catch (error) {
+    if (isDynamoCancellationError(error))
+      throw new HttpError(409, "Tags changed while deleting. Refresh and try again.");
+    throw error;
+  }
+};
+const taggedEntityIds = async (
+  context: RequestContext,
+  filters: TagFilters,
+  target: "MEMBER" | "HOUSEHOLD",
+  deps: HandlerDependencies,
+): Promise<Set<string> | undefined> => {
+  if (!filters.tagIds?.length) return undefined;
+  const groups = await Promise.all(
+    filters.tagIds.map(async (id) => {
+      const items = await queryAll(deps.documentClient, {
+        TableName: context.tableName,
+        ConsistentRead: true,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+        ExpressionAttributeValues: { ":pk": tagPartition(context, id), ":prefix": `${target}#` },
+      });
+      return new Set(items.map((item) => String(item.SK).slice(target.length + 1)));
+    }),
+  );
+  return filters.tagMatchMode === "all"
+    ? new Set([...groups[0]].filter((id) => groups.every((group) => group.has(id))))
+    : new Set(groups.flatMap((group) => [...group]));
+};
+const loadTaggedEntities = async <T,>(
+  context: RequestContext,
+  ids: Set<string>,
+  prefix: string,
+  deps: HandlerDependencies,
+): Promise<T[]> => {
+  const items: T[] = [];
+  for (const batch of chunkItems([...ids], 100)) {
+    let request: Record<string, { Keys: Record<string, string>[]; ConsistentRead?: boolean }> = {
+      [context.tableName]: {
+        Keys: batch.map((id) => ({ PK: tenantPk(context.tenantId), SK: `${prefix}#${id}` })),
+        ConsistentRead: true,
+      },
+    };
+    for (let attempt = 0; Object.keys(request).length; attempt++) {
+      if (attempt === 6) throw new HttpError(503, "Tag results are temporarily unavailable. Please retry.");
+      const response = await deps.documentClient.send(new BatchGetCommand({ RequestItems: request }));
+      items.push(...((response.Responses?.[context.tableName] ?? []) as T[]));
+      request = (response.UnprocessedKeys ?? {}) as typeof request;
+      if (Object.keys(request).length) await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
+    }
+  }
+  return items;
+};
+const taggedMembers = async (context: RequestContext, filters: TagFilters, deps: HandlerDependencies) => {
+  const ids = await taggedEntityIds(context, filters, "MEMBER", deps);
+  return ids ? loadTaggedEntities<MemberItem>(context, ids, "MEMBER", deps) : listMembers(context, deps);
+};
+const taggedHouseholds = async (context: RequestContext, filters: TagFilters, deps: HandlerDependencies) => {
+  const ids = await taggedEntityIds(context, filters, "HOUSEHOLD", deps);
+  return ids
+    ? loadTaggedEntities<HouseholdItem>(context, ids, "HOUSEHOLD", deps)
+    : listHouseholds(context, deps);
+};
+const taggedReportMembers = async (
+  context: RequestContext,
+  filters: VisitationReportFilters,
+  deps: HandlerDependencies,
+) => {
+  const [members, householdIds] = await Promise.all([
+    taggedMembers(context, filters, deps),
+    taggedEntityIds(
+      context,
+      { tagIds: filters.householdTagIds, tagMatchMode: filters.householdTagMatchMode },
+      "HOUSEHOLD",
+      deps,
+    ),
+  ]);
+  return householdIds
+    ? members.filter((member) => member.householdId && householdIds.has(member.householdId))
+    : members;
+};
+
+const getMembers = async (context: RequestContext, deps: HandlerDependencies, event: APIGatewayProxyEventV2WithJWTAuthorizer) => {
+  const eligible = await taggedMembers(context, parseTagFilters(event.queryStringParameters ?? {}), deps);
+  const search = normalizeName(event.queryStringParameters?.q);
+  const items = search ? eligible.filter((item) => item.normalizedSearchText.includes(search)) : eligible;
   const response: MemberDirectoryResponse = {
     items: items.map(toMember),
     total: items.length,
@@ -5708,8 +6105,10 @@ const getMembers = async (context: RequestContext, deps: HandlerDependencies) =>
   return json(200, response);
 };
 
-const getMembersIndex = async (context: RequestContext, deps: HandlerDependencies) => {
-  const items = await listMembers(context, deps);
+const getMembersIndex = async (context: RequestContext, deps: HandlerDependencies, event: APIGatewayProxyEventV2WithJWTAuthorizer) => {
+  const eligible = await taggedMembers(context, parseTagFilters(event.queryStringParameters ?? {}), deps);
+  const search = normalizeName(event.queryStringParameters?.q);
+  const items = search ? eligible.filter((item) => item.normalizedSearchText.includes(search)) : eligible;
   const response: MemberIndexResponse = {
     items: items.map(toMemberIndexItem),
     generatedAt: deps.now(),
@@ -5751,12 +6150,17 @@ const getHouseholds = async (
   const query = normalizeName(event.queryStringParameters?.q);
   const limit = Math.min(100, Math.max(1, Number.parseInt(String(event.queryStringParameters?.limit ?? "25"), 10) || 25));
 
-  if (query) {
-    const items = (await listHouseholds(context, deps))
-      .filter((item) => item.normalizedSearchText.includes(query));
+  const tagFilters = parseTagFilters(event.queryStringParameters ?? {});
+  if (query || tagFilters.tagIds?.length) {
+    const items = (await taggedHouseholds(context, tagFilters, deps))
+      .filter((item) => !query || item.normalizedSearchText.includes(query))
+      .sort((a, b) => a.householdName.localeCompare(b.householdName) || a.householdId.localeCompare(b.householdId));
+    const offset = Number(decodeCursor(event.queryStringParameters?.cursor)?.offset ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new HttpError(400, "Invalid pagination cursor.");
     return json(200, {
-      items: items.slice(0, limit).map((item) => toHouseholdSummary(item)),
+      items: items.slice(offset, offset + limit).map((item) => toHouseholdSummary(item)),
       total: items.length,
+      nextCursor: offset + limit < items.length ? encodeCursor({ offset: offset + limit }) : undefined,
     } satisfies HouseholdDirectoryResponse);
   }
 
@@ -5832,6 +6236,7 @@ const createHousehold = async (
     allowReassign?: boolean;
   } = {},
 ) => {
+  if (input.tagIds !== undefined) parseTagIds(input.tagIds);
   const normalized = normalizeAddress({
     address: toOptionalString(input.address),
     postalCode: toOptionalString(input.postalCode),
@@ -5885,6 +6290,7 @@ const updateHousehold = async (
   input: UpdateHouseholdInput,
   deps: HandlerDependencies,
 ) => {
+  if (input.tagIds !== undefined) parseTagIds(input.tagIds);
   const existing = await getHousehold(context, householdId, deps);
   if (!existing) {
     return json(404, { message: "Household not found." });
@@ -5892,6 +6298,7 @@ const updateHousehold = async (
   const membership = await listMembersByHouseholdId(context, householdId, deps);
 
   const merged: CreateHouseholdInput = {
+    tagIds: input.tagIds ?? existing.tagIds,
     householdName: input.householdName ?? existing.householdName,
     address: input.address ?? existing.address,
     postalCode: input.postalCode ?? existing.postalCode,
@@ -5952,15 +6359,7 @@ const deleteHousehold = async (context: RequestContext, householdId: string, dep
     return json(400, { message: "Only empty households can be deleted." });
   }
 
-  await deps.documentClient.send(
-    new DeleteCommand({
-      Key: {
-        PK: tenantPk(context.tenantId),
-        SK: householdSk(householdId),
-      },
-      TableName: context.tableName,
-    }),
-  );
+  await deleteTaggedEntity(context, household, deps);
 
   return json(200, { deleted: true, householdId });
 };
@@ -6144,6 +6543,7 @@ const resolveHouseholdConflict = async (
 };
 
 const createMember = async (context: RequestContext, input: CreateMemberInput, deps: HandlerDependencies) => {
+  if (input.tagIds !== undefined) parseTagIds(input.tagIds);
   const validationError = validateMemberInput(input);
   if (validationError) {
     return json(400, { message: validationError });
@@ -6157,7 +6557,7 @@ const createMember = async (context: RequestContext, input: CreateMemberInput, d
   }
 
   const member = buildMemberItem(context, input, deps, null);
-  await putMember(context, member, deps);
+  await persistTaggedEntity(context, member, undefined, deps);
   await logMemberActivity(context, member.memberId, "Member Created", `${member.fullName} added.`, deps);
   return json(201, toMember(member));
 };
@@ -6168,6 +6568,7 @@ const updateMember = async (
   input: UpdateMemberInput,
   deps: HandlerDependencies,
 ) => {
+  if (input.tagIds !== undefined) parseTagIds(input.tagIds);
   const existing = await getMember(context, memberId, deps);
   if (!existing) {
     return json(404, { message: "Member not found." });
@@ -6188,7 +6589,7 @@ const updateMember = async (
 
   const member = buildMemberItem(context, merged, deps, existing);
   member.notes = toOptionalString(existing.notes ?? input.notes);
-  await putMember(context, member, deps);
+  await persistTaggedEntity(context, member, existing, deps);
   await logMemberActivity(context, member.memberId, "Member Updated", `${member.fullName} updated.`, deps);
   return json(200, toMember(member));
 };
@@ -6296,15 +6697,7 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
     );
   }
 
-  await deps.documentClient.send(
-    new DeleteCommand({
-      Key: {
-        PK: tenantPk(context.tenantId),
-        SK: memberSk(memberId),
-      },
-      TableName: context.tableName,
-    }),
-  );
+  await deleteTaggedEntity(context, member, deps);
   await logMemberActivity(context, memberId, "Member Deleted", `${member.fullName} deleted.`, deps);
   return json(200, { deleted: true, memberId });
 };
@@ -6876,7 +7269,7 @@ const getVisitationReport = async (
 ) => {
   const filters = parseVisitationReportFilters(event);
   const [members, visitations, upcomingAssignments] = await Promise.all([
-    listMembers(context, deps),
+    taggedReportMembers(context, filters, deps),
     listTenantVisitations(context, deps),
     listUpcomingEventAssignments(context, deps.now(), deps),
   ]);
@@ -7154,19 +7547,41 @@ const getVisitationReport = async (
     allRows.push(row);
   }
 
+  if (filters.tagIds?.length || filters.householdTagIds?.length) {
+    const matchingIds = new Set(allRows.map((row) => row.memberId));
+    activityTypeCounts.clear(); monthlyActivityCounts.clear(); topVisitorsByUserId.clear();
+    currentUserActivity.thisWeek = 0; currentUserActivity.thisMonth = 0; currentUserActivity.thisYear = 0;
+    for (const visitation of reportVisitations) {
+      if (!matchingIds.has(visitation.memberId) || !matchesReportVisitorFilter(visitation, filters, context.actorSub)) continue;
+      if ((filters.from && visitation.visitDate < filters.from) || (filters.to && visitation.visitDate > filters.to)) continue;
+      if (visitation.visitorUserId === context.actorSub) {
+        if (visitation.visitDate >= weekStart) currentUserActivity.thisWeek++;
+        if (visitation.visitDate >= monthStart) currentUserActivity.thisMonth++;
+        if (visitation.visitDate >= yearStart) currentUserActivity.thisYear++;
+      }
+      const type = normalizeVisitationType(visitation.type);
+      activityTypeCounts.set(type, (activityTypeCounts.get(type) ?? 0) + 1);
+      const month = visitation.visitDate.slice(0, 7);
+      monthlyActivityCounts.set(month, (monthlyActivityCounts.get(month) ?? 0) + 1);
+      const visitor = topVisitorsByUserId.get(visitation.visitorUserId) ?? { visitorUserId: visitation.visitorUserId, visitorDisplayName: visitation.visitorDisplayName, visitCountInRange: 0 };
+      visitor.visitCountInRange++;
+      topVisitorsByUserId.set(visitor.visitorUserId, visitor);
+    }
+  }
+
   allRows.sort((left, right) => {
     const direction = filters.sortDirection === "asc" ? 1 : -1;
     if (filters.sortBy === "member_name") {
-      return left.memberFullName.localeCompare(right.memberFullName) * direction;
+      return left.memberFullName.localeCompare(right.memberFullName) * direction || left.memberId.localeCompare(right.memberId);
     }
 
     if (filters.sortBy === "visit_count") {
-      return (left.visitCountInRange - right.visitCountInRange) * direction;
+      return (left.visitCountInRange - right.visitCountInRange) * direction || left.memberId.localeCompare(right.memberId);
     }
 
     const leftValue = left.lastVisitDate ?? "";
     const rightValue = right.lastVisitDate ?? "";
-    return leftValue.localeCompare(rightValue) * direction;
+    return leftValue.localeCompare(rightValue) * direction || left.memberId.localeCompare(right.memberId);
   });
 
   let notVisitedCount = 0;
@@ -7279,7 +7694,7 @@ const getVisitationReport = async (
     });
 
   const summary: VisitationReportKpiSummary = {
-    totalMembers: filteredMembers.length,
+    totalMembers: filters.tagIds?.length || filters.householdTagIds?.length ? allRows.length : filteredMembers.length,
     matchingMembers: allRows.length,
     notVisitedMembers: notVisitedCount,
     overdueMembers: overdueCount,
@@ -7357,7 +7772,7 @@ const getVisitationGeographyReport = async (
 ) => {
   const filters = parseVisitationReportFilters(event);
   const [households, visitations] = await Promise.all([
-    listHouseholds(context, deps),
+    taggedHouseholds(context, { tagIds: filters.householdTagIds?.length ? filters.householdTagIds : filters.tagIds, tagMatchMode: filters.householdTagIds?.length ? filters.householdTagMatchMode : filters.tagMatchMode }, deps),
     listTenantVisitations(context, deps),
   ]);
 
@@ -8282,12 +8697,16 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       const username = typedEvent.pathParameters?.username;
       const resetAction = typedEvent.pathParameters?.action;
 
+      if (path === "/tags" || /^\/tags\/[^/]+$/.test(path)) {
+        return await handleTags(context, method, path === "/tags" ? undefined : decodeURIComponent(path.split("/")[2]), typedEvent, deps);
+      }
+
       if (method === "GET" && path === "/members") {
-        return await getMembers(context, deps);
+        return await getMembers(context, deps, typedEvent);
       }
 
       if (method === "GET" && path === "/members/index") {
-        return await getMembersIndex(context, deps);
+        return await getMembersIndex(context, deps, typedEvent);
       }
 
       if (method === "GET" && path === "/household-conflicts") {

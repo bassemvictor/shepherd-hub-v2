@@ -7,6 +7,8 @@ import { useAuth } from "./auth";
 const VISITATION_GEOGRAPHY_REPORT_STALE_TIME = 5 * 60 * 1000;
 
 export type VisitationGeographyReportParams = {
+  householdTagIds?: string;
+  householdTagMatchMode?: "any" | "all";
   from?: string;
   to?: string;
   sinceBeginning?: boolean;
@@ -21,6 +23,8 @@ export const visitationGeographyReportQueryKey = (
 ) => [
   "visitation-geography-report",
   cacheScope,
+  params.householdTagIds ?? null,
+  params.householdTagMatchMode ?? "any",
   params.from ?? null,
   params.to ?? null,
   params.sinceBeginning ?? false,
@@ -38,6 +42,7 @@ export const visitationGeographyReportQueryOptions = (
   gcTime: 24 * 60 * 60 * 1000,
   queryFn: async () => {
     const query = new URLSearchParams();
+    if (params.householdTagIds) { query.set("householdTagIds", params.householdTagIds); query.set("householdTagMatchMode", params.householdTagMatchMode ?? "any"); }
 
     if (params.from) {
       query.set("from", params.from.slice(0, 10));

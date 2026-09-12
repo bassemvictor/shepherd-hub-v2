@@ -1,3 +1,4 @@
+import { TagFilter, TagList } from "../components/tags/tag-ui";
 import { ArrowUpDown, Plus, RefreshCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -19,6 +20,8 @@ export const MembersPage = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const tagIds = searchParams.get("tagIds")?.split(",").filter(Boolean) ?? [];
+  const tagMatchMode = searchParams.get("tagMatchMode") === "all" ? "all" : "any";
   const {
     cacheScope,
     items: members,
@@ -27,7 +30,7 @@ export const MembersPage = () => {
     error: membersError,
     refresh,
     status: authStatus,
-  } = useMembersIndex();
+  } = useMembersIndex({ tagIds, tagMatchMode });
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [sortMode, setSortMode] = useState<SortMode>("az");
@@ -166,6 +169,7 @@ export const MembersPage = () => {
             </Button>
           </div>
         </div>
+        <TagFilter ids={tagIds} mode={tagMatchMode} target="member" onChange={(ids, mode) => { const params = new URLSearchParams(searchParams); if (ids.length) { params.set("tagIds", ids.join(",")); params.set("tagMatchMode", mode); } else { params.delete("tagIds"); params.delete("tagMatchMode"); } setPage(1); setSearchParams(params); }} />
       </PageHeader>
 
       {error ? <ErrorState description={error} title="Member action failed" /> : null}
@@ -223,6 +227,7 @@ export const MembersPage = () => {
               <div className="truncate text-xs text-muted-foreground">
                 {member.email || member.phone || member.householdName || "Manual member"}
               </div>
+              {member.tagIds?.length ? <TagList ids={member.tagIds} /> : null}
             </div>
           </button>
         ))}

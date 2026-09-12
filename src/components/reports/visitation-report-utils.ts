@@ -9,7 +9,7 @@ import type {
 export type ReportScope = "me" | "everyone";
 export type ReportView = "dashboard" | "members";
 export type ReportPeriod = "all_time" | "last_30_days" | "last_90_days" | "this_year" | "custom";
-export type ReportShowFilter = "everyone" | "need_visit" | "visited";
+export type ReportShowFilter = "everyone" | "need_visit" | "visited" | "never_visited";
 
 const withArticle = (label: string) => (/^[aeiou]/i.test(label) ? `an ${label}` : `a ${label}`);
 
@@ -194,6 +194,10 @@ export const matchesShowFilter = (
     return true;
   }
 
+  if (showFilter === "never_visited") {
+    return getRelevantVisits(member, scope, currentUser).totalLifetimeVisits === 0;
+  }
+
   if (showFilter === "need_visit") {
     return needsVisitInPeriod(member, period, scope, currentUser);
   }
@@ -264,6 +268,10 @@ export const getFilterSummary = (
 
   if (showFilter === "everyone") {
     return "Showing all members.";
+  }
+
+  if (showFilter === "never_visited") {
+    return `Showing members with no recorded ${copy.pluralLower} at any time.`;
   }
 
   if (showFilter === "need_visit") {

@@ -1,3 +1,4 @@
+import { TagList } from "../components/tags/tag-ui";
 import { ArrowLeft, Plus, Trash2, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -134,6 +135,7 @@ export const HouseholdDetailPage = () => {
               {household.normalizedAddress || "No normalized address"} · {household.addressKey || "No address key"}
             </div>
           ) : null}
+      <section className="space-y-2 rounded-lg border border-border bg-white p-3"><h2 className="text-sm font-semibold">Tags</h2><TagList ids={household.tagIds} limit={20} /></section>
           {household.notes ? <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{household.notes}</p> : null}
           <div className="mt-3 text-sm font-medium text-slate-900">{household.memberCount} members</div>
         </div>
@@ -175,6 +177,7 @@ export const HouseholdDetailPage = () => {
       <HouseholdFormDialog
         busy={saving}
         initialValue={{
+          tagIds: household.tagIds,
           householdName: household.householdName,
           address: household.address,
           postalCode: household.postalCode,

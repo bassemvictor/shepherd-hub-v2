@@ -1,3 +1,5 @@
+import { tagFilterQuery } from "./tags";
+import type { TagFilters } from "../../shared/types";
 import {
   useQuery,
   useQueryClient,
@@ -16,11 +18,11 @@ const MEMBERS_INDEX_STALE_TIME = 20 * 60 * 1000;
 
 export const membersIndexQueryKey = (cacheScope: string) => ["members-index", cacheScope] as const;
 
-export const membersIndexQueryOptions = (cacheScope: string, enabled: boolean) => ({
+export const membersIndexQueryOptions = (cacheScope: string, enabled: boolean, filters: TagFilters = {}) => ({
   enabled,
   gcTime: 24 * 60 * 60 * 1000,
-  queryFn: () => api.get<MemberIndexResponse>("/members/index"),
-  queryKey: membersIndexQueryKey(cacheScope),
+  queryFn: () => api.get<MemberIndexResponse>(`/members/index?${tagFilterQuery(filters)}`),
+  queryKey: filters.tagIds?.length ? [...membersIndexQueryKey(cacheScope), tagFilterQuery(filters).toString()] : membersIndexQueryKey(cacheScope),
   refetchOnMount: "always" as const,
   refetchOnReconnect: "always" as const,
   staleTime: MEMBERS_INDEX_STALE_TIME,
@@ -28,8 +30,9 @@ export const membersIndexQueryOptions = (cacheScope: string, enabled: boolean) =
 
 export const toCachedMemberIndexItem = (member: Pick<
   Member,
-  "memberId" | "fullName" | "initials" | "phone" | "email" | "address" | "postalCode" | "householdId" | "householdName" | "unityId" | "source" | "normalizedSearchText" | "updatedAt"
+  "tagIds" | "memberId" | "fullName" | "initials" | "phone" | "email" | "address" | "postalCode" | "householdId" | "householdName" | "unityId" | "source" | "normalizedSearchText" | "updatedAt"
 >): MemberIndexItem => ({
+  tagIds: member.tagIds,
   memberId: member.memberId,
   fullName: member.fullName,
   initials: member.initials,
@@ -51,7 +54,7 @@ export const refreshMembersIndexCache = async (queryClient: QueryClient, cacheSc
     return;
   }
 
-  await queryClient.invalidateQueries({ queryKey: membersIndexQueryKey(cacheScope) });
+  await Promise.all([queryClient.invalidateQueries({ queryKey: membersIndexQueryKey(cacheScope) }), queryClient.invalidateQueries({ queryKey: ["tags"] })]);
   await queryClient.fetchQuery(membersIndexQueryOptions(cacheScope, true));
 };
 
@@ -64,8 +67,8 @@ export const removeMemberFromMembersIndexCache = (
     return;
   }
 
-  queryClient.setQueryData<MemberIndexResponse | undefined>(
-    membersIndexQueryKey(cacheScope),
+  queryClient.setQueriesData<MemberIndexResponse | undefined>(
+    { queryKey: membersIndexQueryKey(cacheScope) },
     (current) =>
       current
         ? {
@@ -76,12 +79,12 @@ export const removeMemberFromMembersIndexCache = (
   );
 };
 
-export const useMembersIndex = () => {
+export const useMembersIndex = (filters: TagFilters = {}) => {
   const { user, status } = useAuth();
   const tenantId = user?.tenantId ?? null;
   const cacheScope = tenantId ?? (user?.id ? `user:${user.id}` : "anonymous");
   const queryClient = useQueryClient();
-  const query = useQuery(membersIndexQueryOptions(cacheScope, status === "authenticated"));
+  const query = useQuery(membersIndexQueryOptions(cacheScope, status === "authenticated", filters));
 
   return {
     ...query,

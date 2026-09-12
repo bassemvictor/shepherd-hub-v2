@@ -1,3 +1,4 @@
+import { TagSelector } from "../tags/tag-ui";
 import { Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -257,11 +258,13 @@ export const HouseholdFormDialog = ({
             </div>
           )}
         </div>
+        <div className="space-y-2"><div className="text-sm font-medium">Tags</div><TagSelector ids={form.tagIds} onChange={(tagIds) => setForm((current) => ({ ...current, tagIds }))} target="household" /></div>
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <Button onClick={onClose} type="button" variant="outline">Cancel</Button>
           <Button
             disabled={busy}
             onClick={() => void onSubmit({
+              tagIds: form.tagIds,
               householdName: form.householdName ?? "",
               address: form.address,
               postalCode: form.postalCode,

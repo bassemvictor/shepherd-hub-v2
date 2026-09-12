@@ -1,3 +1,5 @@
+import { TagFilter, TagList } from "../components/tags/tag-ui";
+import type { TagMatchMode } from "../../shared/types";
 import { AlertCircle, ArrowUpDown, CheckCircle2, Clock3, MapPinOff, MoreHorizontal, Plus, RefreshCcw } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -69,6 +71,8 @@ const geocodeStatusMeta: Record<
 export const HouseholdsPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [tagIds, setTagIds] = useState<string[]>([]);
+  const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>("any");
   const { user } = useAuth();
   const {
     cacheScope,
@@ -77,7 +81,7 @@ export const HouseholdsPage = () => {
     isFetching,
     error: householdsError,
     refresh,
-  } = useHouseholdsIndex();
+  } = useHouseholdsIndex({ tagIds, tagMatchMode });
   const { items: members } = useMembersIndex();
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
@@ -223,6 +227,7 @@ export const HouseholdsPage = () => {
             </Button>
           </div>
         </div>
+        <TagFilter ids={tagIds} mode={tagMatchMode} target="household" onChange={(ids, mode) => { setTagIds(ids); setTagMatchMode(mode); setPage(1); }} />
       </PageHeader>
 
       {error ? <ErrorState description={error} title="Household action failed" /> : null}
@@ -270,6 +275,7 @@ export const HouseholdsPage = () => {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="truncate text-sm font-semibold text-slate-900">{household.householdName}</div>
+                  {household.tagIds?.length ? <TagList ids={household.tagIds} /> : null}
                         <Badge className="max-w-full gap-1" variant={statusMeta.badgeVariant}>
                           <StatusIcon className="h-3 w-3" />
                           <span className="truncate">{statusMeta.label}</span>

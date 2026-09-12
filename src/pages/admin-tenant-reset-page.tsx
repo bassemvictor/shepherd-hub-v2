@@ -53,7 +53,7 @@ const resetActions: Array<{
   {
     action: "members",
     title: "Delete members",
-    description: "Deletes all members and their member activity records for the current tenant.",
+    description: "Deletes members, households, their activity records and tag assignments for the current tenant. Tag definitions are preserved.",
     warning: "Member profiles and related activity history will be permanently removed.",
     impact: "Estimated impact: all `MEMBER` and `MEMBER_ACTIVITY` records in this tenant.",
   },

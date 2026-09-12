@@ -10,7 +10,8 @@
     "preview": "node node_modules/vite/bin/vite.js preview",
     "ampx:sandbox": "ampx sandbox",
     "ampx:deploy": "ampx pipeline-deploy --branch main",
-    "ampx:generate-outputs": "ampx generate outputs"
+    "ampx:generate-outputs": "ampx generate outputs",
+    "test:ui": "node scripts/test-ui.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "3.1111.0",
@@ -43,19 +44,23 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-router-dom": "^7.15.0",
+    "read-excel-file": "9.3.10",
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.6.0",
-    "tailwindcss": "^4.3.0",
-    "read-excel-file": "9.3.10"
+    "tailwindcss": "^4.3.0"
   },
   "devDependencies": {
     "@aws-amplify/backend": "1.24.0",
     "@aws-amplify/backend-cli": "1.9.0",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/aws-lambda": "8.10.161",
     "@types/node": "24.0.13",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "5.0.4",
+    "esbuild": "^0.25.12",
+    "jsdom": "^27.0.1",
     "typescript": "5.8.2",
     "vite": "7.3.6",
     "write-excel-file": "4.1.1"

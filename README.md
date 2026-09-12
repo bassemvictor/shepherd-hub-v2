@@ -411,3 +411,77 @@ npm run test:lambda
 
 - `amplify_outputs.json` must be regenerated after creating a fresh sandbox or deploy.
 - A few low-level Amplify/CDK identifiers still use legacy names to avoid unintended infrastructure replacement during deployment.
+
+### Tenant tags
+
+Admins manage reusable manual tags under **Admin → Tags** (`/admin/tags`), including name,
+optional description/color, applicability and active status. Names are normalized with Unicode
+NFKC, trimmed, whitespace-collapsed and made case-insensitively unique within a tenant.
+No example tags are automatically seeded.
+
+Members and households have separate `tagIds` assignments. Use their create/edit dialogs
+to select up to 20 applicable tags. Household tags are never
+copied to members. Existing records without `tagIds` behave as untagged; omitted tags in updates
+and Unity imports preserve existing assignments. Definition lists are cached by authenticated
+tenant, and labels resolve by ID so renaming does not rewrite member or household records.
+
+Directory tag filters operate on the complete server-selected population before search/sorting
+and page slicing. **Any** unions the selected tags; **All** intersects them. Member directory
+filters are retained in the URL. Visitation dashboard/member reports offer separate **Member
+tags** and **Household tags**, combined with the existing filters; household matching uses each
+member's current household without inheritance. Select **Never visited** to restrict lifetime
+visitation status. Report rows, metrics, charts and pagination use the matching population; CSV
+export fetches all matching pages, not just the displayed page. The geography report accepts
+household tags and applies them before map, area and summary calculations.
+
+Tag definitions are admin-write-only; authenticated users may read them and assign tags with
+the existing member/household edit permissions. Inactive tags remain visible on assigned records
+and usable in filters, but cannot be newly assigned. **Hard deletion is allowed only with zero
+assignments**; otherwise deactivate the tag or remove its assignments first. Changing applicability
+also requires zero assignments. Concurrent changes return a conflict rather than silently
+losing assignments. A full tenant reset deletes tags, uniqueness records and assignments with
+per-entity counts; the member/household reset removes assignments and clears their counts while
+retaining definitions.
+
+API additions (all protected by the existing Cognito authorizer):
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /tags` | Active tags; optional `target=member\|household\|both` and `includeInactive=true`. Member/household targets also include `both`. |
+| `POST /tags` | Admin creates a tag (`name`, `target`, optional `description`, `color`, `active`). |
+| `PUT /tags/{tagId}` | Admin updates a definition; partial updates supported. |
+| `DELETE /tags/{tagId}` | Admin deletes an unassigned tag; returns 409 when in use or changed concurrently. |
+
+Existing member/household create/update endpoints accept `tagIds: string[]`; an explicit empty
+array removes all assignments. `/members`, `/members/index`, and `/households` accept comma-separated
+`tagIds` and `tagMatchMode=any|all`. `/households` retains cursor pagination, including combined
+search/tag queries. `/reports/visitations` accepts those parameters plus `householdTagIds` and
+`householdTagMatchMode`. `/reports/visitation-geography` accepts household tag filters.
+
+DynamoDB storage uses the existing table, with no additional GSI:
+
+| PK | SK | Entity |
+| --- | --- | --- |
+| `TENANT#{tenantId}` | `TAG#{tagId}` | `TAG`: definition, assignment count and internal revision |
+| `TENANT#{tenantId}` | `TAG_NAME#{normalizedName}` | `TAG_NAME`: transactional uniqueness reservation |
+| `TENANT#{tenantId}#TAG#{tagId}` | `MEMBER#{memberId}` or `HOUSEHOLD#{householdId}` | `TAG_ASSIGNMENT`: reverse lookup |
+
+Every record includes `tenantId` for maintenance. Assignment transactions atomically update the
+entity's IDs, reverse lookup records and definition counters. Conditional snapshot checks protect
+tags from concurrent imports, household moves and edits. Definition revision/count conditions
+protect renames, target changes and deletion. Filtering queries each selected assignment partition
+with consistent reads, unions/intersects IDs, and batch-loads matching entities with bounded
+retries for unprocessed keys. It does not scan the table. Existing unfiltered GSI paths remain in use.
+
+Deploy the Amplify backend (Lambda and the four protected tag API methods), then the frontend.
+No data migration, new table/index, new dependency, Cognito role change or Android configuration
+change is required. Tests cover transactional failure/concurrency, tenant permissions, assignments,
+filters, reports/exports, import preservation and reset cleanup.
+
+
+Report tag controls use compact popovers: **Apply** stages selections in the toolbar, and
+**Run Report** executes them with the other pending filters. Dismissing a popover discards
+unapplied selections. **Clear** resets that popover; **Clear tag filters** preserves the other
+report settings. Geography keeps its existing immediate execution after Apply. Any/All appears
+for two or more selections, and tag search appears when more than seven applicable tags exist.
+Run `npm run test:ui` for the report toolbar, popover, active-pill and keyboard interaction tests.

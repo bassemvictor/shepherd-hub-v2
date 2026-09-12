@@ -1,3 +1,4 @@
+import { TagSelector } from "../tags/tag-ui";
 import { Check, Loader2, Search, Upload, UserPlus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -282,6 +283,7 @@ export const MemberFormDialog = ({
           <span className="text-sm font-medium">Notes</span>
           <Textarea onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} value={form.notes ?? ""} />
         </label>
+        <div className="space-y-2"><div className="text-sm font-medium">Tags</div><TagSelector ids={form.tagIds} onChange={(tagIds) => setForm((current) => ({ ...current, tagIds }))} target="member" /></div>
         <div className="flex justify-end gap-2">
           <Button onClick={onClose} type="button" variant="outline">
             Cancel
