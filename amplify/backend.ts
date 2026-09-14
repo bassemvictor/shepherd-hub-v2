@@ -247,6 +247,11 @@ httpApi.addRoutes({
   methods: [HttpMethod.GET],
   integration,
 });
+httpApi.addRoutes({
+  path: "/public/booking-pages/{slug}/availability/day",
+  methods: [HttpMethod.GET],
+  integration,
+});
 
 backend.addOutput({
   custom: {

@@ -84,6 +84,13 @@ export type PublicBookingMonthAvailability = {
   month: string;
   availableDates: string[];
 };
+export type PublicBookingDayAvailability = {
+  date: string;
+  appointmentTypeId: string;
+  durationMinutes: number;
+  timezone: string;
+  slots: Array<{ start: string; end: string }>;
+};
 
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";

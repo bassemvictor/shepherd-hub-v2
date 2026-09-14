@@ -144,4 +144,17 @@ test("monthly availability uses the default duration, 30-minute midnight grid, a
   assert.equal(thirtyMinuteAvailability.statusCode, 200);
   assert.ok(payload.availableDates.includes("2026-09-02"));
   assert.equal(JSON.stringify(payload).includes("busy"), false);
+  const dayResponse = await invoke(handler, {
+    body: null, rawPath: "/public/booking-pages/fr-cyril-a7k2/availability/day", pathParameters: { slug: "fr-cyril-a7k2" },
+    queryStringParameters: { appointmentTypeId: "confession", date: "2026-09-02", durationMinutes: "30" }, requestContext: { http: { method: "GET" } },
+  });
+  assert.equal(dayResponse.statusCode, 200);
+  const dayPayload = JSON.parse(dayResponse.body ?? "{}");
+  assert.equal(dayPayload.slots.length, 1);
+  assert.match(dayPayload.slots[0].start, /T15:30:00\.000Z$/);
+  const invalidDuration = await invoke(handler, {
+    body: null, rawPath: "/public/booking-pages/fr-cyril-a7k2/availability/day", pathParameters: { slug: "fr-cyril-a7k2" },
+    queryStringParameters: { appointmentTypeId: "confession", date: "2026-09-02", durationMinutes: "55" }, requestContext: { http: { method: "GET" } },
+  });
+  assert.equal(invalidDuration.statusCode, 400);
 });

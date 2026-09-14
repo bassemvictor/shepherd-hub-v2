@@ -136,6 +136,7 @@ import type {
   VisitationGeographySummary,
   SaveBookingSettingsInput,
   PublicBookingMonthAvailability,
+  PublicBookingDayAvailability,
 } from "../../../shared/types.js";
 
 type BaseItem = {
@@ -8769,6 +8770,50 @@ const getPublicMonthAvailability = async (
   return { appointmentTypeId, durationMinutes: requestedDuration, month, availableDates };
 };
 
+const getPublicDayAvailability = async (
+  slug: string,
+  query: Record<string, string | undefined> | undefined,
+  deps: HandlerDependencies,
+): Promise<PublicBookingDayAvailability | null> => {
+  const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "";
+  const profile = await getPublicBookingProfile(slug, tableName, deps);
+  const appointmentTypeId = normalizeWhitespace(query?.appointmentTypeId);
+  const date = normalizeWhitespace(query?.date);
+  const durationMinutes = Number(query?.durationMinutes);
+  if (!profile) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, "date must be YYYY-MM-DD.");
+  const type = profile.appointmentTypes.find((item) => item.id === appointmentTypeId && item.enabled);
+  if (!type) return null;
+  if (!Number.isInteger(durationMinutes) || !type.allowedDurationsMinutes.includes(durationMinutes)) throw new HttpError(400, "durationMinutes must be an allowed appointment duration.");
+  const day = DateTime.fromISO(date, { zone: profile.timezone }).startOf("day");
+  if (!day.isValid) throw new HttpError(400, "Invalid booking date.");
+  const now = DateTime.fromISO(deps.now(), { zone: "utc" });
+  const minStart = now.plus({ minutes: profile.minimumNoticeMinutes });
+  const horizonEnd = now.setZone(profile.timezone).startOf("day").plus({ days: profile.maximumBookingDays + 1 });
+  const unavailable = profile.globalDateOverrides.some((override) => override.date === date) || day < now.setZone(profile.timezone).startOf("day") || day >= horizonEnd;
+  const override = type.dateOverrides.find((item) => item.date === date);
+  const ranges = unavailable ? [] : override ? ("ranges" in override ? override.ranges : []) : (type.weeklyAvailability[bookingWeekdays[day.weekday - 1]] ?? []);
+  if (!ranges.length) return { date, appointmentTypeId, durationMinutes, timezone: profile.timezone, slots: [] };
+  const publicContext: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
+  const connection = await getGoogleConnection(publicContext, deps);
+  if (!connection) throw new HttpError(400, "Booking calendar connection is unavailable.");
+  const calendarIds = [...new Set([profile.bookingCalendarId, ...profile.conflictCalendarIds].filter((id): id is string => Boolean(id)))];
+  const freeBusy = await googleFetch(publicContext, connection, "https://www.googleapis.com/calendar/v3/freeBusy", deps, { method: "POST", body: JSON.stringify({ timeMin: day.toUTC().toISO(), timeMax: day.plus({ days: 1 }).toUTC().toISO(), items: calendarIds.map((id) => ({ id })) }) });
+  const busyPayload = await freeBusy.json() as { calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }> };
+  const busy = Object.values(busyPayload.calendars ?? {}).flatMap((calendar) => calendar.busy ?? []).map((item) => ({ start: DateTime.fromISO(item.start ?? "", { zone: "utc" }), end: DateTime.fromISO(item.end ?? "", { zone: "utc" }) })).filter((item) => item.start.isValid && item.end.isValid && item.start < item.end);
+  const dayResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, Key: { PK: bookingDayPk(profile.profileId), SK: date } }));
+  const reservations = ((dayResult.Item as BookingDayItem | undefined)?.reservations ?? []).filter((reservation) => reservation.status === "CONFIRMED" || (reservation.status === "RESERVED" && (!reservation.expiresAt || DateTime.fromISO(reservation.expiresAt) > now)));
+  const slots: PublicBookingDayAvailability["slots"] = [];
+  for (let minute = 0; minute < 24 * 60; minute += profile.startIntervalMinutes) {
+    const start = day.plus({ minutes: minute }); const end = start.plus({ minutes: durationMinutes });
+    if (!start.isValid || !end.isValid || start < minStart || !ranges.some((range) => minute >= Number(range.start.slice(0, 2)) * 60 + Number(range.start.slice(3)) && minute + durationMinutes <= Number(range.end.slice(0, 2)) * 60 + Number(range.end.slice(3)))) continue;
+    const utcStart = start.toUTC(); const utcEnd = end.toUTC();
+    if (busy.some((item) => utcStart < item.end && utcEnd > item.start) || reservations.some((item) => utcStart < DateTime.fromISO(item.end, { zone: "utc" }) && utcEnd > DateTime.fromISO(item.start, { zone: "utc" }))) continue;
+    slots.push({ start: utcStart.toISO() ?? "", end: utcEnd.toISO() ?? "" });
+  }
+  return { date, appointmentTypeId, durationMinutes, timezone: profile.timezone, slots };
+};
+
 export const createHandler = (overrides: Partial<HandlerDependencies> = {}): APIGatewayProxyHandlerV2 => {
   const deps: HandlerDependencies = {
     ...defaultDependencies,
@@ -8783,6 +8828,12 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       if (method === "GET" && path === "/schedule/google/callback") {
         return await handleGoogleCallback(typedEvent, deps);
+      }
+
+      const publicDayAvailabilitySlug = /^\/public\/booking-pages\/([^/]+)\/availability\/day$/.exec(path)?.[1];
+      if (method === "GET" && publicDayAvailabilitySlug) {
+        const availability = await getPublicDayAvailability(publicDayAvailabilitySlug, typedEvent.queryStringParameters, deps);
+        return availability ? json(200, availability) : json(404, { message: "Booking page not found." });
       }
 
       const publicAvailabilitySlug = /^\/public\/booking-pages\/([^/]+)\/availability\/month$/.exec(path)?.[1];
