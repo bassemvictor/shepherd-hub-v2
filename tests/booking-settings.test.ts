@@ -16,6 +16,22 @@ const memoryClient = (seed: Array<Record<string, unknown>> = []) => {
     items,
     send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
       if (command.constructor.name === "GetCommand") return { Item: items.get(key(command.input.Key as { PK: string; SK: string })) };
+      if (command.constructor.name === "PutCommand") {
+        const item = command.input.Item as Record<string, unknown>; const itemId = key(item as { PK: string; SK: string }); const existing = items.get(itemId);
+        const condition = String(command.input.ConditionExpression ?? ""); const values = command.input.ExpressionAttributeValues as Record<string, unknown> | undefined;
+        const failed = (condition.includes("attribute_not_exists(PK)") && Boolean(existing))
+          || (condition.includes("#version = :expectedVersion") && existing?.version !== values?.[":expectedVersion"])
+          || (condition.includes("requestHash = :requestHash") && existing?.requestHash !== values?.[":requestHash"]);
+        if (failed) { const error = new Error("conditional"); error.name = "ConditionalCheckFailedException"; throw error; }
+        items.set(itemId, { ...item }); return {};
+      }
+      if (command.constructor.name === "DeleteCommand") {
+        items.delete(key(command.input.Key as { PK: string; SK: string })); return {};
+      }
+      if (command.constructor.name === "QueryCommand") {
+        const values = command.input.ExpressionAttributeValues as Record<string, unknown>;
+        return { Items: [...items.values()].filter((item) => item.PK === values[":pk"] && String(item.SK) >= String(values[":from"] ?? "") && String(item.SK) <= String(values[":to"] ?? "~")) };
+      }
       if (command.constructor.name !== "TransactWriteCommand") return {};
       const writes = command.input.TransactItems as Array<{
         Put?: { Item: Record<string, unknown>; ConditionExpression?: string };
@@ -157,4 +173,75 @@ test("monthly availability uses the default duration, 30-minute midnight grid, a
     queryStringParameters: { appointmentTypeId: "confession", date: "2026-09-02", durationMinutes: "55" }, requestContext: { http: { method: "GET" } },
   });
   assert.equal(invalidDuration.statusCode, 400);
+});
+
+const publicBookingRequest = (start: string, idempotencyKey: string) => ({
+  body: JSON.stringify({ appointmentTypeId: "confession", durationMinutes: 45, start, visitorName: "Visitor Name", visitorEmail: "VISITOR@EXAMPLE.COM", visitorPhone: "555-0100", note: "Private note", idempotencyKey }),
+  rawPath: "/public/booking-pages/fr-cyril-a7k2/bookings", pathParameters: { slug: "fr-cyril-a7k2" }, requestContext: { http: { method: "POST" } },
+});
+
+const bookingHarness = async (failGoogleCreate = false) => {
+  const googleConnection = { ...connection(), accessToken: "token", scopes: ["https://www.googleapis.com/auth/calendar"], status: "connected" };
+  const documentClient = memoryClient([googleConnection, calendar("book"), calendar("conflict")]);
+  let googleEvents = 0;
+  let generatedIds = 0;
+  const handler = createHandler({
+    documentClient, now: () => "2026-09-01T00:00:00.000Z", uuid: () => ++generatedIds === 1 ? "profile-1" : `booking-${generatedIds - 1}`,
+    managementToken: () => "management-token-with-at-least-32-bytes-value",
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith("/freeBusy")) return new Response(JSON.stringify({ calendars: { book: { busy: [] }, conflict: { busy: [] } } }), { status: 200 });
+      if (init?.method === "POST") { googleEvents += 1; return failGoogleCreate ? new Response("failed", { status: 500 }) : new Response(JSON.stringify({ id: `google-${googleEvents}` }), { status: 200 }); }
+      return new Response(null, { status: 204 });
+    },
+  });
+  await invoke(handler, event(input()));
+  return { documentClient, handler, getGoogleEvents: () => googleEvents };
+};
+
+test("public booking atomically blocks overlapping requests, preserves non-overlapping requests, and keeps PII out of BOOKING_DAY", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const overlap = await bookingHarness();
+  const [first, second] = await Promise.all([
+    invoke(overlap.handler, publicBookingRequest("2026-09-02T15:30:00.000Z", "request-overlap-a")),
+    invoke(overlap.handler, publicBookingRequest("2026-09-02T16:00:00.000Z", "request-overlap-b")),
+  ]);
+  assert.deepEqual([first.statusCode, second.statusCode].sort(), [201, 409]);
+  assert.equal(overlap.getGoogleEvents(), 1);
+  const day = overlap.documentClient.items.get("PUBLIC_BOOKING_DAY#profile-1|2026-09-02");
+  assert.ok(day); assert.equal(JSON.stringify(day).includes("Visitor Name"), false); assert.equal(JSON.stringify(day).includes("visitor@example.com"), false);
+
+  const adjacent = await bookingHarness();
+  const [a, b] = await Promise.all([
+    invoke(adjacent.handler, publicBookingRequest("2026-09-02T15:30:00.000Z", "request-adjacent-a")),
+    invoke(adjacent.handler, publicBookingRequest("2026-09-02T16:30:00.000Z", "request-adjacent-b")),
+  ]);
+  assert.deepEqual([a.statusCode, b.statusCode].sort(), [201, 201]);
+  assert.equal(adjacent.getGoogleEvents(), 2);
+});
+
+test("public booking is idempotent and cleans only its reservation when Google creation fails", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const success = await bookingHarness();
+  const request = publicBookingRequest("2026-09-02T15:30:00.000Z", "request-idempotent");
+  const first = await invoke(success.handler, request); const replay = await invoke(success.handler, request);
+  assert.equal(first.statusCode, 201); assert.equal(replay.statusCode, 201); assert.equal(success.getGoogleEvents(), 1);
+  assert.ok(JSON.parse(first.body ?? "{}").managementToken); assert.equal(JSON.parse(replay.body ?? "{}").managementToken, undefined);
+  const changedReplay = publicBookingRequest("2026-09-02T16:30:00.000Z", "request-idempotent");
+  assert.equal((await invoke(success.handler, changedReplay)).statusCode, 409);
+  const bookingRecord = [...success.documentClient.items.values()].find((item) => item.entityType === "PUBLIC_BOOKING");
+  assert.equal(bookingRecord?.visitorEmail, "visitor@example.com");
+  assert.equal("managementToken" in (bookingRecord ?? {}), false);
+  assert.equal(typeof bookingRecord?.managementTokenHash, "string");
+
+  const failed = await bookingHarness(true);
+  const response = await invoke(failed.handler, publicBookingRequest("2026-09-02T15:30:00.000Z", "request-google-fail"));
+  assert.equal(response.statusCode, 500);
+  const day = failed.documentClient.items.get("PUBLIC_BOOKING_DAY#profile-1|2026-09-02");
+  assert.deepEqual(day?.reservations, []);
+
+  const tampering = await bookingHarness();
+  const invalidDurationRequest = publicBookingRequest("2026-09-02T15:30:00.000Z", "request-bad-duration");
+  invalidDurationRequest.body = JSON.stringify({ ...JSON.parse(invalidDurationRequest.body), durationMinutes: 55 });
+  assert.equal((await invoke(tampering.handler, invalidDurationRequest)).statusCode, 400);
+  assert.equal((await invoke(tampering.handler, publicBookingRequest("2026-09-02T15:45:00.000Z", "request-bad-boundary"))).statusCode, 400);
 });

@@ -252,6 +252,11 @@ httpApi.addRoutes({
   methods: [HttpMethod.GET],
   integration,
 });
+httpApi.addRoutes({
+  path: "/public/booking-pages/{slug}/bookings",
+  methods: [HttpMethod.POST],
+  integration,
+});
 
 backend.addOutput({
   custom: {

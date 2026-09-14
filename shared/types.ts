@@ -91,6 +91,27 @@ export type PublicBookingDayAvailability = {
   timezone: string;
   slots: Array<{ start: string; end: string }>;
 };
+export type CreatePublicBookingInput = {
+  appointmentTypeId: string;
+  durationMinutes: number;
+  start: string;
+  visitorName: string;
+  visitorEmail: string;
+  visitorPhone?: string;
+  note?: string;
+  idempotencyKey: string;
+};
+export type CreatePublicBookingResponse = {
+  bookingId: string;
+  appointmentTypeId: string;
+  appointmentTypeName: string;
+  durationMinutes: number;
+  start: string;
+  end: string;
+  timezone: string;
+  status: "CONFIRMED";
+  managementToken?: string;
+};
 
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";
