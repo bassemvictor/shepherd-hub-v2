@@ -123,3 +123,25 @@ test("public booking pages work without Cognito and expose only enabled appointm
   assert.equal(disabledResponse.statusCode, 404);
   assert.equal(disabledResponse.body, missingResponse.body);
 });
+
+test("monthly availability uses the default duration, 30-minute midnight grid, and no Google event details", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const googleConnection = { ...connection(), accessToken: "token", scopes: ["https://www.googleapis.com/auth/calendar"], status: "connected" };
+  const documentClient = memoryClient([googleConnection, calendar("book"), calendar("conflict")]);
+  const handler = createHandler({
+    documentClient,
+    now: () => "2026-09-01T00:00:00.000Z",
+    uuid: () => "profile-1",
+    fetchImpl: async () => new Response(JSON.stringify({ calendars: { book: { busy: [] }, conflict: { busy: [] } } }), { status: 200 }),
+  });
+  await invoke(handler, event(input({ appointmentTypes: [{ ...input().appointmentTypes[0], weeklyAvailability: { wednesday: [{ start: "11:15", end: "12:00" }] } }] })));
+  const request = (extra = "") => ({ body: null, rawPath: "/public/booking-pages/fr-cyril-a7k2/availability/month", pathParameters: { slug: "fr-cyril-a7k2" }, queryStringParameters: { appointmentTypeId: "confession", month: "2026-09", ...(extra ? { durationMinutes: extra } : {}) }, requestContext: { http: { method: "GET" } } });
+  const defaultAvailability = await invoke(handler, request());
+  assert.equal(defaultAvailability.statusCode, 200);
+  assert.deepEqual(JSON.parse(defaultAvailability.body ?? "{}").availableDates, []);
+  const thirtyMinuteAvailability = await invoke(handler, request("30"));
+  const payload = JSON.parse(thirtyMinuteAvailability.body ?? "{}");
+  assert.equal(thirtyMinuteAvailability.statusCode, 200);
+  assert.ok(payload.availableDates.includes("2026-09-02"));
+  assert.equal(JSON.stringify(payload).includes("busy"), false);
+});

@@ -263,6 +263,29 @@ export const getPublicBookingPage = async (
   tableName: string,
   deps: Dependencies,
 ): Promise<PublicBookingPage | null> => {
+  const profile = await getPublicBookingProfile(rawSlug, tableName, deps);
+  if (!profile) return null;
+  return {
+    slug: profile.slug,
+    displayName: profile.displayName,
+    ...(profile.introduction ? { introduction: profile.introduction } : {}),
+    timezone: profile.timezone,
+    startIntervalMinutes: profile.startIntervalMinutes,
+    appointmentTypes: profile.appointmentTypes.filter((type) => type.enabled).map((type) => ({
+      id: type.id, name: type.name,
+      ...(type.description ? { description: type.description } : {}),
+      ...(type.publicLocation ? { publicLocation: type.publicLocation } : {}),
+      allowedDurationsMinutes: type.allowedDurationsMinutes,
+      defaultDurationMinutes: type.defaultDurationMinutes,
+    })),
+  };
+};
+
+export const getPublicBookingProfile = async (
+  rawSlug: string | undefined,
+  tableName: string,
+  deps: Dependencies,
+): Promise<PublicBookingProfile | null> => {
   const slug = normalizeSlug(rawSlug);
   if (!tableName || !/^[a-z0-9-]{3,64}$/.test(slug)) return null;
   const lookupResult = await deps.documentClient.send(new GetCommand({
@@ -276,21 +299,7 @@ export const getPublicBookingPage = async (
   const profile = profileResult.Item as BookingProfileItem | undefined;
   if (!profile || !profile.enabled || profile.profileId !== lookup.profileId || profile.slug !== slug ||
     profile.ownerUserId !== lookup.ownerUserId || profile.tenantId !== lookup.tenantId) return null;
-  return {
-    slug: profile.slug,
-    displayName: profile.displayName,
-    ...(profile.introduction ? { introduction: profile.introduction } : {}),
-    timezone: profile.timezone,
-    startIntervalMinutes: profile.startIntervalMinutes,
-    appointmentTypes: profile.appointmentTypes.filter((type) => type.enabled).map((type) => ({
-      id: type.id,
-      name: type.name,
-      ...(type.description ? { description: type.description } : {}),
-      ...(type.publicLocation ? { publicLocation: type.publicLocation } : {}),
-      allowedDurationsMinutes: type.allowedDurationsMinutes,
-      defaultDurationMinutes: type.defaultDurationMinutes,
-    })),
-  };
+  return profile;
 };
 
 export const saveBookingSettings = async (context: Context, input: SaveBookingSettingsInput, deps: Dependencies) => {

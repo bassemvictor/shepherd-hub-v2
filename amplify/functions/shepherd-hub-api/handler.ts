@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { DateTime } from "luxon";
 
 import {
   AdminAddUserToGroupCommand,
@@ -34,6 +35,7 @@ import {
   BookingSettingsError,
   getBookingSettings,
   getPublicBookingPage,
+  getPublicBookingProfile,
   saveBookingSettings,
 } from "./booking-settings/settings.js";
 
@@ -133,6 +135,7 @@ import type {
   VisitationAreaSummary,
   VisitationGeographySummary,
   SaveBookingSettingsInput,
+  PublicBookingMonthAvailability,
 } from "../../../shared/types.js";
 
 type BaseItem = {
@@ -183,6 +186,18 @@ type CalendarItem = BaseItem & {
   selected: boolean;
   calendarListRefreshedAt?: string;
   sync: CalendarSyncConfig;
+};
+
+type BookingDayItem = BaseItem & {
+  profileId: string;
+  reservations: Array<{
+    bookingId: string;
+    appointmentTypeId: string;
+    start: string;
+    end: string;
+    status: "CONFIRMED" | "RESERVED" | string;
+    expiresAt?: string;
+  }>;
 };
 
 type EventItem = BaseItem & {
@@ -707,6 +722,8 @@ const eventVisitationId = (calendarId: string, eventId: string) => `CALENDAR#${c
 const oauthStatePk = (state: string) => `OAUTH_STATE#${state}`;
 const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
+const bookingDayPk = (profileId: string) => `PUBLIC_BOOKING_DAY#${profileId}`;
+const bookingWeekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
 const isAdminGroup = (group: AppCognitoGroup) => group === "admin";
 const importJobChunkSize = 75;
 const importJobChunksPerRequest = 2;
@@ -8682,6 +8699,76 @@ const runAdminReset = async (
   }
 };
 
+const getPublicMonthAvailability = async (
+  slug: string,
+  query: Record<string, string | undefined> | undefined,
+  deps: HandlerDependencies,
+): Promise<PublicBookingMonthAvailability | null> => {
+  const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "";
+  const profile = await getPublicBookingProfile(slug, tableName, deps);
+  const appointmentTypeId = normalizeWhitespace(query?.appointmentTypeId);
+  const month = normalizeWhitespace(query?.month);
+  if (!profile) return null;
+  if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(400, "month must be YYYY-MM.");
+  const appointmentType = profile.appointmentTypes.find((type) => type.id === appointmentTypeId && type.enabled);
+  if (!appointmentType) return null;
+  const requestedDuration = query?.durationMinutes ? Number(query.durationMinutes) : appointmentType.defaultDurationMinutes;
+  if (!Number.isInteger(requestedDuration) || !appointmentType.allowedDurationsMinutes.includes(requestedDuration)) {
+    throw new HttpError(400, "durationMinutes must be an allowed appointment duration.");
+  }
+  const monthStart = DateTime.fromISO(`${month}-01`, { zone: profile.timezone }).startOf("day");
+  if (!monthStart.isValid) throw new HttpError(400, "Invalid booking timezone.");
+  const monthEnd = monthStart.plus({ months: 1 });
+  const now = DateTime.fromISO(deps.now(), { zone: "utc" });
+  const minStart = now.plus({ minutes: profile.minimumNoticeMinutes });
+  const horizonEnd = now.setZone(profile.timezone).startOf("day").plus({ days: profile.maximumBookingDays + 1 });
+  const publicContext: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
+  const connection = await getGoogleConnection(publicContext, deps);
+  if (!connection) throw new HttpError(400, "Booking calendar connection is unavailable.");
+  const calendarIds = [...new Set([profile.bookingCalendarId, ...profile.conflictCalendarIds].filter((id): id is string => Boolean(id)))];
+  const busyIntervals: Array<{ start: DateTime; end: DateTime }> = [];
+  if (calendarIds.length) {
+    const freeBusyResponse = await googleFetch(publicContext, connection, "https://www.googleapis.com/calendar/v3/freeBusy", deps, {
+      method: "POST",
+      body: JSON.stringify({ timeMin: monthStart.toUTC().toISO(), timeMax: monthEnd.toUTC().toISO(), items: calendarIds.map((id) => ({ id })) }),
+    });
+    const payload = await freeBusyResponse.json() as { calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }> };
+    Object.values(payload.calendars ?? {}).flatMap((calendar) => calendar.busy ?? []).forEach((busy) => {
+      const start = DateTime.fromISO(busy.start ?? "", { zone: "utc" }); const end = DateTime.fromISO(busy.end ?? "", { zone: "utc" });
+      if (start.isValid && end.isValid && start < end) busyIntervals.push({ start, end });
+    });
+  }
+  const bookingDays = await queryAll(deps.documentClient, {
+    TableName: tableName, KeyConditionExpression: "#pk = :pk AND #sk BETWEEN :from AND :to",
+    ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
+    ExpressionAttributeValues: { ":pk": bookingDayPk(profile.profileId), ":from": monthStart.toISODate() ?? "", ":to": monthEnd.minus({ days: 1 }).toISODate() ?? "" },
+  }) as BookingDayItem[];
+  const reservationsByDate = new Map(bookingDays.map((day) => [day.SK, day.reservations ?? []]));
+  const blackoutDates = new Set(profile.globalDateOverrides.map((override) => override.date));
+  const overrides = new Map(appointmentType.dateOverrides.map((override) => [override.date, override]));
+  const availableDates: string[] = [];
+  for (let day = monthStart; day < monthEnd; day = day.plus({ days: 1 })) {
+    const date = day.toISODate() ?? "";
+    if (blackoutDates.has(date) || day < now.setZone(profile.timezone).startOf("day") || day >= horizonEnd) continue;
+    const override = overrides.get(date);
+    const ranges = override ? ("ranges" in override ? override.ranges : []) : (appointmentType.weeklyAvailability[bookingWeekdays[day.weekday - 1]] ?? []);
+    if (!ranges.length) continue;
+    const reservations = reservationsByDate.get(date) ?? [];
+    let found = false;
+    for (let minute = 0; minute < 24 * 60 && !found; minute += profile.startIntervalMinutes) {
+      const candidate = day.plus({ minutes: minute }); const end = candidate.plus({ minutes: requestedDuration });
+      if (!candidate.isValid || !end.isValid || candidate < minStart) continue;
+      if (!ranges.some((range) => minute >= Number(range.start.slice(0, 2)) * 60 + Number(range.start.slice(3)) && minute + requestedDuration <= Number(range.end.slice(0, 2)) * 60 + Number(range.end.slice(3)))) continue;
+      const candidateUtc = candidate.toUTC(); const endUtc = end.toUTC();
+      const hasGoogleConflict = busyIntervals.some((busy) => candidateUtc < busy.end && endUtc > busy.start);
+      const hasReservationConflict = reservations.some((reservation) => (reservation.status === "CONFIRMED" || (reservation.status === "RESERVED" && (!reservation.expiresAt || DateTime.fromISO(reservation.expiresAt) > now))) && candidateUtc < DateTime.fromISO(reservation.end, { zone: "utc" }) && endUtc > DateTime.fromISO(reservation.start, { zone: "utc" }));
+      if (!hasGoogleConflict && !hasReservationConflict) found = true;
+    }
+    if (found) availableDates.push(date);
+  }
+  return { appointmentTypeId, durationMinutes: requestedDuration, month, availableDates };
+};
+
 export const createHandler = (overrides: Partial<HandlerDependencies> = {}): APIGatewayProxyHandlerV2 => {
   const deps: HandlerDependencies = {
     ...defaultDependencies,
@@ -8696,6 +8783,12 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       if (method === "GET" && path === "/schedule/google/callback") {
         return await handleGoogleCallback(typedEvent, deps);
+      }
+
+      const publicAvailabilitySlug = /^\/public\/booking-pages\/([^/]+)\/availability\/month$/.exec(path)?.[1];
+      if (method === "GET" && publicAvailabilitySlug) {
+        const availability = await getPublicMonthAvailability(publicAvailabilitySlug, typedEvent.queryStringParameters, deps);
+        return availability ? json(200, availability) : json(404, { message: "Booking page not found." });
       }
 
       const publicBookingSlug = /^\/public\/booking-pages\/([^/]+)$/.exec(path)?.[1];

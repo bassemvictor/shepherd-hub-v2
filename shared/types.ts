@@ -78,6 +78,12 @@ export type PublicBookingPage = Pick<
     "id" | "name" | "description" | "publicLocation" | "allowedDurationsMinutes" | "defaultDurationMinutes"
   >>;
 };
+export type PublicBookingMonthAvailability = {
+  appointmentTypeId: string;
+  durationMinutes: number;
+  month: string;
+  availableDates: string[];
+};
 
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";
