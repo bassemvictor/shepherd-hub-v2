@@ -33,6 +33,7 @@ import { visitationTypes } from "../../../shared/types.js";
 import {
   BookingSettingsError,
   getBookingSettings,
+  getPublicBookingPage,
   saveBookingSettings,
 } from "./booking-settings/settings.js";
 
@@ -8695,6 +8696,12 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       if (method === "GET" && path === "/schedule/google/callback") {
         return await handleGoogleCallback(typedEvent, deps);
+      }
+
+      const publicBookingSlug = /^\/public\/booking-pages\/([^/]+)$/.exec(path)?.[1];
+      if (method === "GET" && publicBookingSlug) {
+        const page = await getPublicBookingPage(publicBookingSlug, process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "", deps);
+        return page ? json(200, page) : json(404, { message: "Booking page not found." });
       }
 
       const context = getContext(typedEvent);

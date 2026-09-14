@@ -88,3 +88,38 @@ test("duplicate and concurrent duplicate slugs are atomically rejected", async (
   const [first, second] = await Promise.all([invoke(handler, event(input(), ["priest"], "priest-1")), invoke(handler, event(input(), ["priest"], "priest-2"))]);
   assert.deepEqual([first.statusCode, second.statusCode].sort(), [201, 409]);
 });
+
+test("public booking pages work without Cognito and expose only enabled appointment type fields", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const documentClient = memoryClient([connection(), calendar("book"), calendar("conflict")]);
+  const handler = createHandler({ documentClient, uuid: () => "profile-1" });
+  await invoke(handler, event(input({ appointmentTypes: [
+    ...input().appointmentTypes,
+    { id: "hidden", name: "Hidden", enabled: false, allowedDurationsMinutes: [30], defaultDurationMinutes: 30, weeklyAvailability: {}, dateOverrides: [] },
+  ] })));
+  const publicRequest = {
+    body: null, rawPath: "/public/booking-pages/fr-cyril-a7k2", pathParameters: { slug: "fr-cyril-a7k2" },
+    requestContext: { http: { method: "GET" } },
+  };
+  const response = await invoke(handler, publicRequest);
+  assert.equal(response.statusCode, 200);
+  const page = JSON.parse(response.body ?? "{}");
+  assert.equal(page.slug, "fr-cyril-a7k2");
+  assert.deepEqual(page.appointmentTypes.map((type: { id: string }) => type.id), ["confession"]);
+  assert.equal("tenantId" in page, false);
+  assert.equal("ownerUserId" in page, false);
+  assert.equal("bookingCalendarId" in page, false);
+  assert.equal("weeklyAvailability" in page.appointmentTypes[0], false);
+
+  const protectedResponse = await invoke(handler, { ...publicRequest, rawPath: "/booking-settings" });
+  assert.equal(protectedResponse.statusCode, 403);
+  const missingResponse = await invoke(handler, { ...publicRequest, rawPath: "/public/booking-pages/no-such-page", pathParameters: { slug: "no-such-page" } });
+  assert.equal(missingResponse.statusCode, 404);
+
+  const profile = documentClient.items.get("USER#priest-1|BOOKING_PROFILE");
+  assert.ok(profile);
+  profile.enabled = false;
+  const disabledResponse = await invoke(handler, publicRequest);
+  assert.equal(disabledResponse.statusCode, 404);
+  assert.equal(disabledResponse.body, missingResponse.body);
+});

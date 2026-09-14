@@ -69,6 +69,15 @@ export type SaveBookingSettingsInput = Omit<
   PublicBookingProfile,
   "entityType" | "tenantId" | "createdAt" | "updatedAt" | "profileId" | "ownerUserId"
 >;
+export type PublicBookingPage = Pick<
+  PublicBookingProfile,
+  "slug" | "displayName" | "introduction" | "timezone" | "startIntervalMinutes"
+> & {
+  appointmentTypes: Array<Pick<
+    PublicAppointmentType,
+    "id" | "name" | "description" | "publicLocation" | "allowedDurationsMinutes" | "defaultDurationMinutes"
+  >>;
+};
 
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";

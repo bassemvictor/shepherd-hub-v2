@@ -8,6 +8,7 @@ import type {
   GlobalDateOverride,
   PublicAppointmentType,
   PublicBookingProfile,
+  PublicBookingPage,
   SaveBookingSettingsInput,
   WeeklyBookingAvailability,
 } from "../../../../shared/types.js";
@@ -39,6 +40,12 @@ type BookingProfileItem = PublicBookingProfile & {
   PK: string;
   SK: string;
   entityType: "BOOKING_PROFILE";
+};
+
+type BookingSlugItem = {
+  profileId: string;
+  tenantId: string;
+  ownerUserId: string;
 };
 
 export class BookingSettingsError extends Error {
@@ -213,13 +220,24 @@ const normalizeInput = async (context: Context, input: SaveBookingSettingsInput,
   if (!Number.isInteger(minimumNoticeMinutes) || minimumNoticeMinutes < 0 || !Number.isInteger(maximumBookingDays) || maximumBookingDays < 1) {
     throw new BookingSettingsError(400, "minimumNoticeMinutes must be non-negative and maximumBookingDays must be at least 1.");
   }
+  const calendars = await validateCalendars(context, input, deps);
+  const appointmentTypes = validateAppointmentTypes(input.appointmentTypes ?? []);
+  const enabled = input.enabled !== false;
+  if (enabled) {
+    if (!calendars.bookingCalendarId) throw new BookingSettingsError(400, "Select a booking calendar before enabling public booking.");
+    const enabledTypes = appointmentTypes.filter((type) => type.enabled);
+    if (!enabledTypes.length) throw new BookingSettingsError(400, "Enable at least one appointment type before enabling public booking.");
+    if (!enabledTypes.some((type) => Object.values(type.weeklyAvailability).some((ranges) => ranges.length))) {
+      throw new BookingSettingsError(400, "At least one enabled appointment type needs weekly availability before enabling public booking.");
+    }
+  }
   return {
-    enabled: input.enabled !== false, slug, displayName,
+    enabled, slug, displayName,
     ...(String(input.introduction ?? "").trim() ? { introduction: String(input.introduction).trim() } : {}),
     timezone: validateTimezone(input.timezone), startIntervalMinutes: input.startIntervalMinutes,
-    ...(await validateCalendars(context, input, deps)), minimumNoticeMinutes, maximumBookingDays,
+    ...calendars, minimumNoticeMinutes, maximumBookingDays,
     globalDateOverrides: validateGlobalOverrides(input.globalDateOverrides ?? []),
-    appointmentTypes: validateAppointmentTypes(input.appointmentTypes ?? []),
+    appointmentTypes,
   };
 };
 
@@ -238,6 +256,41 @@ const requirePriest = (context: Context) => {
 export const getBookingSettings = async (context: Context, deps: Dependencies) => {
   requirePriest(context);
   return response(200, { profile: (await getProfile(context, deps)) ?? null });
+};
+
+export const getPublicBookingPage = async (
+  rawSlug: string | undefined,
+  tableName: string,
+  deps: Dependencies,
+): Promise<PublicBookingPage | null> => {
+  const slug = normalizeSlug(rawSlug);
+  if (!tableName || !/^[a-z0-9-]{3,64}$/.test(slug)) return null;
+  const lookupResult = await deps.documentClient.send(new GetCommand({
+    TableName: tableName, Key: { PK: slugPk(slug), SK: slugSk() },
+  }));
+  const lookup = lookupResult.Item as BookingSlugItem | undefined;
+  if (!lookup?.profileId || !lookup.ownerUserId || !lookup.tenantId) return null;
+  const profileResult = await deps.documentClient.send(new GetCommand({
+    TableName: tableName, Key: { PK: userPk(lookup.ownerUserId), SK: profileSk() },
+  }));
+  const profile = profileResult.Item as BookingProfileItem | undefined;
+  if (!profile || !profile.enabled || profile.profileId !== lookup.profileId || profile.slug !== slug ||
+    profile.ownerUserId !== lookup.ownerUserId || profile.tenantId !== lookup.tenantId) return null;
+  return {
+    slug: profile.slug,
+    displayName: profile.displayName,
+    ...(profile.introduction ? { introduction: profile.introduction } : {}),
+    timezone: profile.timezone,
+    startIntervalMinutes: profile.startIntervalMinutes,
+    appointmentTypes: profile.appointmentTypes.filter((type) => type.enabled).map((type) => ({
+      id: type.id,
+      name: type.name,
+      ...(type.description ? { description: type.description } : {}),
+      ...(type.publicLocation ? { publicLocation: type.publicLocation } : {}),
+      allowedDurationsMinutes: type.allowedDurationsMinutes,
+      defaultDurationMinutes: type.defaultDurationMinutes,
+    })),
+  };
 };
 
 export const saveBookingSettings = async (context: Context, input: SaveBookingSettingsInput, deps: Dependencies) => {

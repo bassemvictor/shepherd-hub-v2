@@ -2,7 +2,7 @@ import { BarChart3, CalendarDays, ChevronDown, ClipboardList, Settings2, Users }
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
-import { isAdminUser, type AppAuthUser } from "../../lib/auth";
+import { hasAnyGroup, isAdminUser, type AppAuthUser } from "../../lib/auth";
 import {
   MOBILE_SCHEDULE_MODE_EVENT,
   MOBILE_SCHEDULE_MODE_STORAGE_KEY,
@@ -60,7 +60,12 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
   },
   {
     label: "Settings",
-    items: [{ label: "Connect & Configure", href: "/calendar", icon: Settings2 }],
+    items: [
+      { label: "Connect & Configure", href: "/calendar", icon: Settings2 },
+      ...(user && hasAnyGroup(user.groups, ["priest"])
+        ? [{ label: "Public Booking", href: "/calendar/public-booking", icon: CalendarDays }]
+        : []),
+    ],
   },
   ...(user && isAdminUser(user.groups)
     ? [

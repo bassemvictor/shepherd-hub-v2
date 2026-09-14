@@ -9,6 +9,8 @@ import { AdminJobsPage } from "../pages/admin-jobs-page";
 import { AdminTenantResetPage } from "../pages/admin-tenant-reset-page";
 import { AdminUserGroupsPage } from "../pages/admin-user-groups-page";
 import { CalendarSettingsPage } from "../pages/calendar-settings-page";
+import { BookingSettingsPage } from "../pages/booking-settings-page";
+import { PublicBookingPage } from "../pages/public-booking-page";
 import { HouseholdDetailPage } from "../pages/household-detail-page";
 import { HouseholdConflictsReportPage } from "../pages/household-conflicts-report-page";
 import { HouseholdsPage } from "../pages/households-page";
@@ -30,6 +32,10 @@ export const router = createBrowserRouter([
     element: <AuthPage />,
   },
   {
+    path: "/book/:slug",
+    element: <PublicBookingPage />,
+  },
+  {
     path: "/",
     element: (
       <ProtectedRoute>
@@ -49,6 +55,10 @@ export const router = createBrowserRouter([
       {
         path: "calendar/schedule-beta",
         element: <LegacyScheduleBetaRedirectPage />,
+      },
+      {
+        path: "calendar/public-booking",
+        element: <RequireGroups groups={["priest"]}><BookingSettingsPage /></RequireGroups>,
       },
       {
         path: "members",
