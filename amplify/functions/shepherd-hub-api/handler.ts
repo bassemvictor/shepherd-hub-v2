@@ -30,6 +30,11 @@ import {
   visitationAreaDefinitions,
 } from "../../../shared/visitation-areas.js";
 import { visitationTypes } from "../../../shared/types.js";
+import {
+  BookingSettingsError,
+  getBookingSettings,
+  saveBookingSettings,
+} from "./booking-settings/settings.js";
 
 import type {
   Tag,
@@ -126,6 +131,7 @@ import type {
   VisitationGeographyReportResponse,
   VisitationAreaSummary,
   VisitationGeographySummary,
+  SaveBookingSettingsInput,
 } from "../../../shared/types.js";
 
 type BaseItem = {
@@ -8863,6 +8869,14 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         return await getScheduleOverview(context, deps);
       }
 
+      if (method === "GET" && path === "/booking-settings") {
+        return await getBookingSettings(context, deps);
+      }
+
+      if (method === "PUT" && path === "/booking-settings") {
+        return await saveBookingSettings(context, parseBody<SaveBookingSettingsInput>(typedEvent.body), deps);
+      }
+
       if (method === "GET" && path === "/reports/visitations") {
         return await getVisitationReport(context, typedEvent, deps);
       }
@@ -8998,6 +9012,10 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       return json(404, { message: "Route not found." });
     } catch (error) {
+      if (error instanceof BookingSettingsError) {
+        return json(error.statusCode, { message: error.message });
+      }
+
       if (error instanceof HttpError) {
         return json(error.statusCode, { message: error.message });
       }

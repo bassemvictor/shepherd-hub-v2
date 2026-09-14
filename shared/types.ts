@@ -29,6 +29,47 @@ export type AppCognitoGroup =
 
 export type AdminManagedGroup = "admin" | "priest" | "servant";
 
+export type BookingTimeRange = { start: string; end: string };
+export type WeeklyBookingAvailability = Partial<Record<
+  "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday",
+  BookingTimeRange[]
+>>;
+export type GlobalDateOverride = { date: string; unavailable: true };
+export type AppointmentTypeDateOverride =
+  | { date: string; unavailable: true }
+  | { date: string; ranges: BookingTimeRange[] };
+export type PublicAppointmentType = {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  publicLocation?: string;
+  allowedDurationsMinutes: number[];
+  defaultDurationMinutes: number;
+  weeklyAvailability: WeeklyBookingAvailability;
+  dateOverrides: AppointmentTypeDateOverride[];
+};
+export type PublicBookingProfile = EntityEnvelope & {
+  profileId: string;
+  ownerUserId: string;
+  enabled: boolean;
+  slug: string;
+  displayName: string;
+  introduction?: string;
+  timezone: string;
+  startIntervalMinutes: 15 | 30;
+  bookingCalendarId?: string;
+  conflictCalendarIds: string[];
+  minimumNoticeMinutes: number;
+  maximumBookingDays: number;
+  globalDateOverrides: GlobalDateOverride[];
+  appointmentTypes: PublicAppointmentType[];
+};
+export type SaveBookingSettingsInput = Omit<
+  PublicBookingProfile,
+  "entityType" | "tenantId" | "createdAt" | "updatedAt" | "profileId" | "ownerUserId"
+>;
+
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";
 export type SyncStatus = "idle" | "success" | "error" | "pending";

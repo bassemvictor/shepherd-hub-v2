@@ -211,6 +211,7 @@ addProtectedRoutes("/events/{eventId}/members", [HttpMethod.GET, HttpMethod.PUT]
 addProtectedRoutes("/reports/visitations", [HttpMethod.GET]);
 addProtectedRoutes("/reports/visitation-geography", [HttpMethod.GET]);
 addProtectedRoutes("/schedule/overview", [HttpMethod.GET]);
+addProtectedRoutes("/booking-settings", [HttpMethod.GET, HttpMethod.PUT]);
 addProtectedRoutes("/schedule/google/connect", [HttpMethod.POST]);
 addProtectedRoutes("/schedule/google/connection", [HttpMethod.DELETE]);
 addProtectedRoutes("/schedule/calendars/refresh", [HttpMethod.POST]);
