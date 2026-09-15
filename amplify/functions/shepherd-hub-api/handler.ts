@@ -139,6 +139,9 @@ import type {
   PublicBookingDayAvailability,
   CreatePublicBookingInput,
   CreatePublicBookingResponse,
+  PublicBookingManagement,
+  ReschedulePublicBookingInput,
+  PublicBookingProfile,
 } from "../../../shared/types.js";
 
 type BaseItem = {
@@ -225,9 +228,15 @@ type PublicBookingRecordItem = BaseItem & {
   visitorEmail: string;
   visitorPhone?: string;
   note?: string;
-  status: "CONFIRMED";
+  status: "CONFIRMED" | "CANCELLED";
   googleEventId: string;
   managementTokenHash: string;
+};
+
+type PublicBookingManagementLookupItem = BaseItem & {
+  bookingId: string;
+  bookingPk: string;
+  bookingSk: string;
 };
 
 type EventItem = BaseItem & {
@@ -758,6 +767,8 @@ const bookingDayPk = (profileId: string) => `PUBLIC_BOOKING_DAY#${profileId}`;
 const publicBookingIdempotencyPk = (profileId: string) => `PUBLIC_BOOKING_IDEMPOTENCY#${profileId}`;
 const publicBookingRecordPk = (ownerUserId: string) => `USER#${ownerUserId}#PUBLIC_BOOKINGS`;
 const publicBookingRecordSk = (date: string, start: string, bookingId: string) => `DATE#${date}#START#${start}#BOOKING#${bookingId}`;
+const publicBookingManagementPk = (tokenHash: string) => `PUBLIC_BOOKING_MANAGEMENT#${tokenHash}`;
+const publicBookingManagementSk = () => "BOOKING";
 const bookingWeekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
 const isAdminGroup = (group: AppCognitoGroup) => group === "admin";
 const importJobChunkSize = 75;
@@ -8808,6 +8819,7 @@ const getPublicDayAvailability = async (
   slug: string,
   query: Record<string, string | undefined> | undefined,
   deps: HandlerDependencies,
+  ignoreBookingId?: string,
 ): Promise<PublicBookingDayAvailability | null> => {
   const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "";
   const profile = await getPublicBookingProfile(slug, tableName, deps);
@@ -8836,7 +8848,7 @@ const getPublicDayAvailability = async (
   const busyPayload = await freeBusy.json() as { calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }> };
   const busy = Object.values(busyPayload.calendars ?? {}).flatMap((calendar) => calendar.busy ?? []).map((item) => ({ start: DateTime.fromISO(item.start ?? "", { zone: "utc" }), end: DateTime.fromISO(item.end ?? "", { zone: "utc" }) })).filter((item) => item.start.isValid && item.end.isValid && item.start < item.end);
   const dayResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, Key: { PK: bookingDayPk(profile.profileId), SK: date } }));
-  const reservations = ((dayResult.Item as BookingDayItem | undefined)?.reservations ?? []).filter((reservation) => reservation.status === "CONFIRMED" || (reservation.status === "RESERVED" && (!reservation.expiresAt || DateTime.fromISO(reservation.expiresAt) > now)));
+  const reservations = ((dayResult.Item as BookingDayItem | undefined)?.reservations ?? []).filter((reservation) => reservation.bookingId !== ignoreBookingId && (reservation.status === "CONFIRMED" || (reservation.status === "RESERVED" && (!reservation.expiresAt || DateTime.fromISO(reservation.expiresAt) > now))));
   const slots: PublicBookingDayAvailability["slots"] = [];
   for (let minute = 0; minute < 24 * 60; minute += profile.startIntervalMinutes) {
     const start = day.plus({ minutes: minute }); const end = start.plus({ minutes: durationMinutes });
@@ -8968,6 +8980,7 @@ const createPublicBooking = async (
   }
   let bookingId = "";
   let googleEventId = "";
+  let managementTokenHash = "";
   try {
     const availability = await getPublicDayAvailability(slug, { appointmentTypeId, date: localDate, durationMinutes: String(durationMinutes) }, deps);
     const selectedSlot = availability?.slots.find((slot) => slot.start === start);
@@ -8983,9 +8996,11 @@ const createPublicBooking = async (
     if (!googleEvent.id) throw new Error("Google Calendar did not return an event id.");
     googleEventId = googleEvent.id;
     const managementToken = deps.managementToken();
+    managementTokenHash = sha256(managementToken);
     const response: CreatePublicBookingResponse = { bookingId, appointmentTypeId, appointmentTypeName: type.name, durationMinutes, start, end, timezone: profile.timezone, status: "CONFIRMED", managementToken };
-    const record: PublicBookingRecordItem = { PK: publicBookingRecordPk(profile.ownerUserId), SK: publicBookingRecordSk(localDate, start, bookingId), entityType: "PUBLIC_BOOKING", bookingId, tenantId: profile.tenantId, profileId: profile.profileId, ownerUserId: profile.ownerUserId, appointmentTypeId, appointmentTypeNameSnapshot: type.name, durationMinutes, start, end, timezone: profile.timezone, visitorName, visitorEmail, visitorPhone, note, status: "CONFIRMED", googleEventId, managementTokenHash: sha256(managementToken), createdAt: now, updatedAt: deps.now() };
+    const record: PublicBookingRecordItem = { PK: publicBookingRecordPk(profile.ownerUserId), SK: publicBookingRecordSk(localDate, start, bookingId), entityType: "PUBLIC_BOOKING", bookingId, tenantId: profile.tenantId, profileId: profile.profileId, ownerUserId: profile.ownerUserId, appointmentTypeId, appointmentTypeNameSnapshot: type.name, durationMinutes, start, end, timezone: profile.timezone, visitorName, visitorEmail, visitorPhone, note, status: "CONFIRMED", googleEventId, managementTokenHash, createdAt: now, updatedAt: deps.now() };
     await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: record, ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)" }));
+    await deps.documentClient.send(new PutCommand({ TableName: tableName, ConditionExpression: "attribute_not_exists(PK)", Item: { PK: publicBookingManagementPk(record.managementTokenHash), SK: publicBookingManagementSk(), entityType: "PUBLIC_BOOKING_MANAGEMENT", bookingId, bookingPk: record.PK, bookingSk: record.SK, createdAt: now, updatedAt: deps.now() } satisfies PublicBookingManagementLookupItem }));
     await mutateOwnPublicBookingReservation(profile.profileId, localDate, bookingId, "confirm", tableName, deps);
     const idempotentResponse = { ...response }; delete idempotentResponse.managementToken;
     await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: { ...idempotencyKeyValue, entityType: "PUBLIC_BOOKING_IDEMPOTENCY", requestHash, status: "COMPLETED", response: idempotentResponse, createdAt: now, updatedAt: deps.now() } satisfies PublicBookingIdempotencyItem, ConditionExpression: "requestHash = :requestHash", ExpressionAttributeValues: { ":requestHash": requestHash } }));
@@ -9001,10 +9016,121 @@ const createPublicBooking = async (
     if (bookingId) {
       try { await mutateOwnPublicBookingReservation(profile.profileId, localDate, bookingId, "remove", tableName, deps); } catch { /* best-effort compensation */ }
       try { await deps.documentClient.send(new DeleteCommand({ TableName: tableName, Key: { PK: publicBookingRecordPk(profile.ownerUserId), SK: publicBookingRecordSk(localDate, start, bookingId) } })); } catch { /* best-effort compensation */ }
+      if (managementTokenHash) try { await deps.documentClient.send(new DeleteCommand({ TableName: tableName, Key: { PK: publicBookingManagementPk(managementTokenHash), SK: publicBookingManagementSk() } })); } catch { /* best-effort compensation */ }
     }
     try { await deps.documentClient.send(new DeleteCommand({ TableName: tableName, Key: idempotencyKeyValue, ConditionExpression: "requestHash = :requestHash", ExpressionAttributeValues: { ":requestHash": requestHash } })); } catch { /* best-effort compensation */ }
     throw error;
   }
+};
+
+const getManagedPublicBooking = async (token: unknown, deps: HandlerDependencies) => {
+  const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "";
+  const normalizedToken = normalizeWhitespace(token);
+  if (normalizedToken.length < 32 || normalizedToken.length > 256) throw new HttpError(404, "Booking not found.");
+  const lookupResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: publicBookingManagementPk(sha256(normalizedToken)), SK: publicBookingManagementSk() } }));
+  const lookup = lookupResult.Item as PublicBookingManagementLookupItem | undefined;
+  if (!lookup) throw new HttpError(404, "Booking not found.");
+  const bookingResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: lookup.bookingPk, SK: lookup.bookingSk } }));
+  const booking = bookingResult.Item as PublicBookingRecordItem | undefined;
+  if (!booking || booking.bookingId !== lookup.bookingId) throw new HttpError(404, "Booking not found.");
+  const profileResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: userPk(booking.ownerUserId), SK: "BOOKING_PROFILE" } }));
+  const profile = profileResult.Item as (PublicBookingProfile & BaseItem) | undefined;
+  if (!profile || profile.profileId !== booking.profileId) throw new HttpError(404, "Booking not found.");
+  return { booking, profile, tableName };
+};
+
+const toPublicBookingManagement = (booking: PublicBookingRecordItem, profile: PublicBookingProfile): PublicBookingManagement => {
+  const type = profile.appointmentTypes.find((item) => item.id === booking.appointmentTypeId);
+  return { bookingId: booking.bookingId, appointmentTypeId: booking.appointmentTypeId, appointmentTypeName: booking.appointmentTypeNameSnapshot, allowedDurationsMinutes: type?.allowedDurationsMinutes ?? [booking.durationMinutes], durationMinutes: booking.durationMinutes, start: booking.start, end: booking.end, timezone: booking.timezone, priestDisplayName: profile.displayName, ...(type?.publicLocation ? { publicLocation: type.publicLocation } : {}), status: booking.status };
+};
+
+const replaceOwnReservationOnDay = async (
+  profileId: string,
+  localDate: string,
+  bookingId: string,
+  replacement: BookingDayItem["reservations"][number],
+  tableName: string,
+  deps: HandlerDependencies,
+) => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: bookingDayPk(profileId), SK: localDate } }));
+    const existing = result.Item as BookingDayItem | undefined;
+    if (!existing) throw new HttpError(409, "The existing booking reservation was not found.");
+    const others = existing.reservations.filter((item) => item.bookingId !== bookingId && isActiveBookingReservation(item, deps.now()));
+    if (others.some((item) => intervalsOverlap(replacement.start, replacement.end, item.start, item.end))) throw new HttpError(409, "That appointment time is no longer available.");
+    try {
+      await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: { ...existing, version: existing.version + 1, reservations: [...others, replacement], updatedAt: deps.now() }, ConditionExpression: "#version = :version", ExpressionAttributeNames: { "#version": "version" }, ExpressionAttributeValues: { ":version": existing.version } }));
+      return;
+    } catch (error) { if (!isDynamoCancellationError(error)) throw error; }
+  }
+  throw new HttpError(409, "That appointment time changed. Please try again.");
+};
+
+const updatePublicBookingGoogleEvent = async (booking: PublicBookingRecordItem, profile: PublicBookingProfile, start: string, end: string, deps: HandlerDependencies) => {
+  if (!profile.bookingCalendarId) throw new Error("Booking calendar connection is unavailable.");
+  const context: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName: process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "" };
+  const connection = await getGoogleConnection(context, deps);
+  if (!connection) throw new Error("Booking calendar connection is unavailable.");
+  await googleFetch(context, connection, `${GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId)}/${encodeURIComponent(booking.googleEventId)}`, deps, { method: "PUT", body: JSON.stringify({ start: { dateTime: start }, end: { dateTime: end } }) });
+};
+
+const cancelManagedPublicBooking = async (token: unknown, deps: HandlerDependencies): Promise<PublicBookingManagement> => {
+  const { booking, profile, tableName } = await getManagedPublicBooking(token, deps);
+  if (booking.status === "CANCELLED") return toPublicBookingManagement(booking, profile);
+  if (!profile.bookingCalendarId) throw new Error("Booking calendar connection is unavailable.");
+  const context: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
+  const connection = await getGoogleConnection(context, deps);
+  if (!connection) throw new Error("Booking calendar connection is unavailable.");
+  await googleFetch(context, connection, `${GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId)}/${encodeURIComponent(booking.googleEventId)}`, deps, { method: "DELETE" });
+  const cancelled = { ...booking, status: "CANCELLED" as const, updatedAt: deps.now() };
+  await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: cancelled }));
+  const localDate = DateTime.fromISO(booking.start, { zone: "utc" }).setZone(profile.timezone).toISODate() ?? "";
+  await mutateOwnPublicBookingReservation(profile.profileId, localDate, booking.bookingId, "remove", tableName, deps);
+  return toPublicBookingManagement(cancelled, profile);
+};
+
+const rescheduleManagedPublicBooking = async (input: ReschedulePublicBookingInput, deps: HandlerDependencies): Promise<PublicBookingManagement> => {
+  const { booking, profile, tableName } = await getManagedPublicBooking(input.token, deps);
+  if (booking.status !== "CONFIRMED") throw new HttpError(409, "This booking is cancelled.");
+  const type = profile.appointmentTypes.find((item) => item.id === booking.appointmentTypeId && item.enabled);
+  const durationMinutes = Number(input.durationMinutes);
+  if (!type || !Number.isInteger(durationMinutes) || !type.allowedDurationsMinutes.includes(durationMinutes)) throw new HttpError(400, "durationMinutes must be allowed for this appointment type.");
+  const parsedStart = DateTime.fromISO(normalizeWhitespace(input.start), { setZone: true });
+  const localStart = parsedStart.setZone(profile.timezone);
+  if (!parsedStart.isValid || localStart.second !== 0 || localStart.millisecond !== 0 || (localStart.hour * 60 + localStart.minute) % profile.startIntervalMinutes !== 0) throw new HttpError(400, "start must align to the booking start grid.");
+  const start = parsedStart.toUTC().toISO() ?? "";
+  const newDate = localStart.toISODate() ?? "";
+  const oldDate = DateTime.fromISO(booking.start, { zone: "utc" }).setZone(profile.timezone).toISODate() ?? "";
+  const availability = await getPublicDayAvailability(profile.slug, { appointmentTypeId: booking.appointmentTypeId, date: newDate, durationMinutes: String(durationMinutes) }, deps, oldDate === newDate ? booking.bookingId : undefined);
+  const selectedSlot = availability?.slots.find((slot) => slot.start === start);
+  if (!selectedSlot) throw new HttpError(409, "That appointment time is no longer available.");
+  const end = selectedSlot.end;
+  const reserved = { bookingId: booking.bookingId, appointmentTypeId: booking.appointmentTypeId, start, end, status: "RESERVED", expiresAt: DateTime.fromISO(deps.now()).plus({ minutes: 5 }).toUTC().toISO() ?? "" };
+  const previous = { bookingId: booking.bookingId, appointmentTypeId: booking.appointmentTypeId, start: booking.start, end: booking.end, status: "CONFIRMED" };
+  const updated = { ...booking, durationMinutes, start, end, updatedAt: deps.now() };
+  if (oldDate === newDate) {
+    await replaceOwnReservationOnDay(profile.profileId, oldDate, booking.bookingId, reserved, tableName, deps);
+    try {
+      await updatePublicBookingGoogleEvent(booking, profile, start, end, deps);
+      await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: updated }));
+      await mutateOwnPublicBookingReservation(profile.profileId, newDate, booking.bookingId, "confirm", tableName, deps);
+    } catch (error) {
+      try { await replaceOwnReservationOnDay(profile.profileId, oldDate, booking.bookingId, previous, tableName, deps); } catch { /* preserve the original error */ }
+      throw error;
+    }
+  } else {
+    await claimPublicBookingReservation(profile.profileId, newDate, reserved, tableName, deps);
+    try {
+      await updatePublicBookingGoogleEvent(booking, profile, start, end, deps);
+      await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: updated }));
+      await mutateOwnPublicBookingReservation(profile.profileId, newDate, booking.bookingId, "confirm", tableName, deps);
+      await mutateOwnPublicBookingReservation(profile.profileId, oldDate, booking.bookingId, "remove", tableName, deps);
+    } catch (error) {
+      try { await mutateOwnPublicBookingReservation(profile.profileId, newDate, booking.bookingId, "remove", tableName, deps); } catch { /* retain old reservation */ }
+      throw error;
+    }
+  }
+  return toPublicBookingManagement(updated, profile);
 };
 
 export const createHandler = (overrides: Partial<HandlerDependencies> = {}): APIGatewayProxyHandlerV2 => {
@@ -9021,6 +9147,19 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
 
       if (method === "GET" && path === "/schedule/google/callback") {
         return await handleGoogleCallback(typedEvent, deps);
+      }
+
+      if (method === "POST" && path === "/public/bookings/manage") {
+        const managed = await getManagedPublicBooking(parseBody<{ token?: string }>(typedEvent.body).token, deps);
+        return json(200, toPublicBookingManagement(managed.booking, managed.profile));
+      }
+
+      if (method === "POST" && path === "/public/bookings/cancel") {
+        return json(200, await cancelManagedPublicBooking(parseBody<{ token?: string }>(typedEvent.body).token, deps));
+      }
+
+      if (method === "POST" && path === "/public/bookings/reschedule") {
+        return json(200, await rescheduleManagedPublicBooking(parseBody<ReschedulePublicBookingInput>(typedEvent.body), deps));
       }
 
       const publicCreateBookingSlug = /^\/public\/booking-pages\/([^/]+)\/bookings$/.exec(path)?.[1];

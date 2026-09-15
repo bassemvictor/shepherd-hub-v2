@@ -11,6 +11,7 @@ import { AdminUserGroupsPage } from "../pages/admin-user-groups-page";
 import { CalendarSettingsPage } from "../pages/calendar-settings-page";
 import { BookingSettingsPage } from "../pages/booking-settings-page";
 import { PublicBookingPage } from "../pages/public-booking-page";
+import { PublicBookingManagePage } from "../pages/public-booking-manage-page";
 import { HouseholdDetailPage } from "../pages/household-detail-page";
 import { HouseholdConflictsReportPage } from "../pages/household-conflicts-report-page";
 import { HouseholdsPage } from "../pages/households-page";
@@ -34,6 +35,10 @@ export const router = createBrowserRouter([
   {
     path: "/book/:slug",
     element: <PublicBookingPage />,
+  },
+  {
+    path: "/book/manage",
+    element: <PublicBookingManagePage />,
   },
   {
     path: "/",

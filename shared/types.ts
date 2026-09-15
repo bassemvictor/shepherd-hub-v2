@@ -112,6 +112,20 @@ export type CreatePublicBookingResponse = {
   status: "CONFIRMED";
   managementToken?: string;
 };
+export type PublicBookingManagement = {
+  bookingId: string;
+  appointmentTypeId: string;
+  appointmentTypeName: string;
+  allowedDurationsMinutes: number[];
+  durationMinutes: number;
+  start: string;
+  end: string;
+  timezone: string;
+  priestDisplayName: string;
+  publicLocation?: string;
+  status: "CONFIRMED" | "CANCELLED";
+};
+export type ReschedulePublicBookingInput = { token: string; start: string; durationMinutes: number };
 
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";

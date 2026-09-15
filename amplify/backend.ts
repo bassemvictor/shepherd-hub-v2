@@ -257,6 +257,9 @@ httpApi.addRoutes({
   methods: [HttpMethod.POST],
   integration,
 });
+httpApi.addRoutes({ path: "/public/bookings/manage", methods: [HttpMethod.POST], integration });
+httpApi.addRoutes({ path: "/public/bookings/cancel", methods: [HttpMethod.POST], integration });
+httpApi.addRoutes({ path: "/public/bookings/reschedule", methods: [HttpMethod.POST], integration });
 
 backend.addOutput({
   custom: {

@@ -185,9 +185,10 @@ const bookingHarness = async (failGoogleCreate = false) => {
   const documentClient = memoryClient([googleConnection, calendar("book"), calendar("conflict")]);
   let googleEvents = 0;
   let generatedIds = 0;
+  let generatedTokens = 0;
   const handler = createHandler({
     documentClient, now: () => "2026-09-01T00:00:00.000Z", uuid: () => ++generatedIds === 1 ? "profile-1" : `booking-${generatedIds - 1}`,
-    managementToken: () => "management-token-with-at-least-32-bytes-value",
+    managementToken: () => `management-token-with-at-least-32-bytes-value-${++generatedTokens}`,
     fetchImpl: async (url, init) => {
       if (String(url).endsWith("/freeBusy")) return new Response(JSON.stringify({ calendars: { book: { busy: [] }, conflict: { busy: [] } } }), { status: 200 });
       if (init?.method === "POST") { googleEvents += 1; return failGoogleCreate ? new Response("failed", { status: 500 }) : new Response(JSON.stringify({ id: `google-${googleEvents}` }), { status: 200 }); }
@@ -244,4 +245,37 @@ test("public booking is idempotent and cleans only its reservation when Google c
   invalidDurationRequest.body = JSON.stringify({ ...JSON.parse(invalidDurationRequest.body), durationMinutes: 55 });
   assert.equal((await invoke(tampering.handler, invalidDurationRequest)).statusCode, 400);
   assert.equal((await invoke(tampering.handler, publicBookingRequest("2026-09-02T15:45:00.000Z", "request-bad-boundary"))).statusCode, 400);
+});
+
+test("management token isolates a booking, supports idempotent cancellation, and reschedules on the same day", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const harness = await bookingHarness();
+  const created = await invoke(harness.handler, publicBookingRequest("2026-09-02T15:30:00.000Z", "request-manage"));
+  const token = JSON.parse(created.body ?? "{}").managementToken as string;
+  const lookup = [...harness.documentClient.items.values()].find((item) => item.entityType === "PUBLIC_BOOKING_MANAGEMENT");
+  assert.ok(lookup); const storedBooking = harness.documentClient.items.get(`${lookup.bookingPk}|${lookup.bookingSk}`); assert.ok(storedBooking);
+  const storedProfile = harness.documentClient.items.get(`USER#${storedBooking.ownerUserId}|BOOKING_PROFILE`); assert.ok(storedProfile); assert.equal(storedProfile.profileId, storedBooking.profileId);
+  const manageRequest = (path: string, body: Record<string, unknown>) => ({ body: JSON.stringify(body), rawPath: path, requestContext: { http: { method: "POST" } } });
+  const managed = await invoke(harness.handler, manageRequest("/public/bookings/manage", { token }));
+  const managedDto = JSON.parse(managed.body ?? "{}");
+  assert.equal(managed.statusCode, 200); assert.equal(managedDto.bookingId, "booking-1");
+  assert.equal("tenantId" in managedDto, false); assert.equal("googleEventId" in managedDto, false); assert.equal("visitorEmail" in managedDto, false);
+  assert.equal((await invoke(harness.handler, manageRequest("/public/bookings/manage", { token: "not-a-valid-management-token" }))).statusCode, 404);
+
+  const moved = await invoke(harness.handler, manageRequest("/public/bookings/reschedule", { token, start: "2026-09-02T16:30:00.000Z", durationMinutes: 30 }));
+  assert.equal(moved.statusCode, 200); assert.equal(JSON.parse(moved.body ?? "{}").durationMinutes, 30);
+  const cancelled = await invoke(harness.handler, manageRequest("/public/bookings/cancel", { token }));
+  const repeatedCancel = await invoke(harness.handler, manageRequest("/public/bookings/cancel", { token }));
+  assert.equal(cancelled.statusCode, 200); assert.equal(repeatedCancel.statusCode, 200);
+  assert.equal(JSON.parse(repeatedCancel.body ?? "{}").status, "CANCELLED");
+  assert.deepEqual(harness.documentClient.items.get("PUBLIC_BOOKING_DAY#profile-1|2026-09-02")?.reservations, []);
+
+  const crossDay = await bookingHarness();
+  const crossCreated = await invoke(crossDay.handler, publicBookingRequest("2026-09-02T15:30:00.000Z", "request-cross-day"));
+  const crossToken = JSON.parse(crossCreated.body ?? "{}").managementToken as string;
+  const crossMoved = await invoke(crossDay.handler, manageRequest("/public/bookings/reschedule", { token: crossToken, start: "2026-09-09T15:30:00.000Z", durationMinutes: 45 }));
+  assert.equal(crossMoved.statusCode, 200);
+  assert.deepEqual(crossDay.documentClient.items.get("PUBLIC_BOOKING_DAY#profile-1|2026-09-02")?.reservations, []);
+  const newDay = crossDay.documentClient.items.get("PUBLIC_BOOKING_DAY#profile-1|2026-09-09") as { reservations?: Array<{ status?: string }> } | undefined;
+  assert.equal(newDay?.reservations?.[0]?.status, "CONFIRMED");
 });
