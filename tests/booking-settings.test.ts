@@ -83,6 +83,11 @@ test("priest creates and updates normalized booking settings with independent du
   const updated = await invoke(handler, event(input({ displayName: "Father Cyril" })));
   assert.equal(updated.statusCode, 200);
   assert.equal(JSON.parse(updated.body ?? "{}").profile.displayName, "Father Cyril");
+  const resetSlug = await invoke(handler, event(input({ slug: "father-cyril-8a6e42bf", displayName: "Father Cyril" })));
+  assert.equal(resetSlug.statusCode, 200);
+  assert.equal(JSON.parse(resetSlug.body ?? "{}").profile.slug, "father-cyril-8a6e42bf");
+  assert.equal(documentClient.items.has("BOOKING_SLUG#fr-cyril-a7k2|PROFILE"), false);
+  assert.equal(documentClient.items.get("BOOKING_SLUG#father-cyril-8a6e42bf|PROFILE")?.ownerUserId, "priest-1");
 });
 
 test("booking settings reject servants, invalid schedules, timezone and calendars not owned by the priest", async () => {
@@ -184,6 +189,7 @@ const bookingHarness = async (failGoogleCreate = false) => {
   const googleConnection = { ...connection(), accessToken: "token", scopes: ["https://www.googleapis.com/auth/calendar"], status: "connected" };
   const documentClient = memoryClient([googleConnection, calendar("book"), calendar("conflict")]);
   let googleEvents = 0;
+  let lastGoogleEventBody: Record<string, unknown> | null = null;
   let generatedIds = 0;
   let generatedTokens = 0;
   const handler = createHandler({
@@ -191,12 +197,12 @@ const bookingHarness = async (failGoogleCreate = false) => {
     managementToken: () => `management-token-with-at-least-32-bytes-value-${++generatedTokens}`,
     fetchImpl: async (url, init) => {
       if (String(url).endsWith("/freeBusy")) return new Response(JSON.stringify({ calendars: { book: { busy: [] }, conflict: { busy: [] } } }), { status: 200 });
-      if (init?.method === "POST") { googleEvents += 1; return failGoogleCreate ? new Response("failed", { status: 500 }) : new Response(JSON.stringify({ id: `google-${googleEvents}` }), { status: 200 }); }
+      if (init?.method === "POST") { googleEvents += 1; lastGoogleEventBody = JSON.parse(String(init.body)); return failGoogleCreate ? new Response("failed", { status: 500 }) : new Response(JSON.stringify({ id: `google-${googleEvents}` }), { status: 200 }); }
       return new Response(null, { status: 204 });
     },
   });
   await invoke(handler, event(input()));
-  return { documentClient, handler, getGoogleEvents: () => googleEvents };
+  return { documentClient, handler, getGoogleEvents: () => googleEvents, getLastGoogleEventBody: () => lastGoogleEventBody };
 };
 
 test("public booking atomically blocks overlapping requests, preserves non-overlapping requests, and keeps PII out of BOOKING_DAY", async () => {
@@ -231,6 +237,10 @@ test("public booking is idempotent and cleans only its reservation when Google c
   assert.equal((await invoke(success.handler, changedReplay)).statusCode, 409);
   const bookingRecord = [...success.documentClient.items.values()].find((item) => item.entityType === "PUBLIC_BOOKING");
   assert.equal(bookingRecord?.visitorEmail, "visitor@example.com");
+  const googleEventBody = success.getLastGoogleEventBody() as { summary?: string; attendees?: unknown; extendedProperties?: { private?: { visitorEmail?: string } } } | null;
+  assert.equal(googleEventBody?.summary, "Appointment: Visitor Name");
+  assert.equal(googleEventBody?.extendedProperties?.private?.visitorEmail, "visitor@example.com");
+  assert.deepEqual(googleEventBody?.attendees, [{ email: "visitor@example.com" }]);
   assert.equal("managementToken" in (bookingRecord ?? {}), false);
   assert.equal(typeof bookingRecord?.managementTokenHash, "string");
 

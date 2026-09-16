@@ -5510,7 +5510,7 @@ test("full sync restores member links from Google event private metadata", async
   assert.match(JSON.stringify(memberLinkWrite?.input), /"GSI3PK":"TENANT#tenant-abc#EVENT_ASSIGNMENTS"/);
 });
 
-test("full Google sync auto-links meeting-prefixed events to all matching members by email", async () => {
+test("full Google sync auto-links meeting and public appointment events by matching email", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
 
@@ -5655,6 +5655,14 @@ test("full Google sync auto-links meeting-prefixed events to all matching member
               start: { dateTime: "2026-06-04T15:00:00.000Z" },
               end: { dateTime: "2026-06-04T16:00:00.000Z" },
             },
+            {
+              id: "event-2",
+              summary: "Appointment: Different Visitor Name",
+              attendees: [{ email: "mary@example.com" }],
+              extendedProperties: { private: { source: "public_booking", visitorEmail: "MARY@EXAMPLE.COM" } },
+              start: { dateTime: "2026-06-05T15:00:00.000Z" },
+              end: { dateTime: "2026-06-05T16:00:00.000Z" },
+            },
           ],
           nextSyncToken: "sync-token-1",
         }),
@@ -5695,16 +5703,19 @@ test("full Google sync auto-links meeting-prefixed events to all matching member
       command.name === "PutCommand" &&
       (command.input.Item as { entityType?: string } | undefined)?.entityType === "VISITATION",
   );
-  assert.equal(visitationPuts.length, 2);
+  assert.equal(visitationPuts.length, 3);
   assert.deepEqual(
     visitationPuts.map((command) => (command.input.Item as { memberId?: string }).memberId).sort(),
-    ["member-1", "member-2"],
+    ["member-1", "member-1", "member-2"],
   );
-  visitationPuts.forEach((command) => {
+  visitationPuts.filter((command) => (command.input.Item as { eventId?: string }).eventId === "event-1").forEach((command) => {
     assert.equal((command.input.Item as { type?: string }).type, "Meeting");
     assert.equal((command.input.Item as { eventId?: string }).eventId, "event-1");
     assert.equal((command.input.Item as { calendarEventId?: string }).calendarEventId, "event-1");
   });
+  const appointmentVisitation = visitationPuts.find((command) => (command.input.Item as { eventId?: string }).eventId === "event-2")?.input.Item as { memberId?: string; type?: string } | undefined;
+  assert.equal(appointmentVisitation?.memberId, "member-1");
+  assert.equal(appointmentVisitation?.type, "Visitation");
   const eventPut = commands.find(
     (command) =>
       command.name === "PutCommand" &&
@@ -5716,6 +5727,10 @@ test("full Google sync auto-links meeting-prefixed events to all matching member
   );
   assert.equal((eventPut?.input.Item as { autoLinkedVisitationType?: string }).autoLinkedVisitationType, "Meeting");
   assert.deepEqual((eventPut?.input.Item as { memberIds?: string[] }).memberIds, []);
+  const appointmentEventPut = commands.find((command) => command.name === "PutCommand" && (command.input.Item as { eventId?: string } | undefined)?.eventId === "event-2" && (command.input.Item as { entityType?: string } | undefined)?.entityType === "schedule_event");
+  assert.deepEqual((appointmentEventPut?.input.Item as { autoLinkedMemberIds?: string[] } | undefined)?.autoLinkedMemberIds, ["member-1"]);
+  assert.deepEqual((appointmentEventPut?.input.Item as { attendees?: string[] } | undefined)?.attendees, ["mary@example.com"]);
+  assert.equal(JSON.stringify(appointmentEventPut?.input.Item).includes("visitorEmail"), false);
   assert.equal(commands.some((command) => command.name === "TransactWriteCommand"), false);
 });
 

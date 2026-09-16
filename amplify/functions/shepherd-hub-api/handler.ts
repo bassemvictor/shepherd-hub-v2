@@ -1010,6 +1010,7 @@ const toOptionalString = (value: unknown) => {
 
 const defaultVisitationType: VisitationType = "Visitation";
 const autoLinkInteractionPrefixes: Array<{ prefix: string; type: VisitationType }> = [
+  { prefix: "appointment:", type: "Visitation" },
   { prefix: "visitation:", type: "Visitation" },
   { prefix: "phone call:", type: "Phone Call" },
   { prefix: "confession:", type: "Confession" },
@@ -4035,7 +4036,7 @@ const listMembers = async (context: RequestContext, deps: HandlerDependencies) =
 
 const resolveAutoLinkedInteractionMembers = async (
   context: RequestContext,
-  event: Pick<EventItem, "calendarId" | "eventId" | "googleEventId" | "summary" | "attendees">,
+  event: Pick<EventItem, "calendarId" | "eventId" | "googleEventId" | "summary" | "attendees"> & { bookingVisitorEmail?: string },
   deps: HandlerDependencies,
 ): Promise<AutoLinkedInteractionResult> => {
   const normalizedTitle = normalizeWhitespace(event.summary).toLowerCase();
@@ -4044,8 +4045,9 @@ const resolveAutoLinkedInteractionMembers = async (
     return { matchedMembers: [] };
   }
 
-  const extractedEmails = extractEmails(event.summary, ...(event.attendees ?? []));
+  const extractedEmails = extractEmails(event.summary, ...(event.attendees ?? []), event.bookingVisitorEmail);
   const extractedEmailSet = new Set(extractedEmails);
+  const bookingEmail = normalizeEmail(event.bookingVisitorEmail);
   const normalizedTitleBody = normalizeName(
     normalizeWhitespace(event.summary)
       .slice(matchedPrefix.prefix.length)
@@ -4053,6 +4055,7 @@ const resolveAutoLinkedInteractionMembers = async (
   );
   const matchedMembers = (await listMembers(context, deps)).filter((member) => {
     const email = normalizeEmail(member.email);
+    if (bookingEmail) return email === bookingEmail;
     if (email && extractedEmailSet.has(email)) {
       return true;
     }
@@ -5426,6 +5429,9 @@ const upsertGoogleEventIntoCache = async (
           googleEventId: googleEvent.id,
           summary: googleEvent.summary ?? "(Untitled event)",
           attendees: normalizeAttendees((googleEvent.attendees ?? []).map((entry) => entry.email ?? "")),
+          ...(googleEvent.extendedProperties?.private?.source === "public_booking" && googleEvent.extendedProperties.private.visitorEmail
+            ? { bookingVisitorEmail: googleEvent.extendedProperties.private.visitorEmail }
+            : {}),
         },
         deps,
       );
@@ -8991,7 +8997,18 @@ const createPublicBooking = async (
     const context: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
     const connection = await getGoogleConnection(context, deps);
     if (!connection || !profile.bookingCalendarId) throw new Error("Booking calendar connection is unavailable.");
-    const googleResponse = await googleFetch(context, connection, GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId), deps, { method: "POST", body: JSON.stringify({ summary: `Appointment - ${visitorName}`, ...(type.publicLocation ? { location: type.publicLocation } : {}), start: { dateTime: start }, end: { dateTime: end }, extendedProperties: { private: { source: "public_booking", shepherdHubBookingId: bookingId } } }) });
+    const googleEventInput = {
+      summary: `Appointment: ${visitorName}`,
+      ...(type.publicLocation ? { location: type.publicLocation } : {}),
+      attendees: [{ email: visitorEmail }],
+      start: { dateTime: start },
+      end: { dateTime: end },
+      extendedProperties: { private: { source: "public_booking", shepherdHubBookingId: bookingId, visitorEmail } },
+    };
+    const googleResponse = await googleFetch(context, connection, GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId), deps, {
+      method: "POST",
+      body: JSON.stringify(googleEventInput),
+    });
     const googleEvent = await googleResponse.json() as { id?: string };
     if (!googleEvent.id) throw new Error("Google Calendar did not return an event id.");
     googleEventId = googleEvent.id;
