@@ -88,6 +88,20 @@ test("priest creates and updates normalized booking settings with independent du
   assert.equal(JSON.parse(resetSlug.body ?? "{}").profile.slug, "father-cyril-8a6e42bf");
   assert.equal(documentClient.items.has("BOOKING_SLUG#fr-cyril-a7k2|PROFILE"), false);
   assert.equal(documentClient.items.get("BOOKING_SLUG#father-cyril-8a6e42bf|PROFILE")?.ownerUserId, "priest-1");
+  const send = documentClient.send;
+  documentClient.send = async (command) => {
+    const itemKey = command.input.Key as { PK: string; SK: string } | undefined;
+    if (command.constructor.name === "GetCommand" && itemKey && !command.input.ConsistentRead &&
+      ["BOOKING_SLUG#father-cyril-8a6e42bf|PROFILE", "USER#priest-1|BOOKING_PROFILE"].includes(key(itemKey))) {
+      return {}; // Simulate a stale eventual read immediately after the slug transaction.
+    }
+    return send(command);
+  };
+  const publicRequest = (slug: string) => ({ body: null, rawPath: `/public/booking-pages/${slug}`, requestContext: { http: { method: "GET" } } });
+  assert.equal((await invoke(handler, publicRequest("fr-cyril-a7k2"))).statusCode, 404);
+  const newPublicPage = await invoke(handler, publicRequest("father-cyril-8a6e42bf"));
+  assert.equal(newPublicPage.statusCode, 200);
+  assert.equal(JSON.parse(newPublicPage.body ?? "{}").slug, "father-cyril-8a6e42bf");
 });
 
 test("booking settings reject servants, invalid schedules, timezone and calendars not owned by the priest", async () => {

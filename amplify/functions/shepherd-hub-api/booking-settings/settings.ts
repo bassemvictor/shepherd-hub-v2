@@ -289,12 +289,12 @@ export const getPublicBookingProfile = async (
   const slug = normalizeSlug(rawSlug);
   if (!tableName || !/^[a-z0-9-]{3,64}$/.test(slug)) return null;
   const lookupResult = await deps.documentClient.send(new GetCommand({
-    TableName: tableName, Key: { PK: slugPk(slug), SK: slugSk() },
+    TableName: tableName, ConsistentRead: true, Key: { PK: slugPk(slug), SK: slugSk() },
   }));
   const lookup = lookupResult.Item as BookingSlugItem | undefined;
   if (!lookup?.profileId || !lookup.ownerUserId || !lookup.tenantId) return null;
   const profileResult = await deps.documentClient.send(new GetCommand({
-    TableName: tableName, Key: { PK: userPk(lookup.ownerUserId), SK: profileSk() },
+    TableName: tableName, ConsistentRead: true, Key: { PK: userPk(lookup.ownerUserId), SK: profileSk() },
   }));
   const profile = profileResult.Item as BookingProfileItem | undefined;
   if (!profile || !profile.enabled || profile.profileId !== lookup.profileId || profile.slug !== slug ||
