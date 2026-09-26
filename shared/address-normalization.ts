@@ -1,6 +1,7 @@
 const unitPrefixPattern = /\b(?:unit|apt|apartment|suite|ste)\s*([a-z0-9-]+)\b/i;
 const leadingUnitPattern = /^([a-z0-9]+)\s*-\s*(\d[\w\s.'#,-]*)$/i;
 const nonLetterOrNumberPattern = /[^\p{L}\p{N}]/gu;
+const canadianPostalCodePattern = /\b([ABCEGHJKLMNPRSTVXY]\d[ABCEGHJKLMNPRSTVWXYZ][ -]?\d[ABCEGHJKLMNPRSTVWXYZ]\d)\b/i;
 
 const directionalMap: Record<string, string> = {
   north: "N",
@@ -49,6 +50,34 @@ const normalizeWhitespace = (value: unknown) => String(value ?? "").replace(/\s+
 const cleanPostalCode = (postalCode: unknown) => {
   const normalized = normalizeWhitespace(postalCode).toUpperCase().replace(/[^A-Z0-9]/g, "");
   return /^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(normalized) ? normalized : normalized || undefined;
+};
+
+/**
+ * Splits the postal code out of an address exported as one combined field.
+ * Unity exports commonly put the Canadian postal code in `Address` rather
+ * than providing the separate `Postal Code` column the importer supports.
+ */
+export const extractCanadianPostalCodeFromAddress = (value: unknown) => {
+  const originalAddress = normalizeWhitespace(value);
+  const match = originalAddress.match(canadianPostalCodePattern);
+  if (!match || match.index === undefined) {
+    return {
+      address: originalAddress || undefined,
+      postalCode: undefined,
+    };
+  }
+
+  const address = normalizeWhitespace(
+    `${originalAddress.slice(0, match.index)} ${originalAddress.slice(match.index + match[0].length)}`,
+  )
+    .replace(/,\s*,+/g, ",")
+    .replace(/,\s*$/, "")
+    .trim();
+
+  return {
+    address: address || undefined,
+    postalCode: cleanPostalCode(match[1]),
+  };
 };
 
 const canonicalizeAddressTokens = (value: string) =>

@@ -24,7 +24,11 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
 import { readSheet } from "read-excel-file/node";
-import { buildAddressBasedHouseholdName, normalizeAddress } from "../../../shared/address-normalization.js";
+import {
+  buildAddressBasedHouseholdName,
+  extractCanadianPostalCodeFromAddress,
+  normalizeAddress,
+} from "../../../shared/address-normalization.js";
 import {
   getVisitationAreaDefinition,
   resolveVisitationAreaId,
@@ -3922,6 +3926,7 @@ const processImportRow = async (
 
   try {
     const existing = state.existingMembersByUnityId.get(unityId) ?? null;
+    const combinedAddress = extractCanadianPostalCodeFromAddress(row.values["Address"]);
     const member = buildMemberItem(
       context,
       {
@@ -3944,8 +3949,8 @@ const processImportRow = async (
         churchCity: toOptionalString(row.values["Church City"]),
         churchRegion: toOptionalString(row.values["Church Region"]),
         diocese: toOptionalString(row.values["Diocese"]),
-        address: toOptionalString(row.values["Address"]),
-        postalCode: toOptionalString(row.values["Postal Code"]),
+        address: combinedAddress.address,
+        postalCode: toOptionalString(row.values["Postal Code"]) ?? combinedAddress.postalCode,
         activated: toOptionalBoolean(row.values["Activated"]),
         approved: toOptionalBoolean(row.values["Approved"]),
         locked: toOptionalBoolean(row.values["Locked"]),
@@ -5138,25 +5143,38 @@ const resetAuditLogs = async (context: RequestContext, deps: HandlerDependencies
 };
 
 const resetEntireTenant = async (context: RequestContext, deps: HandlerDependencies) => {
-  const records = await scanAll(deps.documentClient, {
-    ExpressionAttributeNames: {
-      "#tenantId": "tenantId",
-    },
-    ExpressionAttributeValues: {
-      ":tenantId": context.tenantId,
-    },
-    FilterExpression: "#tenantId = :tenantId",
-    TableName: context.tableName,
-  });
+  const [tenantRecords, geocodeCacheRecords] = await Promise.all([
+    scanAll(deps.documentClient, {
+      ExpressionAttributeNames: {
+        "#tenantId": "tenantId",
+      },
+      ExpressionAttributeValues: {
+        ":tenantId": context.tenantId,
+      },
+      FilterExpression: "#tenantId = :tenantId",
+      TableName: context.tableName,
+    }),
+    scanAll(deps.documentClient, {
+      ExpressionAttributeNames: {
+        "#entityType": "entityType",
+      },
+      ExpressionAttributeValues: {
+        ":entityType": "GEOCODE_CACHE",
+      },
+      FilterExpression: "#entityType = :entityType",
+      TableName: context.tableName,
+    }),
+  ]);
+  const records = [...tenantRecords as BaseItem[], ...geocodeCacheRecords as BaseItem[]];
 
-  const groupedCounts = (records as BaseItem[]).reduce<Record<string, number>>((accumulator, item) => {
+  const groupedCounts = records.reduce<Record<string, number>>((accumulator, item) => {
     accumulator[item.entityType] = (accumulator[item.entityType] ?? 0) + 1;
     return accumulator;
   }, {});
 
   await deleteItemsInBatches(
     context,
-    toDeleteKeys(records as BaseItem[]),
+    toDeleteKeys(records),
     deps,
   );
 
@@ -8953,12 +8971,13 @@ const createPublicBooking = async (
   if (!Number.isInteger(durationMinutes) || !type.allowedDurationsMinutes.includes(durationMinutes)) throw new HttpError(400, "durationMinutes must be an allowed appointment duration.");
   const visitorName = normalizeWhitespace(input.visitorName);
   const visitorEmail = normalizeWhitespace(input.visitorEmail).toLowerCase();
-  const visitorPhone = normalizeWhitespace(input.visitorPhone) || undefined;
+  const visitorPhone = normalizeWhitespace(input.visitorPhone);
   const note = normalizeWhitespace(input.note) || undefined;
   const idempotencyKey = normalizeWhitespace(input.idempotencyKey);
   if (visitorName.length < 2 || visitorName.length > 120) throw new HttpError(400, "visitorName must be 2-120 characters.");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(visitorEmail) || visitorEmail.length > 254) throw new HttpError(400, "visitorEmail must be valid.");
-  if ((visitorPhone?.length ?? 0) > 40 || (note?.length ?? 0) > 1000) throw new HttpError(400, "Visitor phone or note is too long.");
+  if (!visitorPhone || visitorPhone.length > 40) throw new HttpError(400, "visitorPhone must be 1-40 characters.");
+  if ((note?.length ?? 0) > 1000) throw new HttpError(400, "note must be 1-1000 characters.");
   if (idempotencyKey.length < 8 || idempotencyKey.length > 200) throw new HttpError(400, "idempotencyKey must be 8-200 characters.");
   const requestedStart = DateTime.fromISO(normalizeWhitespace(input.start), { setZone: true });
   if (!requestedStart.isValid) throw new HttpError(400, "start must be an ISO timestamp.");

@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeAddress } from "../shared/address-normalization.js";
+import { extractCanadianPostalCodeFromAddress, normalizeAddress } from "../shared/address-normalization.js";
+
+test("extracts a Canadian postal code from a combined Unity address", () => {
+  assert.deepEqual(
+    extractCanadianPostalCodeFromAddress("1033 Ballantyne drive, Orleans, Ontario K4a 4h7"),
+    {
+      address: "1033 Ballantyne drive, Orleans, Ontario",
+      postalCode: "K4A4H7",
+    },
+  );
+});
 
 test("normalizes equivalent street formats to the same address key", () => {
   const first = normalizeAddress({ address: "123 Main Street, Ottawa", postalCode: "K1A 0B1" });

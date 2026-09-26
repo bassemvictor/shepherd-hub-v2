@@ -97,7 +97,7 @@ export type CreatePublicBookingInput = {
   start: string;
   visitorName: string;
   visitorEmail: string;
-  visitorPhone?: string;
+  visitorPhone: string;
   note?: string;
   idempotencyKey: string;
 };

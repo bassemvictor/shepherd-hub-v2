@@ -25,9 +25,9 @@ const resetActions: Array<{
   {
     action: "tenant_all",
     title: "Delete all tenant data",
-    description: "Deletes every tenant-scoped record in the database for the current tenant.",
-    warning: "This is the broadest reset and permanently removes members, visitations, Google sync data, and audit history.",
-    impact: "Estimated impact: all records stored for this tenant.",
+    description: "Deletes every tenant-scoped record for the current tenant and clears geocoding cache records.",
+    warning: "This is the broadest reset and permanently removes members, visitations, Google sync data, audit history, and cached geocoding results.",
+    impact: "Estimated impact: all records stored for this tenant plus all `GEOCODE_CACHE` records.",
   },
   {
     action: "google_cached_events",

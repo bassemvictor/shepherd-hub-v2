@@ -104,14 +104,20 @@ const fixture = () => {
       if (index && values[":gsiSk"]) found = found.filter((item) => item[`${index}SK`] === values[":gsiSk"]);
       return { Items: structuredClone(found), Count: found.length };
     }
-    if (name === "ScanCommand")
+    if (name === "ScanCommand") {
+      const values = input.ExpressionAttributeValues ?? {};
+      const entityTypes = Object.entries(values)
+        .filter(([key]) => key.startsWith(":entityType"))
+        .map(([, value]) => value);
       return {
         Items: structuredClone(
-          [...items.values()].filter(
-            (item) => item.tenantId === input.ExpressionAttributeValues[":tenantId"],
+          [...items.values()].filter((item) =>
+            (values[":tenantId"] === undefined || item.tenantId === values[":tenantId"])
+            && (!entityTypes.length || entityTypes.includes(item.entityType)),
           ),
         ),
       };
+    }
     return {};
   };
   const handler = createHandler({
@@ -442,6 +448,11 @@ test("full tenant reset removes definitions, name locks and assignments only for
   const tag = await f.tag("A");
   await f.member("Alpha", [tag.tagId]);
   await f.tag("Other", "both", "two");
+  f.items.set("GEOCODE_CACHE#ADDRESS#123 MAIN ST|K2P1L4|GEOCODE_CACHE", {
+    PK: "GEOCODE_CACHE#ADDRESS#123 MAIN ST|K2P1L4",
+    SK: "GEOCODE_CACHE",
+    entityType: "GEOCODE_CACHE",
+  });
   const response = await f.call("POST", "/admin/reset/tenant_all", {});
   assert.equal(response.status, 200);
   assert.equal(
@@ -450,6 +461,8 @@ test("full tenant reset removes definitions, name locks and assignments only for
     ),
     false,
   );
+  assert.equal(f.items.has("GEOCODE_CACHE#ADDRESS#123 MAIN ST|K2P1L4|GEOCODE_CACHE"), false);
+  assert.ok(response.body.affectedEntities.some((entry: Item) => entry.entityType === "GEOCODE_CACHE" && entry.deleted === 1));
   assert.equal((await f.call("GET", "/tags", undefined, {}, "two")).body.items.length, 1);
 });
 
