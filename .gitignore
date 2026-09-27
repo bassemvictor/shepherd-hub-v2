@@ -20,3 +20,8 @@ build
 notes.txt
 
 Prompt*
+
+Unity_Import/*.json
+Unity_Import/*.csv
+
+Archive
