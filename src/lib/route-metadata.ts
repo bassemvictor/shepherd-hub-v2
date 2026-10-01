@@ -7,6 +7,8 @@ const routeTitleMap: Record<string, string> = {
   "/calendar/schedule-beta": "Schedule",
   "/members": "Congregation",
   "/households": "Households",
+  "/outreach": "Outreach",
+  "/outreach/manage": "Manage Outreach Groups",
   "/admin/tags": "Tags",
   "/admin/user-groups": "User Groups",
   "/admin/jobs": "Admin Jobs",
@@ -18,6 +20,7 @@ const routeTitleMap: Record<string, string> = {
   "/reports/member-visitation": "Member Report",
   "/reports/household-conflicts": "Household Conflicts",
   "/reports/visitation-geography": "Visitation Geography Report",
+  "/reports/outreach": "Outreach Activity",
   "/auth": "Sign In",
 };
 
@@ -27,6 +30,8 @@ const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
   "/calendar/schedule-beta": [{ label: "Calendar" }, { label: "Schedule" }],
   "/members": [{ label: "Congregation" }],
   "/households": [{ label: "Congregation" }, { label: "Households" }],
+  "/outreach": [{ label: "Outreach" }],
+  "/outreach/manage": [{ label: "Outreach", href: "/outreach" }, { label: "Manage Groups" }],
   "/admin/tags": [{ label: "Admin" }, { label: "Tags" }],
   "/admin/user-groups": [{ label: "Admin" }, { label: "User Groups" }],
   "/admin/jobs": [{ label: "Admin" }, { label: "Admin Jobs" }],
@@ -37,6 +42,7 @@ const breadcrumbMap: Record<string, Array<{ label: string; href?: string }>> = {
   "/reports/member-visitation": [{ label: "Insights" }, { label: "Member Report" }],
   "/reports/household-conflicts": [{ label: "Admin" }, { label: "Household Conflicts" }],
   "/reports/visitation-geography": [{ label: "Insights" }, { label: "Visitation Geography Report" }],
+  "/reports/outreach": [{ label: "Insights" }, { label: "Outreach Activity" }],
   "/auth": [{ label: "Sign In" }],
 };
 

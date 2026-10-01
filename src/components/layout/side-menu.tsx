@@ -2,7 +2,7 @@ import { BarChart3, CalendarDays, ChevronDown, ClipboardList, Settings2, Users }
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
-import { hasAnyGroup, isAdminUser, type AppAuthUser } from "../../lib/auth";
+import { hasAnyGroup, isAdminUser, isOutreachAdminUser, type AppAuthUser } from "../../lib/auth";
 import {
   MOBILE_SCHEDULE_MODE_EVENT,
   MOBILE_SCHEDULE_MODE_STORAGE_KEY,
@@ -31,7 +31,7 @@ type NavigationSection = {
   items: NavigationItem[];
 };
 
-const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
+export const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
   {
     label: "Calendar",
     items: [{ label: "Schedule", href: "/calendar/schedule", icon: CalendarDays }],
@@ -41,6 +41,15 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
     items: [
       { label: "Members", href: "/members", icon: Users },
       { label: "Households", href: "/households", icon: Users },
+    ],
+  },
+  {
+    label: "Outreach",
+    items: [
+      { label: "Outreach", href: "/outreach", icon: Users },
+      ...(user && isOutreachAdminUser(user.groups)
+        ? [{ label: "Manage Groups", href: "/outreach/manage", icon: Settings2 }]
+        : []),
     ],
   },
   {
@@ -54,6 +63,7 @@ const buildNavigation = (user: AppAuthUser | null): NavigationSection[] => [
           { label: "Reports Overview", href: "/reports/dashboard" },
           { label: "Member Report", href: "/reports/member-visitation" },
           { label: "Visitation Geography Report", href: "/reports/visitation-geography" },
+          { label: "Outreach Activity", href: "/reports/outreach" },
         ],
       },
     ],
@@ -221,7 +231,7 @@ export const SideMenu = ({ onNavigate, user }: SideMenuProps) => {
                 <div className="space-y-1" key={item.href}>
                   <div className="relative">
                     <NavLink
-                      end={item.href === "/calendar"}
+                      end={item.href === "/calendar" || item.href === "/outreach"}
                       to={item.href ?? "/"}
                       className={({ isActive }) =>
                         cn(

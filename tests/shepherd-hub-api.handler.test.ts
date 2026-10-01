@@ -6,28 +6,42 @@ import writeExcelFile from "write-excel-file/node";
 import { createHandler } from "../amplify/functions/shepherd-hub-api/handler.js";
 import type { VisitationReportResponse } from "../shared/types.js";
 
-const createEvent = (overrides: Record<string, unknown> = {}) => ({
-  body: null,
-  pathParameters: undefined,
-  rawPath: "/members",
-  requestContext: {
-    authorizer: {
-      jwt: {
-        claims: {
-          "cognito:groups": ["admin"],
-          "custom:tenantId": "tenant-123",
-          email: "owner@example.com",
-          name: "Owner Example",
-          sub: "user-123",
+const createEvent = (overrides: Record<string, unknown> = {}) => {
+  const { requestContext: _requestContext, ...eventOverrides } = overrides;
+  const requestContext = overrides.requestContext as {
+    authorizer?: { jwt?: { claims?: Record<string, unknown> } };
+    http?: Record<string, unknown>;
+  } | undefined;
+  const claims = requestContext?.authorizer?.jwt?.claims ?? {};
+
+  return {
+    body: null,
+    pathParameters: undefined,
+    rawPath: "/members",
+    requestContext: {
+      ...requestContext,
+      authorizer: {
+        ...requestContext?.authorizer,
+        jwt: {
+          ...requestContext?.authorizer?.jwt,
+          claims: {
+            "cognito:groups": ["admin"],
+            "custom:tenantId": "tenant-123",
+            email: "owner@example.com",
+            name: "Owner Example",
+            sub: "user-123",
+            ...claims,
+          },
         },
       },
+      http: {
+        method: "GET",
+        ...requestContext?.http,
+      },
     },
-    http: {
-      method: "GET",
-    },
-  },
-  ...overrides,
-});
+    ...eventOverrides,
+  };
+};
 
 const itemKey = (key: { PK: string; SK: string }) => `${key.PK}||${key.SK}`;
 

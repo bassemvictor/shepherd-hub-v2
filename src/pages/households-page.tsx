@@ -14,7 +14,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Select } from "../components/ui/select";
 import { api, isApiConfigured } from "../lib/api";
-import { isAdminUser, useAuth } from "../lib/auth";
+import { canEditCongregation, isAdminUser, useAuth } from "../lib/auth";
 import { useHouseholdsIndex, refreshHouseholdsIndexCache } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
 
@@ -74,6 +74,7 @@ export const HouseholdsPage = () => {
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>("any");
   const { user } = useAuth();
+  const canEdit = canEditCongregation(user?.groups ?? []);
   const {
     cacheScope,
     items: households,
@@ -221,10 +222,10 @@ export const HouseholdsPage = () => {
               <RefreshCcw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
               <span className="sr-only sm:not-sr-only">Refresh</span>
             </Button>
-            <Button onClick={() => setCreateOpen(true)} size="sm" type="button">
+            {canEdit ? <Button onClick={() => setCreateOpen(true)} size="sm" type="button">
               <Plus className="h-4 w-4" />
               <span className="sr-only sm:not-sr-only">Create Household</span>
-            </Button>
+            </Button> : null}
           </div>
         </div>
         <TagFilter ids={tagIds} mode={tagMatchMode} target="household" onChange={(ids, mode) => { setTagIds(ids); setTagMatchMode(mode); setPage(1); }} />
@@ -307,7 +308,7 @@ export const HouseholdsPage = () => {
         ))}
       </div>
 
-      <HouseholdFormDialog
+      {canEdit ? <HouseholdFormDialog
         busy={saving}
         initialValue={undefined}
         members={members.filter((member) => !member.householdId)}
@@ -315,7 +316,7 @@ export const HouseholdsPage = () => {
         onSubmit={handleCreate}
         open={createOpen}
         title="Create Household"
-      />
+      /> : null}
     </div>
   );
 };

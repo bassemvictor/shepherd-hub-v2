@@ -15,7 +15,7 @@ export const Table = ({ className, framed = true, ...props }: TableProps) => (
       )}
     >
       <table
-        className={cn("w-full min-w-[520px] border-separate border-spacing-0 sm:min-w-[640px]", className)}
+        className={cn("w-full min-w-full border-separate border-spacing-0 sm:min-w-[640px]", className)}
         {...props}
       />
     </div>

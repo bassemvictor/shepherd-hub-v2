@@ -10,5 +10,5 @@ export const auth = defineAuth({
       mutable: true,
     },
   },
-  groups: ["admin", "priest", "servant"],
+  groups: ["admin", "outreach_admin", "priest", "servant"],
 });

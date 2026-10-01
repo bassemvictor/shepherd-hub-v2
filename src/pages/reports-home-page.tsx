@@ -24,6 +24,7 @@ const reportDestinations = [
     href: "/reports/visitation-geography",
     icon: Map,
   },
+  { title: "Outreach Activity", href: "/reports/outreach", icon: UsersRound },
 ] as const;
 
 export const ReportsHomePage = () => (

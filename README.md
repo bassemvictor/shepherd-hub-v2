@@ -40,6 +40,17 @@ Shepherd Hub is a multi-tenant church operations app built with:
 - Includes tenant-scoped reset tools with audit logging
 - Restricts both page access and backend API access to the `admin` group
 
+### 5. Outreach
+
+Outreach membership is assigned to households, not individual members. A household and a servant may each belong to multiple Outreach groups; members inherit their household's effective groups.
+
+- `admin` has all Outreach capabilities in addition to existing global administration.
+- `outreach_admin` manages Outreach groups, household/servant assignments, household/member records, and Outreach reports without receiving unrelated global-admin permissions.
+- `priest` retains elevated congregation and Outreach read behavior.
+- `servant` sees only groups assigned to them and their assigned groups' households/members; they can record household Outreach activities but cannot edit congregation master data or assignments.
+
+Outreach activity records are tenant-scoped and retained as historical records if a household is deleted. Active group/reverse assignment relations are removed when that happens.
+
 ## Authentication flow
 
 Frontend auth lives in [src/lib/auth.tsx](/Users/sallysamuel/workspace/amplify-react-template/src/lib/auth.tsx:1).

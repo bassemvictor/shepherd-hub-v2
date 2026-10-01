@@ -7,11 +7,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { CreateHouseholdInput, HouseholdDetailResponse, HouseholdSummary } from "../../shared/types";
 import { ConfirmDialog } from "../components/common/confirm-dialog";
 import { HouseholdFormDialog } from "../components/members/household-ui";
+import { HouseholdOutreachSection } from "../components/outreach/household-outreach-section";
+import { HouseholdOutreachGroups } from "../components/outreach/household-outreach-groups";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
 import { Button } from "../components/ui/button";
 import { api } from "../lib/api";
-import { isAdminUser, useAuth } from "../lib/auth";
+import { canEditCongregation, isAdminUser, useAuth } from "../lib/auth";
 import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
 
@@ -19,6 +21,7 @@ export const HouseholdDetailPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const canEdit = canEditCongregation(user?.groups ?? []);
   const { householdId = "" } = useParams();
   const { cacheScope } = useHouseholdsIndex();
   const { items: members } = useMembersIndex();
@@ -108,7 +111,7 @@ export const HouseholdDetailPage = () => {
             <ArrowLeft className="h-4 w-4" />
             Back
           </button>
-          <div className="flex items-center gap-2">
+          {canEdit ? <div className="flex items-center gap-2">
             <Button onClick={() => setEditing(true)} size="sm" type="button" variant="outline">Edit Household</Button>
             <Button
               disabled={household.memberCount > 0}
@@ -120,7 +123,7 @@ export const HouseholdDetailPage = () => {
               <Trash2 className="h-4 w-4" />
               Delete
             </Button>
-          </div>
+          </div> : null}
         </div>
 
         <div className="mt-4">
@@ -147,10 +150,10 @@ export const HouseholdDetailPage = () => {
             <h2 className="text-sm font-semibold text-slate-900">Members</h2>
             <div className="text-xs text-muted-foreground">Tap a member to open their details.</div>
           </div>
-          <Button onClick={() => setEditing(true)} size="sm" type="button">
+          {canEdit ? <Button onClick={() => setEditing(true)} size="sm" type="button">
             <Plus className="h-4 w-4" />
             Add Member
-          </Button>
+          </Button> : null}
         </div>
 
         <div className="grid gap-2">
@@ -160,7 +163,7 @@ export const HouseholdDetailPage = () => {
                 <div className="truncate text-sm font-semibold text-slate-900">{member.fullName}</div>
                 <div className="truncate text-xs text-muted-foreground">{member.email || member.phone || "Open member details"}</div>
               </button>
-              <Button
+              {canEdit ? <Button
                 disabled={removingMemberId === member.memberId}
                 onClick={() => void handleRemoveMember(member.memberId)}
                 size="sm"
@@ -168,13 +171,16 @@ export const HouseholdDetailPage = () => {
                 variant="outline"
               >
                 {removingMemberId === member.memberId ? "Removing..." : "Remove"}
-              </Button>
+              </Button> : null}
             </div>
           ))}
         </div>
       </section>
 
-      <HouseholdFormDialog
+      <HouseholdOutreachGroups householdId={householdId} />
+      <HouseholdOutreachSection householdId={householdId} />
+
+      {canEdit ? <HouseholdFormDialog
         busy={saving}
         initialValue={{
           tagIds: household.tagIds,
@@ -189,8 +195,8 @@ export const HouseholdDetailPage = () => {
         onSubmit={handleSave}
         open={editing}
         title="Edit Household"
-      />
-      <ConfirmDialog
+      /> : null}
+      {canEdit ? <ConfirmDialog
         confirmLabel="Delete Household"
         description="Delete this household. This is only allowed when it has no members."
         destructive
@@ -198,7 +204,7 @@ export const HouseholdDetailPage = () => {
         onConfirm={() => void handleDelete()}
         open={deleteOpen}
         title="Delete household?"
-      />
+      /> : null}
     </div>
   );
 };

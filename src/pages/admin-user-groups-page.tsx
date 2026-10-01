@@ -1,7 +1,7 @@
 import { Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { AdminManagedGroup, TenantUserSummary, TenantUsersResponse, UpdateTenantUserGroupsResponse } from "../../shared/types";
+import { adminManagedGroups, type AdminManagedGroup, type TenantUserSummary, type TenantUsersResponse, type UpdateTenantUserGroupsResponse } from "../../shared/types";
 import { PageHeader } from "../components/common/page-header";
 import { ErrorState } from "../components/states/error-state";
 import { LoadingState } from "../components/states/loading-state";
@@ -14,7 +14,7 @@ import { api, isApiConfigured } from "../lib/api";
 import { formatGroupLabel, useAuth } from "../lib/auth";
 import { ToastStack, type ToastItem } from "./calendar-shared";
 
-const managedGroups: AdminManagedGroup[] = ["admin", "priest", "servant"];
+const managedGroups: readonly AdminManagedGroup[] = adminManagedGroups;
 
 export const AdminUserGroupsPage = () => {
   const { user } = useAuth();
@@ -135,7 +135,7 @@ export const AdminUserGroupsPage = () => {
       <ToastStack toasts={toasts} />
       <div className="space-y-4">
         <PageHeader
-          description="Assign tenant users to the admin, priest, and servant Cognito groups. Changes are enforced server-side and scoped to your current tenant."
+          description="Assign tenant users to the admin, outreach admin, priest, and servant Cognito groups. Changes are enforced server-side and scoped to your current tenant."
           title="User Groups"
         />
 

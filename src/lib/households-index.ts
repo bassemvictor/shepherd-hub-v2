@@ -58,7 +58,9 @@ export const refreshHouseholdsIndexCache = async (queryClient: QueryClient, cach
 export const useHouseholdsIndex = (filters: TagFilters = {}) => {
   const { user, status } = useAuth();
   const tenantId = user?.tenantId ?? null;
-  const cacheScope = tenantId ?? (user?.id ? `user:${user.id}` : "anonymous");
+  const cacheScope = user
+    ? `tenant:${tenantId ?? "unknown"}:user:${user.id}:groups:${[...user.groups].sort().join(",")}`
+    : "anonymous";
   const queryClient = useQueryClient();
   const query = useQuery(householdsIndexQueryOptions(cacheScope, status === "authenticated", filters));
 

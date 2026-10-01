@@ -45,6 +45,7 @@ import {
   HouseholdFormDialog,
   HouseholdSearchAutocomplete,
 } from "../components/members/household-ui";
+import { HouseholdOutreachGroups } from "../components/outreach/household-outreach-groups";
 import {
   MemberAvatar,
   MemberChip,
@@ -61,7 +62,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
-import { useAuth } from "../lib/auth";
+import { canEditCongregation, useAuth } from "../lib/auth";
 import { api, getDisplayErrorMessage } from "../lib/api";
 import { refreshHouseholdsIndexCache, useHouseholdsIndex } from "../lib/households-index";
 import { useMembersIndex } from "../lib/members-index";
@@ -234,6 +235,7 @@ const applyManualVisitationType = (
 
 export const MemberDetailPage = () => {
   const { user } = useAuth();
+  const canEdit = canEditCongregation(user?.groups ?? []);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { memberId = "" } = useParams();
@@ -611,7 +613,7 @@ export const MemberDetailPage = () => {
             <ArrowLeft className="h-4 w-4" />
             Back
           </button>
-          <div className="relative">
+          {canEdit ? <div className="relative">
             <Button onClick={() => setMenuOpen((current) => !current)} size="icon" type="button" variant="ghost">
               <Ellipsis className="h-4 w-4" />
             </Button>
@@ -625,7 +627,7 @@ export const MemberDetailPage = () => {
                 </button>
               </div>
             ) : null}
-          </div>
+          </div> : null}
         </div>
 
         <div className="mt-3 flex flex-col items-center text-center">
@@ -694,6 +696,7 @@ export const MemberDetailPage = () => {
                   </div>
                 ) : null}
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                  {canEdit ? <>
                   <Button
                     disabled={householdSaving}
                     onClick={() => void handleResolveHouseholdConflict("KEEP_CURRENT_HOUSEHOLD")}
@@ -722,6 +725,7 @@ export const MemberDetailPage = () => {
                   >
                     Create new household
                   </Button>
+                  </> : null}
                   <Button
                     disabled={householdSaving}
                     onClick={() => navigate("/reports/household-conflicts")}
@@ -774,7 +778,7 @@ export const MemberDetailPage = () => {
                       >
                         View Household
                       </Button>
-                      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                      {canEdit ? <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                         <Button
                           className="h-10 w-full border-primary/40 text-primary hover:bg-primary/5 sm:w-auto"
                           onClick={() => setAttachHouseholdOpen(true)}
@@ -792,13 +796,15 @@ export const MemberDetailPage = () => {
                         >
                           {householdSaving ? "Working..." : "Remove"}
                         </Button>
-                      </div>
+                      </div> : null}
                     </div>
+                    <div className="pt-1"><HouseholdOutreachGroups householdId={household.householdId} memberContext /></div>
                   </div>
                 ) : (
                   <div className="mt-1 space-y-2">
                     <div className="text-sm text-slate-900">Not assigned to any household</div>
-                    <div className="space-y-2">
+                    <div className="text-xs text-muted-foreground">A member must first be attached to a household before Outreach group assignment.</div>
+                    {canEdit ? <div className="space-y-2">
                       <Button className="h-10 w-full text-sm sm:w-auto" onClick={() => setAttachHouseholdOpen(true)} type="button">
                         Attach to Household
                       </Button>
@@ -810,7 +816,7 @@ export const MemberDetailPage = () => {
                       >
                         Create Household
                       </Button>
-                    </div>
+                    </div> : null}
                   </div>
                 )}
               </div>
@@ -1238,7 +1244,7 @@ export const MemberDetailPage = () => {
         ) : null}
       </RightSideDrawer>
 
-      <ConfirmDialog
+      {canEdit ? <ConfirmDialog
         busy={manualDeleting}
         confirmLabel="Delete Visit"
         description="This deletes only the manual visitation record. No Google Calendar event will be changed."
@@ -1247,7 +1253,7 @@ export const MemberDetailPage = () => {
         onConfirm={() => void handleManualDelete()}
         open={manualDeleteOpen}
         title="Delete Manual Activity?"
-      />
+      /> : null}
       <ConfirmDialog
         busy={householdSaving}
         confirmLabel="Close"
@@ -1271,7 +1277,7 @@ export const MemberDetailPage = () => {
           query={householdQuery}
         />
       </ConfirmDialog>
-      <HouseholdFormDialog
+      {canEdit ? <HouseholdFormDialog
         busy={householdSaving}
         initialValue={{
           householdName: member.lastName ? `${member.lastName} Household` : `${member.fullName} Household`,
@@ -1283,7 +1289,7 @@ export const MemberDetailPage = () => {
         onSubmit={handleCreateHousehold}
         open={createHouseholdOpen}
         title="Create Household"
-      />
+      /> : null}
     </div>
   );
 };

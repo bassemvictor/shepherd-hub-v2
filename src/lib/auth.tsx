@@ -14,7 +14,14 @@ import {
 } from "react";
 
 import { isAmplifyAuthConfigured } from "./amplify";
-import type { AppCognitoGroup } from "../../shared/types";
+import {
+  hasAnyCognitoGroup,
+  hasOutreachAdminPrivileges,
+  isCongregationEditor,
+  isGlobalAdmin,
+  isRegularServant,
+} from "../../shared/authorization";
+import { appCognitoGroups, type AppCognitoGroup } from "../../shared/types";
 
 export type AppAuthUser = {
   id: string;
@@ -43,11 +50,7 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-export const ALL_GROUPS: AppCognitoGroup[] = [
-  "admin",
-  "priest",
-  "servant",
-];
+export const ALL_GROUPS: readonly AppCognitoGroup[] = appCognitoGroups;
 
 const isAppGroup = (value: string): value is AppCognitoGroup =>
   ALL_GROUPS.includes(value as AppCognitoGroup);
@@ -90,13 +93,22 @@ const normalizeGroups = (rawGroups: unknown): AppCognitoGroup[] => {
 };
 
 export const hasAnyGroup = (groups: readonly AppCognitoGroup[], allowedGroups: readonly AppCognitoGroup[]) =>
-  allowedGroups.some((group) => groups.includes(group));
+  hasAnyCognitoGroup(groups, allowedGroups);
 
 export const canManageAccess = (groups: readonly AppCognitoGroup[]) =>
   hasAnyGroup(groups, ["admin"]);
 
 export const isAdminUser = (groups: readonly AppCognitoGroup[]) =>
-  hasAnyGroup(groups, ["admin"]);
+  isGlobalAdmin(groups);
+
+export const isOutreachAdminUser = (groups: readonly AppCognitoGroup[]) =>
+  hasOutreachAdminPrivileges(groups);
+
+export const canEditCongregation = (groups: readonly AppCognitoGroup[]) =>
+  isCongregationEditor(groups);
+
+export const isRegularServantUser = (groups: readonly AppCognitoGroup[]) =>
+  isRegularServant(groups);
 
 const buildUserFromSession = async (): Promise<AppAuthUser | null> => {
   const currentUser = await getCurrentUser();
@@ -216,6 +228,7 @@ export const useAuth = () => {
 
 export const groupLabelMap: Record<string, string> = {
   admin: "Admin",
+  outreach_admin: "Outreach Admin",
   priest: "Priest",
   servant: "Servant",
 };

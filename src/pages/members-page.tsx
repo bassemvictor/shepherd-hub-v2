@@ -11,6 +11,7 @@ import { LoadingState } from "../components/states/loading-state";
 import { PageHeader } from "../components/common/page-header";
 import { Button } from "../components/ui/button";
 import { api, isApiConfigured } from "../lib/api";
+import { canEditCongregation, useAuth } from "../lib/auth";
 import { refreshMembersIndexCache, useMembersIndex } from "../lib/members-index";
 
 type SortMode = "az" | "recent";
@@ -18,6 +19,8 @@ const PAGE_SIZE = 25;
 
 export const MembersPage = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canEdit = canEditCongregation(user?.groups ?? []);
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const tagIds = searchParams.get("tagIds")?.split(",").filter(Boolean) ?? [];
@@ -157,16 +160,18 @@ export const MembersPage = () => {
               <RefreshCcw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
               <span className="sr-only sm:not-sr-only">Refresh</span>
             </Button>
-            <Button
-              aria-label="Add Member"
-              className="w-full sm:w-auto"
-              onClick={() => setCreateOpen(true)}
-              size="sm"
-              type="button"
-            >
-              <Plus className="h-4 w-4" />
-              <span className="sr-only sm:not-sr-only">Add Member</span>
-            </Button>
+            {canEdit ? (
+              <Button
+                aria-label="Add Member"
+                className="w-full sm:w-auto"
+                onClick={() => setCreateOpen(true)}
+                size="sm"
+                type="button"
+              >
+                <Plus className="h-4 w-4" />
+                <span className="sr-only sm:not-sr-only">Add Member</span>
+              </Button>
+            ) : null}
           </div>
         </div>
         <TagFilter ids={tagIds} mode={tagMatchMode} target="member" onChange={(ids, mode) => { const params = new URLSearchParams(searchParams); if (ids.length) { params.set("tagIds", ids.join(",")); params.set("tagMatchMode", mode); } else { params.delete("tagIds"); params.delete("tagMatchMode"); } setPage(1); setSearchParams(params); }} />
@@ -233,13 +238,15 @@ export const MembersPage = () => {
         ))}
       </div>
 
-      <MemberFormDialog
-        busy={savingMember}
-        onClose={() => setCreateOpen(false)}
-        onSubmit={handleCreateMember}
-        open={createOpen}
-        title="Add Member"
-      />
+      {canEdit ? (
+        <MemberFormDialog
+          busy={savingMember}
+          onClose={() => setCreateOpen(false)}
+          onSubmit={handleCreateMember}
+          open={createOpen}
+          title="Add Member"
+        />
+      ) : null}
     </div>
   );
 };

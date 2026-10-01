@@ -18,6 +18,9 @@ import { HouseholdsPage } from "../pages/households-page";
 import { MemberDetailPage } from "../pages/member-detail-page";
 import { MembersPage } from "../pages/members-page";
 import { NotFoundPage } from "../pages/not-found-page";
+import { OutreachManagePage } from "../pages/outreach-manage-page";
+import { OutreachPage } from "../pages/outreach-page";
+import { OutreachReportPage } from "../pages/outreach-report-page";
 import { ReportsHomePage } from "../pages/reports-home-page";
 import { LegacyScheduleBetaRedirectPage, SchedulePage } from "../pages/schedule-page";
 import { VisitationGeographyReportPage } from "../pages/visitation-geography-report-page";
@@ -78,6 +81,18 @@ export const router = createBrowserRouter([
         element: <HouseholdDetailPage />,
       },
       {
+        path: "outreach",
+        element: <OutreachPage />,
+      },
+      {
+        path: "outreach/manage",
+        element: (
+          <RequireGroups groups={["admin", "outreach_admin"]}>
+            <OutreachManagePage />
+          </RequireGroups>
+        ),
+      },
+      {
         path: "reports/visitations",
         element: <Navigate replace to="/reports/dashboard" />,
       },
@@ -101,6 +116,7 @@ export const router = createBrowserRouter([
         path: "reports/visitation-geography",
         element: <VisitationGeographyReportPage />,
       },
+      { path: "reports/outreach", element: <OutreachReportPage /> },
       {
         path: "members/:memberId",
         element: <MemberDetailPage />,

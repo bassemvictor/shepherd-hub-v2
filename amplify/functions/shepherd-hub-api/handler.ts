@@ -22,7 +22,10 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyHandlerV2 } from "aws-lambda";
+import type {
+  APIGatewayProxyEventV2WithJWTAuthorizer,
+  APIGatewayProxyHandlerV2,
+} from "aws-lambda";
 import { readSheet } from "read-excel-file/node";
 import {
   buildAddressBasedHouseholdName,
@@ -34,7 +37,17 @@ import {
   resolveVisitationAreaId,
   visitationAreaDefinitions,
 } from "../../../shared/visitation-areas.js";
-import { visitationTypes } from "../../../shared/types.js";
+import {
+  hasOutreachAdminPrivileges,
+  isCongregationEditor,
+  isGlobalAdmin,
+} from "../../../shared/authorization.js";
+import {
+  adminManagedGroups,
+  appCognitoGroups,
+  outreachActivityTypes,
+  visitationTypes,
+} from "../../../shared/types.js";
 import {
   BookingSettingsError,
   getBookingSettings,
@@ -146,6 +159,18 @@ import type {
   PublicBookingManagement,
   ReschedulePublicBookingInput,
   PublicBookingProfile,
+  OutreachGroup,
+  OutreachGroupHouseholdAssignment,
+  OutreachGroupServantAssignment,
+  OutreachGroupSummary,
+  CreateOutreachGroupInput,
+  UpdateOutreachGroupInput,
+  ReplaceOutreachGroupHouseholdsInput,
+  ReplaceOutreachGroupServantsInput,
+  CreateOutreachActivityInput,
+  OutreachActivity,
+  OutreachActivityType,
+  OutreachActivityReportResponse,
 } from "../../../shared/types.js";
 
 type BaseItem = {
@@ -164,6 +189,47 @@ type BaseItem = {
   GSI4SK?: string;
   GSI5PK?: string;
   GSI5SK?: string;
+};
+
+type OutreachGroupItem = BaseItem & {
+  tenantId: string;
+  groupId: string;
+  name: string;
+  description?: string;
+  active: boolean;
+  createdBy: string;
+  updatedBy: string;
+};
+
+type OutreachHouseholdAssignmentItem = BaseItem & {
+  tenantId: string;
+  groupId: string;
+  householdId: string;
+  householdName: string;
+  address?: string;
+};
+
+type OutreachServantAssignmentItem = BaseItem & {
+  tenantId: string;
+  groupId: string;
+  servantId: string;
+  displayName: string;
+  email: string;
+};
+
+type OutreachActivityItem = BaseItem & {
+  tenantId: string;
+  activityId: string;
+  householdId: string;
+  householdName: string;
+  groupId: string;
+  groupName: string;
+  activityDate: string;
+  activityType: OutreachActivityType;
+  comment: string;
+  createdByUserId: string;
+  createdByName: string;
+  memberIds?: string[];
 };
 
 type GoogleConnectionItem = BaseItem & {
@@ -296,13 +362,21 @@ type VisitationItem = BaseItem & {
   calendarOwnerName?: string;
 };
 
-type MemberItem = BaseItem & Omit<Member, keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"> & {
-  tenantId: string;
-};
+type MemberItem = BaseItem &
+  Omit<
+    Member,
+    keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"
+  > & {
+    tenantId: string;
+  };
 
-type HouseholdItem = BaseItem & Omit<Household, keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"> & {
-  tenantId: string;
-};
+type HouseholdItem = BaseItem &
+  Omit<
+    Household,
+    keyof BaseItem | "tenantId" | "createdAt" | "updatedAt" | "entityType"
+  > & {
+    tenantId: string;
+  };
 
 type HouseholdConflictItem = BaseItem & {
   tenantId: string;
@@ -453,6 +527,12 @@ type RequestContext = {
   tenantId: string;
 };
 
+type OutreachAccess = {
+  unrestricted: boolean;
+  canEditCongregation: boolean;
+  assignedGroupIds: string[];
+};
+
 type HandlerDependencies = {
   cognitoClient: Pick<CognitoIdentityProviderClient, "send">;
   documentClient: Pick<DynamoDBDocumentClient, "send">;
@@ -471,18 +551,22 @@ type GeocodingQuery = {
 
 type GeocodingLookupResult =
   | {
-    geocodeStatus: "success";
-    latitude: number;
-    longitude: number;
-    geocodedAt: string;
-    geocodeProvider: string;
-  }
+      geocodeStatus: "success";
+      latitude: number;
+      longitude: number;
+      geocodedAt: string;
+      geocodeProvider: string;
+    }
   | {
-    geocodeStatus: "failed";
-    geocodedAt: string;
-    geocodeProvider: string;
-    failureReason: "no_result" | "timeout" | "provider_error" | "invalid_coordinates";
-  };
+      geocodeStatus: "failed";
+      geocodedAt: string;
+      geocodeProvider: string;
+      failureReason:
+        | "no_result"
+        | "timeout"
+        | "provider_error"
+        | "invalid_coordinates";
+    };
 
 type GeocodingConfig = {
   provider: string;
@@ -496,7 +580,10 @@ type GeocodingConfig = {
 
 type GeocodingService = {
   provider: string;
-  geocode: (query: GeocodingQuery, deps: HandlerDependencies) => Promise<GeocodingLookupResult>;
+  geocode: (
+    query: GeocodingQuery,
+    deps: HandlerDependencies,
+  ) => Promise<GeocodingLookupResult>;
 };
 
 type ImportExecutionState = {
@@ -554,7 +641,10 @@ const defaultDependencies: HandlerDependencies = {
   fetchImpl: fetch,
 };
 
-const pendingGeocodeRequests = new Map<string, Promise<GeocodingLookupResult>>();
+const pendingGeocodeRequests = new Map<
+  string,
+  Promise<GeocodingLookupResult>
+>();
 const nominatimMinIntervalMs = 1_000;
 let nextNominatimRequestAt = 0;
 
@@ -566,7 +656,8 @@ const wait = (milliseconds: number) =>
 const awaitNominatimWindow = async () => {
   const now = Date.now();
   const delay = Math.max(0, nextNominatimRequestAt - now);
-  nextNominatimRequestAt = Math.max(nextNominatimRequestAt, now) + nominatimMinIntervalMs;
+  nextNominatimRequestAt =
+    Math.max(nextNominatimRequestAt, now) + nominatimMinIntervalMs;
   if (delay > 0) {
     logHouseholdGeocodingEvent("nominatim.rate_limit_wait", {
       delayMs: delay,
@@ -574,14 +665,6 @@ const awaitNominatimWindow = async () => {
     await wait(delay);
   }
 };
-
-const allGroups: AppCognitoGroup[] = [
-  "admin",
-  "priest",
-  "servant",
-];
-
-const adminManagedGroups: AdminManagedGroup[] = ["admin", "priest", "servant"];
 
 const GOOGLE_SCOPES = [
   "openid",
@@ -593,7 +676,8 @@ const GOOGLE_REQUIRED_SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const GOOGLE_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+const GOOGLE_CALENDAR_LIST_URL =
+  "https://www.googleapis.com/calendar/v3/users/me/calendarList";
 const GOOGLE_CALENDAR_EVENTS_URL = (calendarId: string) =>
   `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
 const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
@@ -611,13 +695,11 @@ class HttpError extends Error {
 }
 
 const isDynamoCancellationError = (error: unknown) =>
-  error instanceof Error
-  && (
-    error.name === "TransactionCanceledException"
-    || error.name === "ConditionalCheckFailedException"
-    || error.name === "CanceledError"
-    || error.name === "CancelledError"
-  );
+  error instanceof Error &&
+  (error.name === "TransactionCanceledException" ||
+    error.name === "ConditionalCheckFailedException" ||
+    error.name === "CanceledError" ||
+    error.name === "CancelledError");
 
 const json = (statusCode: number, body: unknown) => ({
   statusCode,
@@ -673,23 +755,38 @@ const normalizeGroupEntries = (rawGroups: unknown): string[] => {
       const unwrapped = trimmed.slice(1, -1).trim();
       return unwrapped
         .split(/[,\s]+/)
-        .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
+        .map((group) =>
+          group
+            .trim()
+            .replace(/^['"]|['"]$/g, "")
+            .toLowerCase(),
+        )
         .filter(Boolean);
     }
   }
 
   return trimmed
     .split(trimmed.includes(",") ? "," : /\s+/)
-    .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
+    .map((group) =>
+      group
+        .trim()
+        .replace(/^['"]|['"]$/g, "")
+        .toLowerCase(),
+    )
     .filter(Boolean);
 };
 
-const normalizeGroups = (rawGroups: unknown): AppCognitoGroup[] =>
-  [...new Set(normalizeGroupEntries(rawGroups).filter((group): group is AppCognitoGroup =>
-    allGroups.includes(group as AppCognitoGroup),
-  ))];
+const normalizeGroups = (rawGroups: unknown): AppCognitoGroup[] => [
+  ...new Set(
+    normalizeGroupEntries(rawGroups).filter((group): group is AppCognitoGroup =>
+      appCognitoGroups.includes(group as AppCognitoGroup),
+    ),
+  ),
+];
 
-const getContext = (event: APIGatewayProxyEventV2WithJWTAuthorizer): RequestContext => {
+const getContext = (
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+): RequestContext => {
   const claims = event.requestContext.authorizer?.jwt.claims ?? {};
   const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "";
 
@@ -698,11 +795,14 @@ const getContext = (event: APIGatewayProxyEventV2WithJWTAuthorizer): RequestCont
   }
 
   const actorSub = typeof claims.sub === "string" ? claims.sub : "anonymous";
-  const actorEmail = typeof claims.email === "string" ? claims.email : "unknown@example.com";
+  const actorEmail =
+    typeof claims.email === "string" ? claims.email : "unknown@example.com";
   const actorName = typeof claims.name === "string" ? claims.name : actorEmail;
   const tenantId =
-    (typeof claims["custom:tenantId"] === "string" && claims["custom:tenantId"].trim()) ||
-    (typeof claims["custom:tenant_id"] === "string" && claims["custom:tenant_id"].trim()) ||
+    (typeof claims["custom:tenantId"] === "string" &&
+      claims["custom:tenantId"].trim()) ||
+    (typeof claims["custom:tenant_id"] === "string" &&
+      claims["custom:tenant_id"].trim()) ||
     actorSub;
 
   const rawGroups = claims["cognito:groups"];
@@ -722,59 +822,128 @@ const tenantPk = (tenantId: string) => `TENANT#${tenantId}`;
 const userPk = (userId: string) => `USER#${userId}`;
 const googleConnectionSk = () => "GOOGLE_CONNECTION";
 const calendarSk = (calendarId: string) => `CALENDAR#${calendarId}`;
-const eventSk = (calendarId: string, eventId: string) => `EVENT#${calendarId}#${eventId}`;
-const eventGsiPk = (userId: string, calendarId: string) => `USER#${userId}#CALENDAR#${calendarId}`;
-const eventGsiSk = (start: string, eventId: string) => `EVENT#${start}#${eventId}`;
+const eventSk = (calendarId: string, eventId: string) =>
+  `EVENT#${calendarId}#${eventId}`;
+const eventGsiPk = (userId: string, calendarId: string) =>
+  `USER#${userId}#CALENDAR#${calendarId}`;
+const eventGsiSk = (start: string, eventId: string) =>
+  `EVENT#${start}#${eventId}`;
 const memberSk = (memberId: string) => `MEMBER#${memberId}`;
 const householdSk = (householdId: string) => `HOUSEHOLD#${householdId}`;
-const geocodeCachePk = (addressKey: string) => `GEOCODE_CACHE#ADDRESS#${addressKey}`;
+const geocodeCachePk = (addressKey: string) =>
+  `GEOCODE_CACHE#ADDRESS#${addressKey}`;
 const geocodeCacheSk = () => "GEOCODE_CACHE";
-const householdConflictSk = (memberId: string) => `HOUSEHOLD_CONFLICT#MEMBER#${memberId}`;
+const householdConflictSk = (memberId: string) =>
+  `HOUSEHOLD_CONFLICT#MEMBER#${memberId}`;
 const householdConflictSkPrefix = () => "HOUSEHOLD_CONFLICT#";
 const memberImportJobSk = (jobId: string) => `MEMBER_IMPORT_JOB#${jobId}`;
 const memberImportJobSkPrefix = () => "MEMBER_IMPORT_JOB#";
 const memberImportChunkSk = (jobId: string, chunkIndex: number) =>
   `MEMBER_IMPORT_JOB#${jobId}#CHUNK#${String(chunkIndex).padStart(6, "0")}`;
-const memberImportChunkSkPrefix = (jobId: string) => `MEMBER_IMPORT_JOB#${jobId}#CHUNK#`;
-const householdGeocodeJobSk = (jobId: string) => `HOUSEHOLD_GEOCODE_JOB#${jobId}`;
+const memberImportChunkSkPrefix = (jobId: string) =>
+  `MEMBER_IMPORT_JOB#${jobId}#CHUNK#`;
+const householdGeocodeJobSk = (jobId: string) =>
+  `HOUSEHOLD_GEOCODE_JOB#${jobId}`;
 const householdGeocodeJobSkPrefix = () => "HOUSEHOLD_GEOCODE_JOB#";
 const memberGsiPk = (tenantId: string) => `TENANT#${tenantId}#MEMBERS`;
-const memberGsiSk = (normalizedName: string, memberId: string) => `NAME#${normalizedName}#MEMBER#${memberId}`;
+const memberGsiSk = (normalizedName: string, memberId: string) =>
+  `NAME#${normalizedName}#MEMBER#${memberId}`;
 const memberUnityGsiPk = (tenantId: string) => `TENANT#${tenantId}#UNITY`;
 const memberUnityGsiSk = (unityId: string) => `UNITY#${unityId}`;
 const householdGsiPk = (tenantId: string) => `TENANT#${tenantId}#HOUSEHOLDS`;
-const householdGsiSk = (normalizedName: string, householdId: string) => `NAME#${normalizedName}#HOUSEHOLD#${householdId}`;
-const householdAddressGsiPk = (tenantId: string) => `TENANT#${tenantId}#HOUSEHOLD_ADDRESS`;
+const householdGsiSk = (normalizedName: string, householdId: string) =>
+  `NAME#${normalizedName}#HOUSEHOLD#${householdId}`;
+const householdAddressGsiPk = (tenantId: string) =>
+  `TENANT#${tenantId}#HOUSEHOLD_ADDRESS`;
 const householdAddressGsiSk = (addressKey: string) => `ADDRESS#${addressKey}`;
-const tenantEventPk = (tenantId: string, eventId: string) => `TENANT#${tenantId}#EVENT#${eventId}`;
-const tenantVisitationPk = (tenantId: string, visitationId: string) => `TENANT#${tenantId}#VISITATION#${visitationId}`;
+const tenantEventPk = (tenantId: string, eventId: string) =>
+  `TENANT#${tenantId}#EVENT#${eventId}`;
+const tenantVisitationPk = (tenantId: string, visitationId: string) =>
+  `TENANT#${tenantId}#VISITATION#${visitationId}`;
 const eventMemberSk = (memberId: string) => `MEMBER#${memberId}`;
-const tenantMemberPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
-const memberEventGsiPk = (tenantId: string, memberId: string) => `TENANT#${tenantId}#MEMBER#${memberId}`;
-const memberEventGsiSk = (eventStartDateTime: string, eventId: string) => `EVENT#${eventStartDateTime}#${eventId}`;
-const tenantEventAssignmentGsiPk = (tenantId: string) => `TENANT#${tenantId}#EVENT_ASSIGNMENTS`;
-const tenantEventAssignmentGsiSk = (eventStartDateTime: string, memberId: string, eventId: string) =>
-  `EVENT#${eventStartDateTime}#MEMBER#${memberId}#EVENT#${eventId}`;
-const householdMemberGsiPk = (tenantId: string, householdId: string) => `TENANT#${tenantId}#HOUSEHOLD#${householdId}`;
-const householdMemberGsiSk = (normalizedName: string, memberId: string) => `NAME#${normalizedName}#MEMBER#${memberId}`;
-const memberActivitySk = (createdAt: string, activityId: string) => `ACTIVITY#${createdAt}#${activityId}`;
-const auditLogSk = (createdAt: string, auditId: string) => `AUDIT#${createdAt}#${auditId}`;
+const tenantMemberPk = (tenantId: string, memberId: string) =>
+  `TENANT#${tenantId}#MEMBER#${memberId}`;
+const memberEventGsiPk = (tenantId: string, memberId: string) =>
+  `TENANT#${tenantId}#MEMBER#${memberId}`;
+const memberEventGsiSk = (eventStartDateTime: string, eventId: string) =>
+  `EVENT#${eventStartDateTime}#${eventId}`;
+const tenantEventAssignmentGsiPk = (tenantId: string) =>
+  `TENANT#${tenantId}#EVENT_ASSIGNMENTS`;
+const tenantEventAssignmentGsiSk = (
+  eventStartDateTime: string,
+  memberId: string,
+  eventId: string,
+) => `EVENT#${eventStartDateTime}#MEMBER#${memberId}#EVENT#${eventId}`;
+const householdMemberGsiPk = (tenantId: string, householdId: string) =>
+  `TENANT#${tenantId}#HOUSEHOLD#${householdId}`;
+const householdMemberGsiSk = (normalizedName: string, memberId: string) =>
+  `NAME#${normalizedName}#MEMBER#${memberId}`;
+const outreachGroupSk = (groupId: string) => `OUTREACH_GROUP#${groupId}`;
+const outreachGroupAssignmentsPk = (tenantId: string, groupId: string) =>
+  `TENANT#${tenantId}#OUTREACH_GROUP#${groupId}`;
+const outreachHouseholdAssignmentsPk = (
+  tenantId: string,
+  householdId: string,
+) => `TENANT#${tenantId}#OUTREACH_HOUSEHOLD#${householdId}`;
+const outreachServantAssignmentsPk = (tenantId: string, servantId: string) =>
+  `TENANT#${tenantId}#OUTREACH_SERVANT#${servantId}`;
+const outreachHouseholdAssignmentSk = (householdId: string) =>
+  `HOUSEHOLD#${householdId}`;
+const outreachServantAssignmentSk = (servantId: string) =>
+  `SERVANT#${servantId}`;
+const outreachActivityPk = (tenantId: string, householdId: string) =>
+  `TENANT#${tenantId}#OUTREACH_ACTIVITY_HOUSEHOLD#${householdId}`;
+const outreachActivitySk = (activityDate: string, activityId: string) =>
+  `ACTIVITY#${activityDate}#${activityId}`;
+const outreachActivityDatePk = (tenantId: string) =>
+  `TENANT#${tenantId}#OUTREACH_ACTIVITY_DATE`;
+const outreachActivityDateSk = (
+  activityDate: string,
+  householdId: string,
+  activityId: string,
+) => `DATE#${activityDate}#HOUSEHOLD#${householdId}#ACTIVITY#${activityId}`;
+const memberActivitySk = (createdAt: string, activityId: string) =>
+  `ACTIVITY#${createdAt}#${activityId}`;
+const auditLogSk = (createdAt: string, auditId: string) =>
+  `AUDIT#${createdAt}#${auditId}`;
 const visitationMemberSk = (memberId: string) => `MEMBER#${memberId}`;
-const tenantVisitationGsiSk = (visitDate: string, visitorUserId: string, memberId: string, visitationId: string) =>
+const tenantVisitationGsiSk = (
+  visitDate: string,
+  visitorUserId: string,
+  memberId: string,
+  visitationId: string,
+) =>
   `VISIT#${visitDate}#VISITOR#${visitorUserId}#MEMBER#${memberId}#VISITATION#${visitationId}`;
-const memberVisitationGsiSk = (visitDate: string, visitationId: string) => `VISIT#${visitDate}#VISITATION#${visitationId}`;
-const eventVisitationId = (calendarId: string, eventId: string) => `CALENDAR#${calendarId}#EVENT#${eventId}`;
+const memberVisitationGsiSk = (visitDate: string, visitationId: string) =>
+  `VISIT#${visitDate}#VISITATION#${visitationId}`;
+const eventVisitationId = (calendarId: string, eventId: string) =>
+  `CALENDAR#${calendarId}#EVENT#${eventId}`;
 const oauthStatePk = (state: string) => `OAUTH_STATE#${state}`;
 const oauthStateSk = (state: string) => `OAUTH_STATE#${state}`;
 const scheduleSettingsSk = () => "SCHEDULE_SETTINGS";
 const bookingDayPk = (profileId: string) => `PUBLIC_BOOKING_DAY#${profileId}`;
-const publicBookingIdempotencyPk = (profileId: string) => `PUBLIC_BOOKING_IDEMPOTENCY#${profileId}`;
-const publicBookingRecordPk = (ownerUserId: string) => `USER#${ownerUserId}#PUBLIC_BOOKINGS`;
-const publicBookingRecordSk = (date: string, start: string, bookingId: string) => `DATE#${date}#START#${start}#BOOKING#${bookingId}`;
-const publicBookingManagementPk = (tokenHash: string) => `PUBLIC_BOOKING_MANAGEMENT#${tokenHash}`;
+const publicBookingIdempotencyPk = (profileId: string) =>
+  `PUBLIC_BOOKING_IDEMPOTENCY#${profileId}`;
+const publicBookingRecordPk = (ownerUserId: string) =>
+  `USER#${ownerUserId}#PUBLIC_BOOKINGS`;
+const publicBookingRecordSk = (
+  date: string,
+  start: string,
+  bookingId: string,
+) => `DATE#${date}#START#${start}#BOOKING#${bookingId}`;
+const publicBookingManagementPk = (tokenHash: string) =>
+  `PUBLIC_BOOKING_MANAGEMENT#${tokenHash}`;
 const publicBookingManagementSk = () => "BOOKING";
-const bookingWeekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
-const isAdminGroup = (group: AppCognitoGroup) => group === "admin";
+const bookingWeekdays = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+] as const;
+const isAdminGroup = (group: AppCognitoGroup) => isGlobalAdmin([group]);
 const importJobChunkSize = 75;
 const importJobChunksPerRequest = 2;
 const importJobErrorLimit = 100;
@@ -786,20 +955,30 @@ const defaultCalendarListRefreshThresholdMinutes = 0;
 const defaultGeocodingTimeoutMs = 4_000;
 
 const getElapsedMs = (startedAt: number) => Date.now() - startedAt;
-const addMillisecondsToIso = (value: string, milliseconds: number) => new Date(Date.parse(value) + milliseconds).toISOString();
+const addMillisecondsToIso = (value: string, milliseconds: number) =>
+  new Date(Date.parse(value) + milliseconds).toISOString();
 
 const getGeocodingConfig = (): GeocodingConfig => {
-  const provider = normalizeWhitespace(process.env.GEOCODING_PROVIDER).toLowerCase() || "nominatim";
-  const baseUrl = normalizeWhitespace(process.env.NOMINATIM_BASE_URL).replace(/\/+$/, "")
-    || "https://nominatim.openstreetmap.org";
-  const userAgent = normalizeWhitespace(process.env.NOMINATIM_USER_AGENT)
-    || "ShepherdHub/0.2 (household geocoding)";
+  const provider =
+    normalizeWhitespace(process.env.GEOCODING_PROVIDER).toLowerCase() ||
+    "nominatim";
+  const baseUrl =
+    normalizeWhitespace(process.env.NOMINATIM_BASE_URL).replace(/\/+$/, "") ||
+    "https://nominatim.openstreetmap.org";
+  const userAgent =
+    normalizeWhitespace(process.env.NOMINATIM_USER_AGENT) ||
+    "ShepherdHub/0.2 (household geocoding)";
   const email = toOptionalString(process.env.NOMINATIM_EMAIL);
-  const acceptLanguage = toOptionalString(process.env.NOMINATIM_ACCEPT_LANGUAGE);
+  const acceptLanguage = toOptionalString(
+    process.env.NOMINATIM_ACCEPT_LANGUAGE,
+  );
   const countryCodes = toOptionalString(process.env.NOMINATIM_COUNTRY_CODES);
   const timeoutMs = Math.max(
     500,
-    normalizeNonNegativeNumber(process.env.NOMINATIM_TIMEOUT_MS, defaultGeocodingTimeoutMs),
+    normalizeNonNegativeNumber(
+      process.env.NOMINATIM_TIMEOUT_MS,
+      defaultGeocodingTimeoutMs,
+    ),
   );
 
   return {
@@ -814,7 +993,9 @@ const getGeocodingConfig = (): GeocodingConfig => {
 };
 
 const isMemberActivityLoggingEnabled = () =>
-  normalizeWhitespace(process.env.ENABLE_MEMBER_ACTIVITY_LOGGING).toLowerCase() === "true";
+  normalizeWhitespace(
+    process.env.ENABLE_MEMBER_ACTIVITY_LOGGING,
+  ).toLowerCase() === "true";
 
 const logImportTiming = (
   stage: string,
@@ -826,11 +1007,14 @@ const logImportTiming = (
     return elapsedMs;
   }
 
-  console.log("[member-import]", JSON.stringify({
-    stage,
-    elapsedMs,
-    ...details,
-  }));
+  console.log(
+    "[member-import]",
+    JSON.stringify({
+      stage,
+      elapsedMs,
+      ...details,
+    }),
+  );
 
   return elapsedMs;
 };
@@ -839,20 +1023,26 @@ const logImportEvent = (
   stage: string,
   details: Record<string, unknown> = {},
 ) => {
-  console.log("[member-import]", JSON.stringify({
-    stage,
-    ...details,
-  }));
+  console.log(
+    "[member-import]",
+    JSON.stringify({
+      stage,
+      ...details,
+    }),
+  );
 };
 
 const logHouseholdGeocodingEvent = (
   stage: string,
   details: Record<string, unknown> = {},
 ) => {
-  console.log("[household-geocoding]", JSON.stringify({
-    stage,
-    ...details,
-  }));
+  console.log(
+    "[household-geocoding]",
+    JSON.stringify({
+      stage,
+      ...details,
+    }),
+  );
 };
 
 const defaultInitialSyncRange = (nowIso: string): InitialSyncRange => {
@@ -890,13 +1080,18 @@ const normalizeCalendarListRefreshThreshold = (value: unknown) => {
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
 const shiftDateOnlyValue = (value: string, days: number) => {
-  const [year, month, day] = value.split("-").map((segment) => Number.parseInt(segment, 10));
+  const [year, month, day] = value
+    .split("-")
+    .map((segment) => Number.parseInt(segment, 10));
   const date = new Date(Date.UTC(year, month - 1, day));
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 };
 
-const normalizeInitialSyncRange = (value: Partial<InitialSyncRange> | undefined, nowIso: string): InitialSyncRange => {
+const normalizeInitialSyncRange = (
+  value: Partial<InitialSyncRange> | undefined,
+  nowIso: string,
+): InitialSyncRange => {
   const fallback = defaultInitialSyncRange(nowIso);
   const from = String(value?.from ?? "").trim();
   const to = String(value?.to ?? "").trim();
@@ -917,9 +1112,7 @@ const normalizeAttendees = (value: unknown) => {
     return [];
   }
 
-  return value
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
+  return value.map((entry) => String(entry).trim()).filter(Boolean);
 };
 
 const normalizeMemberIds = (value: unknown) =>
@@ -927,7 +1120,8 @@ const normalizeMemberIds = (value: unknown) =>
     ? [...new Set(value.map((entry) => String(entry).trim()).filter(Boolean))]
     : [];
 
-const serializeGoogleMemberIds = (memberIds: string[]) => normalizeMemberIds(memberIds).join(",");
+const serializeGoogleMemberIds = (memberIds: string[]) =>
+  normalizeMemberIds(memberIds).join(",");
 
 const parseGoogleMemberIds = (value: unknown) => {
   const normalized = String(value ?? "").trim();
@@ -947,7 +1141,10 @@ const parseGoogleMemberIds = (value: unknown) => {
   return normalizeMemberIds(normalized.split(","));
 };
 
-const normalizeWhitespace = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
+const normalizeWhitespace = (value: unknown) =>
+  String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
 
 const stripDiacritics = (value: unknown) =>
   normalizeWhitespace(value)
@@ -983,7 +1180,8 @@ const buildReadableHouseholdIdFromAddressKey = (addressKey: string) => {
   return parts.length ? `addr_${parts.join("__")}` : "";
 };
 
-const normalizeEmail = (value: unknown) => normalizeWhitespace(value).toLowerCase();
+const normalizeEmail = (value: unknown) =>
+  normalizeWhitespace(value).toLowerCase();
 
 const extractEmails = (...values: Array<unknown>) => {
   const found = new Set<string>();
@@ -1002,10 +1200,10 @@ const extractEmails = (...values: Array<unknown>) => {
 };
 
 const includesNormalizedName = (value: string, candidate: string) =>
-  value === candidate
-  || value.startsWith(`${candidate} `)
-  || value.endsWith(` ${candidate}`)
-  || value.includes(` ${candidate} `);
+  value === candidate ||
+  value.startsWith(`${candidate} `) ||
+  value.endsWith(` ${candidate}`) ||
+  value.includes(` ${candidate} `);
 
 const toOptionalString = (value: unknown) => {
   const normalized = normalizeWhitespace(value);
@@ -1013,7 +1211,10 @@ const toOptionalString = (value: unknown) => {
 };
 
 const defaultVisitationType: VisitationType = "Visitation";
-const autoLinkInteractionPrefixes: Array<{ prefix: string; type: VisitationType }> = [
+const autoLinkInteractionPrefixes: Array<{
+  prefix: string;
+  type: VisitationType;
+}> = [
   { prefix: "appointment:", type: "Visitation" },
   { prefix: "visitation:", type: "Visitation" },
   { prefix: "phone call:", type: "Phone Call" },
@@ -1025,7 +1226,7 @@ const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const normalizeVisitationType = (value: unknown): VisitationType => {
   const normalized = toOptionalString(value);
   return visitationTypes.includes(normalized as VisitationType)
-    ? normalized as VisitationType
+    ? (normalized as VisitationType)
     : defaultVisitationType;
 };
 
@@ -1039,16 +1240,22 @@ const toOptionalNumber = (value: unknown) => {
 };
 
 const toOptionalBoolean = (value: unknown) => {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
   if (!normalized) {
     return undefined;
   }
 
-  if (["true", "yes", "1", "active", "approved", "locked"].includes(normalized)) {
+  if (
+    ["true", "yes", "1", "active", "approved", "locked"].includes(normalized)
+  ) {
     return true;
   }
 
-  if (["false", "no", "0", "inactive", "pending", "unlocked"].includes(normalized)) {
+  if (
+    ["false", "no", "0", "inactive", "pending", "unlocked"].includes(normalized)
+  ) {
     return false;
   }
 
@@ -1062,7 +1269,9 @@ const toIsoDate = (value: unknown) => {
   }
 
   const parsed = new Date(normalized);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString().slice(0, 10);
+  return Number.isNaN(parsed.getTime())
+    ? undefined
+    : parsed.toISOString().slice(0, 10);
 };
 
 const toInitials = (fullName: string) =>
@@ -1096,11 +1305,13 @@ const expandEventQueryStart = (timeMin: string) => {
 const isGoogleConfigured = () =>
   Boolean(
     process.env.GOOGLE_CLIENT_ID?.trim() &&
-      process.env.GOOGLE_CLIENT_SECRET?.trim() &&
-      process.env.GOOGLE_REDIRECT_URI?.trim(),
+    process.env.GOOGLE_CLIENT_SECRET?.trim() &&
+    process.env.GOOGLE_REDIRECT_URI?.trim(),
   );
 
-const toConnectionSummary = (item: GoogleConnectionItem): GoogleConnectionSummary => ({
+const toConnectionSummary = (
+  item: GoogleConnectionItem,
+): GoogleConnectionSummary => ({
   googleAccountId: item.googleAccountId,
   email: item.email,
   scopes: item.scopes,
@@ -1110,8 +1321,11 @@ const toConnectionSummary = (item: GoogleConnectionItem): GoogleConnectionSummar
   tokenExpiresAt: item.tokenExpiresAt,
 });
 
-const normalizeScopeList = (scopes: string[] | undefined) =>
-  [...new Set((scopes ?? []).map((scope) => String(scope).trim()).filter(Boolean))];
+const normalizeScopeList = (scopes: string[] | undefined) => [
+  ...new Set(
+    (scopes ?? []).map((scope) => String(scope).trim()).filter(Boolean),
+  ),
+];
 
 const hasRequiredGoogleScopes = (scopes: string[] | undefined) => {
   const normalized = new Set(normalizeScopeList(scopes));
@@ -1123,9 +1337,12 @@ const googleReconnectMessage =
 const googleReauthMessage =
   "Google Calendar connection expired or was revoked. Disconnect and reconnect Google Calendar to continue.";
 
-const toScheduleSettings = (item?: ScheduleSettingsItem | null): ScheduleSettings => ({
+const toScheduleSettings = (
+  item?: ScheduleSettingsItem | null,
+): ScheduleSettings => ({
   calendarListRefreshThresholdMinutes:
-    item?.calendarListRefreshThresholdMinutes ?? defaultCalendarListRefreshThresholdMinutes,
+    item?.calendarListRefreshThresholdMinutes ??
+    defaultCalendarListRefreshThresholdMinutes,
 });
 
 const toScheduleCalendar = (item: CalendarItem): ScheduleCalendar => ({
@@ -1177,7 +1394,9 @@ const toScheduleEvent = (item: EventItem): ScheduleEvent => ({
   assignedMemberNames: item.memberNames,
   memberIds: item.memberIds,
   memberNames: item.memberNames,
-  visitationType: item.memberIds?.length ? normalizeVisitationType(item.visitationType) : undefined,
+  visitationType: item.memberIds?.length
+    ? normalizeVisitationType(item.visitationType)
+    : undefined,
 });
 
 const toMember = (item: MemberItem): Member => ({
@@ -1264,14 +1483,19 @@ const toHouseholdSummary = (
   addressKey: item.addressKey,
   notes: item.notes,
   location: item.location,
-  areaId: resolveVisitationAreaId({ areaId: item.areaId, postalCode: item.postalCode }),
+  areaId: resolveVisitationAreaId({
+    areaId: item.areaId,
+    postalCode: item.postalCode,
+  }),
   memberCount: item.memberCount,
   primaryContactMemberId: item.primaryContactMemberId,
   members,
   normalizedSearchText: item.normalizedSearchText,
 });
 
-const toHouseholdConflict = (item: HouseholdConflictItem): HouseholdConflict => ({
+const toHouseholdConflict = (
+  item: HouseholdConflictItem,
+): HouseholdConflict => ({
   memberId: item.memberId,
   memberFullName: item.memberFullName,
   currentHouseholdId: item.currentHouseholdId,
@@ -1300,7 +1524,10 @@ const toEventMemberSummary = (item: EventMemberItem): EventMemberSummary => ({
   source: item.sourceSnapshot,
 });
 
-const toMemberVisitation = (item: VisitationItem, currentUserId: string): MemberVisitation => ({
+const toMemberVisitation = (
+  item: VisitationItem,
+  currentUserId: string,
+): MemberVisitation => ({
   createdAt: item.createdAt,
   entityType: item.entityType,
   visitationId: item.visitationId,
@@ -1340,7 +1567,10 @@ const toMemberActivity = (item: MemberActivityItem): MemberActivity => ({
   createdAt: item.createdAt,
 });
 
-const toSyncSnapshot = (calendar: CalendarItem, result: SyncResult): CalendarSyncSnapshot => ({
+const toSyncSnapshot = (
+  calendar: CalendarItem,
+  result: SyncResult,
+): CalendarSyncSnapshot => ({
   calendarId: calendar.calendarId,
   calendarName: calendar.summary,
   enabled: calendar.enabled,
@@ -1355,25 +1585,27 @@ const toSyncSnapshot = (calendar: CalendarItem, result: SyncResult): CalendarSyn
   lastSyncStatus: calendar.sync.lastSyncStatus,
 });
 
-const validateCalendarSettings = (input: Partial<UpdateCalendarSettingsInput>) => {
+const validateCalendarSettings = (
+  input: Partial<UpdateCalendarSettingsInput>,
+) => {
   if (typeof input.showInCalendar !== "boolean") {
     return "Show in Calendar flag is required.";
   }
 
-  if (input.syncMode !== "ALWAYS_GOOGLE" && input.syncMode !== "CACHE_UNTIL_STALE") {
+  if (
+    input.syncMode !== "ALWAYS_GOOGLE" &&
+    input.syncMode !== "CACHE_UNTIL_STALE"
+  ) {
     return "Sync mode must be ALWAYS_GOOGLE or CACHE_UNTIL_STALE.";
   }
 
   if (
     !String(input.initialSyncRange?.from ?? "").trim() ||
     Number.isNaN(Date.parse(String(input.initialSyncRange?.from))) ||
-    (
-      String(input.initialSyncRange?.to ?? "").trim() &&
-      (
-        Number.isNaN(Date.parse(String(input.initialSyncRange?.to))) ||
-        String(input.initialSyncRange?.from) > String(input.initialSyncRange?.to)
-      )
-    )
+    (String(input.initialSyncRange?.to ?? "").trim() &&
+      (Number.isNaN(Date.parse(String(input.initialSyncRange?.to))) ||
+        String(input.initialSyncRange?.from) >
+          String(input.initialSyncRange?.to)))
   ) {
     return "Initial sync date range is invalid.";
   }
@@ -1388,7 +1620,9 @@ const validateCalendarSettings = (input: Partial<UpdateCalendarSettingsInput>) =
   return null;
 };
 
-const validateScheduleSettings = (input: Partial<SaveScheduleSettingsInput>) => {
+const validateScheduleSettings = (
+  input: Partial<SaveScheduleSettingsInput>,
+) => {
   if (
     !Number.isFinite(Number(input.calendarListRefreshThresholdMinutes)) ||
     Number(input.calendarListRefreshThresholdMinutes) < 0
@@ -1423,15 +1657,24 @@ const validateEventInput = (input: Partial<CreateScheduleEventInput>) => {
     return "Event title is required.";
   }
 
-  if (!String(input.start ?? "").trim() || Number.isNaN(Date.parse(String(input.start)))) {
+  if (
+    !String(input.start ?? "").trim() ||
+    Number.isNaN(Date.parse(String(input.start)))
+  ) {
     return "A valid start date is required.";
   }
 
-  if (!String(input.end ?? "").trim() || Number.isNaN(Date.parse(String(input.end)))) {
+  if (
+    !String(input.end ?? "").trim() ||
+    Number.isNaN(Date.parse(String(input.end)))
+  ) {
     return "A valid end date is required.";
   }
 
-  if (new Date(String(input.end)).getTime() <= new Date(String(input.start)).getTime()) {
+  if (
+    new Date(String(input.end)).getTime() <=
+    new Date(String(input.start)).getTime()
+  ) {
     return "End time must be after start time.";
   }
 
@@ -1447,15 +1690,25 @@ const validateEventUpdateInput = (input: Partial<UpdateScheduleEventInput>) => {
     return "Event title is required.";
   }
 
-  if (input.start !== undefined && (typeof input.start !== "string" || Number.isNaN(Date.parse(input.start)))) {
+  if (
+    input.start !== undefined &&
+    (typeof input.start !== "string" || Number.isNaN(Date.parse(input.start)))
+  ) {
     return "A valid start date is required.";
   }
 
-  if (input.end !== undefined && (typeof input.end !== "string" || Number.isNaN(Date.parse(input.end)))) {
+  if (
+    input.end !== undefined &&
+    (typeof input.end !== "string" || Number.isNaN(Date.parse(input.end)))
+  ) {
     return "A valid end date is required.";
   }
 
-  if (input.start && input.end && new Date(input.end).getTime() <= new Date(input.start).getTime()) {
+  if (
+    input.start &&
+    input.end &&
+    new Date(input.end).getTime() <= new Date(input.start).getTime()
+  ) {
     return "End time must be after start time.";
   }
 
@@ -1476,16 +1729,18 @@ const householdNotesMaxLength = 2000;
 const householdAreaIdMaxLength = 120;
 const householdGeocodeProviderMaxLength = 120;
 
-const normalizeHouseholdGeocodeStatus = (value: unknown): HouseholdGeocodeStatus | undefined => {
+const normalizeHouseholdGeocodeStatus = (
+  value: unknown,
+): HouseholdGeocodeStatus | undefined => {
   const normalized = normalizeWhitespace(value).toLowerCase();
   if (!normalized) {
     return undefined;
   }
 
-  return normalized === "not_started"
-    || normalized === "pending"
-    || normalized === "success"
-    || normalized === "failed"
+  return normalized === "not_started" ||
+    normalized === "pending" ||
+    normalized === "success" ||
+    normalized === "failed"
     ? normalized
     : undefined;
 };
@@ -1499,21 +1754,35 @@ const toOptionalCoordinate = (value: unknown) => {
   return Number.isFinite(numeric) ? numeric : Number.NaN;
 };
 
-const normalizeHouseholdLocation = (value: unknown): HouseholdLocation | undefined => {
+const normalizeHouseholdLocation = (
+  value: unknown,
+): HouseholdLocation | undefined => {
   if (!value || typeof value !== "object") {
     return undefined;
   }
 
   const location = value as Record<string, unknown>;
-  const hasLatitude = location.latitude !== undefined && location.latitude !== null && location.latitude !== "";
-  const hasLongitude = location.longitude !== undefined && location.longitude !== null && location.longitude !== "";
+  const hasLatitude =
+    location.latitude !== undefined &&
+    location.latitude !== null &&
+    location.latitude !== "";
+  const hasLongitude =
+    location.longitude !== undefined &&
+    location.longitude !== null &&
+    location.longitude !== "";
   const latitude = toOptionalCoordinate(location.latitude);
   const longitude = toOptionalCoordinate(location.longitude);
   const geocodeStatus = normalizeHouseholdGeocodeStatus(location.geocodeStatus);
   const geocodedAt = toOptionalString(location.geocodedAt);
   const geocodeProvider = toOptionalString(location.geocodeProvider);
 
-  if (!hasLatitude && !hasLongitude && !geocodeStatus && !geocodedAt && !geocodeProvider) {
+  if (
+    !hasLatitude &&
+    !hasLongitude &&
+    !geocodeStatus &&
+    !geocodedAt &&
+    !geocodeProvider
+  ) {
     return undefined;
   }
 
@@ -1526,7 +1795,9 @@ const normalizeHouseholdLocation = (value: unknown): HouseholdLocation | undefin
   };
 };
 
-const validateHouseholdInput = (input: Partial<CreateHouseholdInput | UpdateHouseholdInput>) => {
+const validateHouseholdInput = (
+  input: Partial<CreateHouseholdInput | UpdateHouseholdInput>,
+) => {
   const householdName = normalizeWhitespace(input.householdName);
   if (!householdName) {
     return "Household name is required.";
@@ -1564,15 +1835,28 @@ const validateHouseholdInput = (input: Partial<CreateHouseholdInput | UpdateHous
       return "Household location must include both latitude and longitude.";
     }
 
-    if (hasLatitude && (!Number.isFinite(location.latitude!) || location.latitude! < -90 || location.latitude! > 90)) {
+    if (
+      hasLatitude &&
+      (!Number.isFinite(location.latitude!) ||
+        location.latitude! < -90 ||
+        location.latitude! > 90)
+    ) {
       return "Latitude must be between -90 and 90.";
     }
 
-    if (hasLongitude && (!Number.isFinite(location.longitude!) || location.longitude! < -180 || location.longitude! > 180)) {
+    if (
+      hasLongitude &&
+      (!Number.isFinite(location.longitude!) ||
+        location.longitude! < -180 ||
+        location.longitude! > 180)
+    ) {
       return "Longitude must be between -180 and 180.";
     }
 
-    if (input.location?.geocodeStatus !== undefined && !location.geocodeStatus) {
+    if (
+      input.location?.geocodeStatus !== undefined &&
+      !location.geocodeStatus
+    ) {
       return "Geocode status must be not_started, pending, success, or failed.";
     }
 
@@ -1580,17 +1864,26 @@ const validateHouseholdInput = (input: Partial<CreateHouseholdInput | UpdateHous
       return "Geocoded date must be a valid ISO date.";
     }
 
-    if ((location.geocodeProvider?.length ?? 0) > householdGeocodeProviderMaxLength) {
+    if (
+      (location.geocodeProvider?.length ?? 0) >
+      householdGeocodeProviderMaxLength
+    ) {
       return `Geocode provider must be ${householdGeocodeProviderMaxLength} characters or fewer.`;
     }
   }
 
   const memberIds = normalizeMemberIds(input.memberIds);
-  if (Array.isArray(input.memberIds) && memberIds.length !== input.memberIds.filter(Boolean).length) {
+  if (
+    Array.isArray(input.memberIds) &&
+    memberIds.length !== input.memberIds.filter(Boolean).length
+  ) {
     return "Duplicate household member IDs are not allowed.";
   }
 
-  if (input.primaryContactMemberId && !memberIds.includes(String(input.primaryContactMemberId).trim())) {
+  if (
+    input.primaryContactMemberId &&
+    !memberIds.includes(String(input.primaryContactMemberId).trim())
+  ) {
     return "Primary contact must be a household member.";
   }
 
@@ -1604,7 +1897,10 @@ const validateManualVisitationInput = (
     return "Visit title is required.";
   }
 
-  if (!toOptionalString(input.visitDate) || Number.isNaN(Date.parse(String(input.visitDate)))) {
+  if (
+    !toOptionalString(input.visitDate) ||
+    Number.isNaN(Date.parse(String(input.visitDate)))
+  ) {
     return "Visit date and time is required.";
   }
 
@@ -1614,7 +1910,10 @@ const validateManualVisitationInput = (
 
   const visitorUserId = toOptionalString(input.visitorUserId);
   const visitorDisplayName = toOptionalString(input.visitorDisplayName);
-  if ((visitorUserId && !visitorDisplayName) || (!visitorUserId && visitorDisplayName)) {
+  if (
+    (visitorUserId && !visitorDisplayName) ||
+    (!visitorUserId && visitorDisplayName)
+  ) {
     return "Choose a valid visitor.";
   }
 
@@ -1626,46 +1925,71 @@ const normalizePageNumber = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const normalizeNonNegativeNumber = (value: string | undefined, fallback: number) => {
+const normalizeNonNegativeNumber = (
+  value: string | undefined,
+  fallback: number,
+) => {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
 const normalizeReportSortBy = (value: string | undefined): ReportsSortBy =>
-  value === "member_name" || value === "visit_count" || value === "last_visit_date"
+  value === "member_name" ||
+  value === "visit_count" ||
+  value === "last_visit_date"
     ? value
     : "last_visit_date";
 
-const normalizeReportSortDirection = (value: string | undefined): ReportsSortDirection =>
+const normalizeReportSortDirection = (
+  value: string | undefined,
+): ReportsSortDirection =>
   value === "asc" || value === "desc" ? value : "asc";
 
-const normalizeReportVisitCountMode = (value: string | undefined): ReportsVisitCountMode =>
-  value === "all" || value === "gt" || value === "lte" || value === "not_visited"
+const normalizeReportVisitCountMode = (
+  value: string | undefined,
+): ReportsVisitCountMode =>
+  value === "all" ||
+  value === "gt" ||
+  value === "lte" ||
+  value === "not_visited"
     ? value
     : "all";
 
-const normalizeReportVisitorMode = (value: string | undefined): ReportsVisitorFilterMode =>
-  value === "me_only" || value === "exclude_me" || value === "specific" || value === "any"
+const normalizeReportVisitorMode = (
+  value: string | undefined,
+): ReportsVisitorFilterMode =>
+  value === "me_only" ||
+  value === "exclude_me" ||
+  value === "specific" ||
+  value === "any"
     ? value
     : "any";
 
-const normalizeReportMemberScope = (value: string | undefined): ReportsMemberScope =>
+const normalizeReportMemberScope = (
+  value: string | undefined,
+): ReportsMemberScope =>
   value === "active_only" || value === "all_members" ? value : "active_only";
 
-const normalizeReportMemberSource = (value: string | undefined): ReportsMemberSourceFilter =>
+const normalizeReportMemberSource = (
+  value: string | undefined,
+): ReportsMemberSourceFilter =>
   value === "manual" || value === "unity" || value === "all" ? value : "all";
 
-const normalizeReportVisitationType = (value: string | undefined): ReportsVisitationTypeFilter =>
+const normalizeReportVisitationType = (
+  value: string | undefined,
+): ReportsVisitationTypeFilter =>
   value === "all" || visitationTypes.includes(value as VisitationType)
     ? (value as ReportsVisitationTypeFilter)
     : "all";
 
-const normalizeReportStatusFilter = (value: string | undefined): ReportsMemberStatusFilter =>
-  value === "all"
-  || value === "never_visited"
-  || value === "not_visited_recently"
-  || value === "low_visitation"
-  || value === "visited"
+const normalizeReportStatusFilter = (
+  value: string | undefined,
+): ReportsMemberStatusFilter =>
+  value === "all" ||
+  value === "never_visited" ||
+  value === "not_visited_recently" ||
+  value === "low_visitation" ||
+  value === "visited"
     ? value
     : "all";
 
@@ -1692,28 +2016,40 @@ const startOfCurrentWeek = () => {
   return date.toISOString();
 };
 
-const parseVisitationReportFilters = (event: APIGatewayProxyEventV2WithJWTAuthorizer): VisitationReportFilters => {
+const parseVisitationReportFilters = (
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+): VisitationReportFilters => {
   const params = event.queryStringParameters ?? {};
-  const from = typeof params.from === "string" && !Number.isNaN(Date.parse(params.from))
-    ? params.from
-    : undefined;
-  const to = typeof params.to === "string" && !Number.isNaN(Date.parse(params.to))
-    ? params.to
-    : undefined;
+  const from =
+    typeof params.from === "string" && !Number.isNaN(Date.parse(params.from))
+      ? params.from
+      : undefined;
+  const to =
+    typeof params.to === "string" && !Number.isNaN(Date.parse(params.to))
+      ? params.to
+      : undefined;
   const sinceBeginning = params.sinceBeginning === "true";
   const visitCountMode = normalizeReportVisitCountMode(params.visitCountMode);
   const visitorMode = normalizeReportVisitorMode(params.visitorMode);
-  const visitorUserId = visitorMode === "specific" ? toOptionalString(params.visitorUserId) : undefined;
+  const visitorUserId =
+    visitorMode === "specific"
+      ? toOptionalString(params.visitorUserId)
+      : undefined;
 
   return {
     ...parseTagFilters(params),
-    householdTagIds: parseTagIds(params.householdTagIds?.split(",").filter(Boolean)),
+    householdTagIds: parseTagIds(
+      params.householdTagIds?.split(",").filter(Boolean),
+    ),
     householdTagMatchMode: parseTagMode(params.householdTagMatchMode),
     from: sinceBeginning ? undefined : (from ?? startOfCurrentYear()),
     to: sinceBeginning ? undefined : to,
     sinceBeginning,
     visitCountMode,
-    visitCountThreshold: normalizeNonNegativeNumber(params.visitCountThreshold, 1),
+    visitCountThreshold: normalizeNonNegativeNumber(
+      params.visitCountThreshold,
+      1,
+    ),
     visitorMode,
     visitorUserId,
     memberScope: normalizeReportMemberScope(params.memberScope),
@@ -1753,7 +2089,9 @@ const parseImportWorkbook = async (input: MemberImportInput) => {
   const rows = await readSheet(Buffer.from(input.workbookBase64, "base64"));
 
   const headerRowIndex = rows.findIndex((row) => {
-    const values = Array.isArray(row) ? row.map((cell) => normalizeWhitespace(cell)) : [];
+    const values = Array.isArray(row)
+      ? row.map((cell) => normalizeWhitespace(cell))
+      : [];
     return values.includes("Member ID") && values.includes("Member Name");
   });
 
@@ -1763,19 +2101,27 @@ const parseImportWorkbook = async (input: MemberImportInput) => {
 
   const headerRow = rows[headerRowIndex] ?? [];
   const headers = Array.isArray(headerRow)
-    ? headerRow.map((cell, index) => normalizeWhitespace(cell) || `Column ${index + 1}`)
+    ? headerRow.map(
+        (cell, index) => normalizeWhitespace(cell) || `Column ${index + 1}`,
+      )
     : [];
 
   return rows
     .slice(headerRowIndex + 1)
     .map((row, index) => ({ row, rowNumber: headerRowIndex + index + 2 }))
-    .filter(({ row }) => Array.isArray(row) && row.some((cell) => normalizeWhitespace(cell)))
+    .filter(
+      ({ row }) =>
+        Array.isArray(row) && row.some((cell) => normalizeWhitespace(cell)),
+    )
     .map(({ row, rowNumber }) => {
       const values = Array.isArray(row) ? row : [];
-      const record = headers.reduce<Record<string, unknown>>((next, header, index) => {
-        next[header] = normalizeImportWorkbookCellValue(values[index]);
-        return next;
-      }, {});
+      const record = headers.reduce<Record<string, unknown>>(
+        (next, header, index) => {
+          next[header] = normalizeImportWorkbookCellValue(values[index]);
+          return next;
+        },
+        {},
+      );
 
       return {
         rowNumber,
@@ -1835,7 +2181,9 @@ const toMemberImportJob = (item: MemberImportJobItem): MemberImportJob => ({
   result: item.result,
 });
 
-const toHouseholdGeocodeJob = (item: HouseholdGeocodeJobItem): HouseholdGeocodeJob => ({
+const toHouseholdGeocodeJob = (
+  item: HouseholdGeocodeJobItem,
+): HouseholdGeocodeJob => ({
   createdAt: item.createdAt,
   updatedAt: item.updatedAt,
   entityType: item.entityType,
@@ -1927,7 +2275,9 @@ const queryAll = async (
 };
 
 const encodeCursor = (value: Record<string, unknown> | undefined) =>
-  value ? Buffer.from(JSON.stringify(value), "utf8").toString("base64") : undefined;
+  value
+    ? Buffer.from(JSON.stringify(value), "utf8").toString("base64")
+    : undefined;
 
 const decodeCursor = (value: string | undefined) => {
   const normalized = String(value ?? "").trim();
@@ -1936,7 +2286,9 @@ const decodeCursor = (value: string | undefined) => {
   }
 
   try {
-    return JSON.parse(Buffer.from(normalized, "base64").toString("utf8")) as Record<string, unknown>;
+    return JSON.parse(
+      Buffer.from(normalized, "base64").toString("utf8"),
+    ) as Record<string, unknown>;
   } catch {
     throw new HttpError(400, "Invalid pagination cursor.");
   }
@@ -1992,8 +2344,10 @@ const scanAll = async (
   return items;
 };
 
-const hasMatchingTenant = (context: RequestContext, item?: { tenantId?: string } | null) =>
-  item?.tenantId === context.tenantId;
+const hasMatchingTenant = (
+  context: RequestContext,
+  item?: { tenantId?: string } | null,
+) => item?.tenantId === context.tenantId;
 
 const getUserPoolId = () => {
   const userPoolId = process.env.COGNITO_USER_POOL_ID?.trim();
@@ -2004,8 +2358,15 @@ const getUserPoolId = () => {
   return userPoolId;
 };
 
-const listAttributeMap = (attributes: Array<{ Name?: string; Value?: string }> | undefined) =>
-  new Map((attributes ?? []).map((attribute) => [attribute.Name ?? "", attribute.Value ?? ""]));
+const listAttributeMap = (
+  attributes: Array<{ Name?: string; Value?: string }> | undefined,
+) =>
+  new Map(
+    (attributes ?? []).map((attribute) => [
+      attribute.Name ?? "",
+      attribute.Value ?? "",
+    ]),
+  );
 
 const logAuditEvent = async (
   context: RequestContext,
@@ -2071,11 +2432,68 @@ const requireAdminContext = async (
   throw new HttpError(403, "Admin access is required.");
 };
 
-const getActorGroups = async (context: RequestContext, deps: HandlerDependencies): Promise<AppCognitoGroup[]> => {
+const requireCongregationEditorContext = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+  actionType: string,
+) => {
+  if (isCongregationEditor(context.actorGroups)) {
+    return;
+  }
+
+  const actorGroups = await getActorGroups(context, deps);
+  if (isCongregationEditor(actorGroups)) {
+    return;
+  }
+
+  await logAuditEvent(context, actionType, "failed", deps, {
+    metadata: { reason: "forbidden", actorGroups },
+  });
+  throw new HttpError(403, "Congregation editor access is required.");
+};
+
+const requireOutreachManagerContext = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+  actionType: string,
+) => {
+  if (hasOutreachAdminPrivileges(context.actorGroups)) return;
+  const actorGroups = await getActorGroups(context, deps);
+  if (hasOutreachAdminPrivileges(actorGroups)) return;
+  await logAuditEvent(context, actionType, "failed", deps, {
+    metadata: { reason: "forbidden", actorGroups },
+  });
+  throw new HttpError(403, "Outreach administrator access is required.");
+};
+
+const requireOutreachReaderContext = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+  actionType: string,
+) => {
+  const allowed = (groups: AppCognitoGroup[]) =>
+    hasOutreachAdminPrivileges(groups) ||
+    groups.includes("priest") ||
+    groups.includes("servant");
+  if (allowed(context.actorGroups)) return;
+  const actorGroups = await getActorGroups(context, deps);
+  if (allowed(actorGroups)) return;
+  await logAuditEvent(context, actionType, "failed", deps, {
+    metadata: { reason: "forbidden", actorGroups },
+  });
+  throw new HttpError(403, "Outreach access is required.");
+};
+
+const getActorGroups = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+): Promise<AppCognitoGroup[]> => {
   try {
     const filters = [
       `sub = "${escapeCognitoFilterValue(context.actorSub)}"`,
-      context.actorEmail !== "unknown@example.com" ? `email = "${escapeCognitoFilterValue(context.actorEmail)}"` : "",
+      context.actorEmail !== "unknown@example.com"
+        ? `email = "${escapeCognitoFilterValue(context.actorEmail)}"`
+        : "",
     ].filter(Boolean);
 
     for (const filter of filters) {
@@ -2099,7 +2517,9 @@ const getActorGroups = async (context: RequestContext, deps: HandlerDependencies
         }),
       );
 
-      return normalizeGroups((groupsResponse.Groups ?? []).map((group) => group.GroupName ?? ""));
+      return normalizeGroups(
+        (groupsResponse.Groups ?? []).map((group) => group.GroupName ?? ""),
+      );
     }
   } catch {
     return context.actorGroups;
@@ -2108,7 +2528,8 @@ const getActorGroups = async (context: RequestContext, deps: HandlerDependencies
   return context.actorGroups;
 };
 
-const escapeCognitoFilterValue = (value: string) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+const escapeCognitoFilterValue = (value: string) =>
+  value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
 const toTenantUserSummary = (
   username: string,
@@ -2120,7 +2541,10 @@ const toTenantUserSummary = (
   const attributeMap = listAttributeMap(attributes);
   const email = attributeMap.get("email")?.trim() || username;
   const name = attributeMap.get("name")?.trim() || email;
-  const tenantId = attributeMap.get("custom:tenantId")?.trim() || attributeMap.get("custom:tenant_id")?.trim() || "";
+  const tenantId =
+    attributeMap.get("custom:tenantId")?.trim() ||
+    attributeMap.get("custom:tenant_id")?.trim() ||
+    "";
   const sub = attributeMap.get("sub")?.trim() || username;
 
   return {
@@ -2135,7 +2559,11 @@ const toTenantUserSummary = (
   };
 };
 
-const getTenantUser = async (context: RequestContext, username: string, deps: HandlerDependencies) => {
+const getTenantUser = async (
+  context: RequestContext,
+  username: string,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.cognitoClient.send(
     new AdminGetUserCommand({
       UserPoolId: getUserPoolId(),
@@ -2151,7 +2579,9 @@ const getTenantUser = async (context: RequestContext, username: string, deps: Ha
   const user = toTenantUserSummary(
     response.Username ?? username,
     response.UserAttributes,
-    normalizeGroups((groupsResponse.Groups ?? []).map((group) => group.GroupName ?? "")),
+    normalizeGroups(
+      (groupsResponse.Groups ?? []).map((group) => group.GroupName ?? ""),
+    ),
     true,
     response.UserStatus,
   );
@@ -2163,7 +2593,10 @@ const getTenantUser = async (context: RequestContext, username: string, deps: Ha
   return user;
 };
 
-const listTenantUsers = async (context: RequestContext, deps: HandlerDependencies) => {
+const listTenantUsers = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const users: TenantUserSummary[] = [];
   let paginationToken: string | undefined;
 
@@ -2190,7 +2623,9 @@ const listTenantUsers = async (context: RequestContext, deps: HandlerDependencie
         toTenantUserSummary(
           username,
           entry.Attributes,
-          normalizeGroups((groupResponse.Groups ?? []).map((group) => group.GroupName ?? "")),
+          normalizeGroups(
+            (groupResponse.Groups ?? []).map((group) => group.GroupName ?? ""),
+          ),
           Boolean(entry.Enabled),
           entry.UserStatus,
         ),
@@ -2202,7 +2637,11 @@ const listTenantUsers = async (context: RequestContext, deps: HandlerDependencie
 
   return users
     .filter((user) => user.tenantId === context.tenantId)
-    .sort((left, right) => left.name.localeCompare(right.name) || left.email.localeCompare(right.email));
+    .sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) ||
+        left.email.localeCompare(right.email),
+    );
 };
 
 const deleteItemsInBatches = async (
@@ -2241,7 +2680,791 @@ const deleteItemsInBatches = async (
   return deleted;
 };
 
-const getGoogleConnection = async (context: RequestContext, deps: HandlerDependencies) => {
+const toOutreachGroup = ({
+  PK: _pk,
+  SK: _sk,
+  ...item
+}: OutreachGroupItem): OutreachGroup => item;
+const toOutreachGroupSummary = (
+  item: OutreachGroupItem,
+): OutreachGroupSummary => ({
+  groupId: item.groupId,
+  name: item.name,
+  description: item.description,
+  active: item.active,
+  updatedAt: item.updatedAt,
+});
+
+const getOutreachGroup = async (
+  context: RequestContext,
+  groupId: string,
+  deps: HandlerDependencies,
+) => {
+  const response = await deps.documentClient.send(
+    new GetCommand({
+      TableName: context.tableName,
+      Key: { PK: tenantPk(context.tenantId), SK: outreachGroupSk(groupId) },
+      ConsistentRead: true,
+    }),
+  );
+  return response.Item as OutreachGroupItem | undefined;
+};
+
+const listOutreachGroups = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) =>
+  (
+    (await queryAll(deps.documentClient, {
+      TableName: context.tableName,
+      ConsistentRead: true,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+      ExpressionAttributeValues: {
+        ":pk": tenantPk(context.tenantId),
+        ":prefix": "OUTREACH_GROUP#",
+      },
+    })) as OutreachGroupItem[]
+  ).sort(
+    (a, b) =>
+      a.name.localeCompare(b.name) || a.groupId.localeCompare(b.groupId),
+  );
+
+const listOutreachGroupSummaries = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+): Promise<OutreachGroupSummary[]> =>
+  Promise.all(
+    (await listOutreachGroups(context, deps)).map(async (group) => {
+      const [households, servants] = await Promise.all([
+        listOutreachAssignments<OutreachHouseholdAssignmentItem>(
+          outreachGroupAssignmentsPk(context.tenantId, group.groupId),
+          "HOUSEHOLD#",
+          context,
+          deps,
+        ),
+        listOutreachAssignments<OutreachServantAssignmentItem>(
+          outreachGroupAssignmentsPk(context.tenantId, group.groupId),
+          "SERVANT#",
+          context,
+          deps,
+        ),
+      ]);
+      return {
+        ...toOutreachGroupSummary(group),
+        householdCount: households.length,
+        servantCount: servants.length,
+      };
+    }),
+  );
+
+const listOutreachAssignments = async <
+  T extends OutreachHouseholdAssignmentItem | OutreachServantAssignmentItem,
+>(
+  pk: string,
+  prefix: string,
+  context: RequestContext,
+  deps: HandlerDependencies,
+) =>
+  (await queryAll(deps.documentClient, {
+    TableName: context.tableName,
+    ConsistentRead: true,
+    KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+    ExpressionAttributeValues: { ":pk": pk, ":prefix": prefix },
+  })) as T[];
+
+const normalizeOutreachGroupInput = (
+  input: CreateOutreachGroupInput | UpdateOutreachGroupInput,
+  existing?: OutreachGroupItem,
+) => {
+  const name =
+    input.name === undefined ? existing?.name : normalizeWhitespace(input.name);
+  if (!name || name.length > 100)
+    throw new HttpError(
+      400,
+      "Outreach group name must contain 1–100 characters.",
+    );
+  const description =
+    input.description === undefined
+      ? existing?.description
+      : toOptionalString(input.description);
+  if (description && description.length > 500)
+    throw new HttpError(
+      400,
+      "Outreach group description must be at most 500 characters.",
+    );
+  if (input.active !== undefined && typeof input.active !== "boolean")
+    throw new HttpError(400, "Active must be a boolean.");
+  return {
+    name,
+    description,
+    active: input.active ?? existing?.active ?? true,
+  };
+};
+
+const assertOutreachGroup = async (
+  context: RequestContext,
+  groupId: string,
+  deps: HandlerDependencies,
+) => {
+  const group = await getOutreachGroup(context, groupId, deps);
+  if (!group) throw new HttpError(404, "Outreach group not found.");
+  return group;
+};
+
+const createOutreachGroup = async (
+  context: RequestContext,
+  input: CreateOutreachGroupInput,
+  deps: HandlerDependencies,
+) => {
+  const values = normalizeOutreachGroupInput(input);
+  const now = deps.now();
+  const groupId = deps.uuid();
+  const group: OutreachGroupItem = {
+    PK: tenantPk(context.tenantId),
+    SK: outreachGroupSk(groupId),
+    entityType: "OUTREACH_GROUP",
+    tenantId: context.tenantId,
+    groupId,
+    ...values,
+    createdAt: now,
+    updatedAt: now,
+    createdBy: context.actorSub,
+    updatedBy: context.actorSub,
+  };
+  await deps.documentClient.send(
+    new PutCommand({
+      TableName: context.tableName,
+      Item: group,
+      ConditionExpression: "attribute_not_exists(PK)",
+    }),
+  );
+  await logAuditEvent(context, "outreach.group_created", "success", deps, {
+    metadata: { groupId: group.groupId },
+  });
+  return json(201, toOutreachGroup(group));
+};
+
+const updateOutreachGroup = async (
+  context: RequestContext,
+  groupId: string,
+  input: UpdateOutreachGroupInput,
+  deps: HandlerDependencies,
+) => {
+  const existing = await assertOutreachGroup(context, groupId, deps);
+  const values = normalizeOutreachGroupInput(input, existing);
+  const group: OutreachGroupItem = {
+    ...existing,
+    ...values,
+    updatedAt: deps.now(),
+    updatedBy: context.actorSub,
+  };
+  await deps.documentClient.send(
+    new PutCommand({ TableName: context.tableName, Item: group }),
+  );
+  await logAuditEvent(context, "outreach.group_updated", "success", deps, {
+    metadata: { groupId },
+  });
+  return json(200, toOutreachGroup(group));
+};
+
+const replaceOutreachHouseholds = async (
+  context: RequestContext,
+  groupId: string,
+  input: ReplaceOutreachGroupHouseholdsInput,
+  deps: HandlerDependencies,
+) => {
+  await assertOutreachGroup(context, groupId, deps);
+  if (
+    !Array.isArray(input.householdIds) ||
+    input.householdIds.some((id) => typeof id !== "string" || !id.trim())
+  )
+    throw new HttpError(400, "householdIds must be an array of IDs.");
+  const requested = [...new Set(input.householdIds.map((id) => id.trim()))];
+  const households = await Promise.all(
+    requested.map((id) => getHousehold(context, id, deps)),
+  );
+  if (households.some((item) => !item))
+    throw new HttpError(
+      400,
+      "One or more households were not found in this tenant.",
+    );
+  const current =
+    await listOutreachAssignments<OutreachHouseholdAssignmentItem>(
+      outreachGroupAssignmentsPk(context.tenantId, groupId),
+      "HOUSEHOLD#",
+      context,
+      deps,
+    );
+  const currentIds = new Set(current.map((item) => item.householdId));
+  const requestedIds = new Set(requested);
+  const writes: Array<Record<string, unknown>> = [];
+  for (const household of households.filter(Boolean) as HouseholdItem[])
+    if (!currentIds.has(household.householdId)) {
+      const item: OutreachHouseholdAssignmentItem = {
+        PK: outreachGroupAssignmentsPk(context.tenantId, groupId),
+        SK: outreachHouseholdAssignmentSk(household.householdId),
+        entityType: "OUTREACH_HOUSEHOLD_ASSIGNMENT",
+        tenantId: context.tenantId,
+        groupId,
+        householdId: household.householdId,
+        householdName: household.householdName,
+        address: household.address,
+        createdAt: deps.now(),
+        updatedAt: deps.now(),
+      };
+      writes.push(
+        { Put: { TableName: context.tableName, Item: item } },
+        {
+          Put: {
+            TableName: context.tableName,
+            Item: {
+              ...item,
+              PK: outreachHouseholdAssignmentsPk(
+                context.tenantId,
+                household.householdId,
+              ),
+              SK: outreachGroupSk(groupId),
+            },
+          },
+        },
+      );
+    }
+  for (const assignment of current)
+    if (!requestedIds.has(assignment.householdId))
+      writes.push(
+        {
+          Delete: {
+            TableName: context.tableName,
+            Key: { PK: assignment.PK, SK: assignment.SK },
+          },
+        },
+        {
+          Delete: {
+            TableName: context.tableName,
+            Key: {
+              PK: outreachHouseholdAssignmentsPk(
+                context.tenantId,
+                assignment.householdId,
+              ),
+              SK: outreachGroupSk(groupId),
+            },
+          },
+        },
+      );
+  if (writes.length) await transactWriteInChunks(deps.documentClient, writes);
+  if (writes.length)
+    await logAuditEvent(
+      context,
+      "outreach.household_assignments_changed",
+      "success",
+      deps,
+      { metadata: { groupId, householdIds: requested } },
+    );
+  return json(200, {
+    items: await listOutreachGroupHouseholds(context, groupId, deps),
+  });
+};
+
+const listOutreachGroupHouseholds = async (
+  context: RequestContext,
+  groupId: string,
+  deps: HandlerDependencies,
+): Promise<OutreachGroupHouseholdAssignment[]> =>
+  (
+    await listOutreachAssignments<OutreachHouseholdAssignmentItem>(
+      outreachGroupAssignmentsPk(context.tenantId, groupId),
+      "HOUSEHOLD#",
+      context,
+      deps,
+    )
+  ).map(
+    ({ groupId: assignedGroupId, householdId, householdName, address }) => ({
+      groupId: assignedGroupId,
+      householdId,
+      householdName,
+      address,
+    }),
+  );
+
+const listOutreachHouseholdGroups = async (
+  context: RequestContext,
+  householdId: string,
+  deps: HandlerDependencies,
+) => {
+  const assignments =
+    await listOutreachAssignments<OutreachHouseholdAssignmentItem>(
+      outreachHouseholdAssignmentsPk(context.tenantId, householdId),
+      "OUTREACH_GROUP#",
+      context,
+      deps,
+    );
+  const groups = await Promise.all(
+    assignments.map((item) => getOutreachGroup(context, item.groupId, deps)),
+  );
+  return groups.filter(Boolean).map((group) => toOutreachGroupSummary(group!));
+};
+
+const listOutreachGroupServants = async (
+  context: RequestContext,
+  groupId: string,
+  deps: HandlerDependencies,
+): Promise<OutreachGroupServantAssignment[]> =>
+  (
+    await listOutreachAssignments<OutreachServantAssignmentItem>(
+      outreachGroupAssignmentsPk(context.tenantId, groupId),
+      "SERVANT#",
+      context,
+      deps,
+    )
+  ).map(({ groupId: assignedGroupId, servantId, displayName, email }) => ({
+    groupId: assignedGroupId,
+    servantId,
+    displayName,
+    email,
+  }));
+
+const listOutreachServantGroups = async (
+  context: RequestContext,
+  servantId: string,
+  deps: HandlerDependencies,
+) => {
+  const assignments =
+    await listOutreachAssignments<OutreachServantAssignmentItem>(
+      outreachServantAssignmentsPk(context.tenantId, servantId),
+      "OUTREACH_GROUP#",
+      context,
+      deps,
+    );
+  const groups = await Promise.all(
+    assignments.map((item) => getOutreachGroup(context, item.groupId, deps)),
+  );
+  return groups.filter(Boolean).map((group) => toOutreachGroupSummary(group!));
+};
+
+const resolveOutreachAccess = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+): Promise<OutreachAccess> => {
+  if (isCongregationEditor(context.actorGroups)) {
+    return {
+      unrestricted: true,
+      canEditCongregation: true,
+      assignedGroupIds: [],
+    };
+  }
+  const groups = await getActorGroups(context, deps);
+  if (isCongregationEditor(groups))
+    return {
+      unrestricted: true,
+      canEditCongregation: true,
+      assignedGroupIds: [],
+    };
+  if (!groups.includes("servant"))
+    return {
+      unrestricted: false,
+      canEditCongregation: false,
+      assignedGroupIds: [],
+    };
+  const assignments =
+    await listOutreachAssignments<OutreachServantAssignmentItem>(
+      outreachServantAssignmentsPk(context.tenantId, context.actorSub),
+      "OUTREACH_GROUP#",
+      context,
+      deps,
+    );
+  return {
+    unrestricted: false,
+    canEditCongregation: false,
+    assignedGroupIds: [...new Set(assignments.map((item) => item.groupId))],
+  };
+};
+
+const listAccessibleHouseholdIds = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+  access?: OutreachAccess,
+) => {
+  const resolved = access ?? (await resolveOutreachAccess(context, deps));
+  if (resolved.unrestricted) return undefined;
+  const assignments = await Promise.all(
+    resolved.assignedGroupIds.map((groupId) =>
+      listOutreachAssignments<OutreachHouseholdAssignmentItem>(
+        outreachGroupAssignmentsPk(context.tenantId, groupId),
+        "HOUSEHOLD#",
+        context,
+        deps,
+      ),
+    ),
+  );
+  return new Set(
+    assignments.flatMap((items) => items.map((item) => item.householdId)),
+  );
+};
+
+const canAccessHousehold = async (
+  context: RequestContext,
+  householdId: string,
+  deps: HandlerDependencies,
+  access?: OutreachAccess,
+) => {
+  const ids = await listAccessibleHouseholdIds(context, deps, access);
+  return ids === undefined || ids.has(householdId);
+};
+
+const canAccessMember = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+  access?: OutreachAccess,
+) => {
+  const member = await getMember(context, memberId, deps);
+  if (!member) return false;
+  const resolved = access ?? (await resolveOutreachAccess(context, deps));
+  return (
+    resolved.unrestricted ||
+    Boolean(
+      member.householdId &&
+      (await canAccessHousehold(context, member.householdId, deps, resolved)),
+    )
+  );
+};
+
+const toOutreachActivity = ({
+  PK: _pk,
+  SK: _sk,
+  ...item
+}: OutreachActivityItem): OutreachActivity => item;
+
+const listOutreachActivities = async (
+  context: RequestContext,
+  householdId: string,
+  deps: HandlerDependencies,
+): Promise<OutreachActivity[]> =>
+  (
+    (await queryAll(deps.documentClient, {
+      TableName: context.tableName,
+      ConsistentRead: true,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+      ExpressionAttributeValues: {
+        ":pk": outreachActivityPk(context.tenantId, householdId),
+        ":prefix": "ACTIVITY#",
+      },
+      ScanIndexForward: false,
+    })) as OutreachActivityItem[]
+  )
+    .sort(
+      (left, right) =>
+        right.activityDate.localeCompare(left.activityDate) ||
+        right.activityId.localeCompare(left.activityId),
+    )
+    .map(toOutreachActivity);
+
+const createOutreachActivity = async (
+  context: RequestContext,
+  householdId: string,
+  input: CreateOutreachActivityInput,
+  deps: HandlerDependencies,
+) => {
+  const household = await getHousehold(context, householdId, deps);
+  if (!household) throw new HttpError(404, "Household not found.");
+  const access = await resolveOutreachAccess(context, deps);
+  if (!(await canAccessHousehold(context, householdId, deps, access)))
+    throw new HttpError(404, "Household not found.");
+  const groupId = normalizeWhitespace(input.groupId);
+  const group = await assertOutreachGroup(context, groupId, deps);
+  const groupHouseholds =
+    await listOutreachAssignments<OutreachHouseholdAssignmentItem>(
+      outreachGroupAssignmentsPk(context.tenantId, groupId),
+      "HOUSEHOLD#",
+      context,
+      deps,
+    );
+  if (
+    !groupHouseholds.some(
+      (assignment) => assignment.householdId === householdId,
+    )
+  )
+    throw new HttpError(
+      400,
+      "The household is not assigned to this Outreach group.",
+    );
+  if (!access.unrestricted && !access.assignedGroupIds.includes(groupId))
+    throw new HttpError(403, "This Outreach group is not assigned to you.");
+  const activityDate = normalizeWhitespace(input.activityDate);
+  if (!activityDate || Number.isNaN(Date.parse(activityDate)))
+    throw new HttpError(400, "A valid activity date is required.");
+  const activityType = normalizeWhitespace(
+    input.activityType,
+  ) as OutreachActivityType;
+  if (!outreachActivityTypes.includes(activityType))
+    throw new HttpError(400, "A valid Outreach activity type is required.");
+  const comment = normalizeWhitespace(input.comment);
+  if (!comment || comment.length > 4000)
+    throw new HttpError(400, "Comment must contain 1–4000 characters.");
+  const memberIds =
+    input.memberIds === undefined
+      ? undefined
+      : [
+          ...new Set(
+            input.memberIds
+              .filter((id) => typeof id === "string" && id.trim())
+              .map((id) => id.trim()),
+          ),
+        ];
+  if (
+    memberIds?.some(
+      (memberId) =>
+        !household.members.some((member) => member.memberId === memberId),
+    )
+  )
+    throw new HttpError(400, "Members must belong to this household.");
+  const now = deps.now();
+  const activityId = deps.uuid();
+  const activity: OutreachActivityItem = {
+    PK: outreachActivityPk(context.tenantId, householdId),
+    SK: outreachActivitySk(activityDate, activityId),
+    entityType: "OUTREACH_ACTIVITY",
+    tenantId: context.tenantId,
+    activityId,
+    householdId,
+    householdName: household.householdName,
+    groupId,
+    groupName: group.name,
+    activityDate,
+    activityType,
+    comment,
+    createdByUserId: context.actorSub,
+    createdByName: context.actorName,
+    memberIds,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const reportItem: OutreachActivityItem = {
+    ...activity,
+    PK: outreachActivityDatePk(context.tenantId),
+    SK: outreachActivityDateSk(activityDate, householdId, activityId),
+  };
+  await transactWriteInChunks(deps.documentClient, [
+    { Put: { TableName: context.tableName, Item: activity } },
+    { Put: { TableName: context.tableName, Item: reportItem } },
+  ]);
+  await logAuditEvent(context, "outreach.activity_created", "success", deps, {
+    metadata: { activityId, householdId, groupId },
+  });
+  return json(201, toOutreachActivity(activity));
+};
+
+const getOutreachActivityReport = async (
+  context: RequestContext,
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  deps: HandlerDependencies,
+) => {
+  await requireOutreachReaderContext(context, deps, "outreach.report.list");
+  const access = await resolveOutreachAccess(context, deps);
+  const params = event.queryStringParameters ?? {};
+  const limit = Math.min(100, Math.max(1, Number(params.limit ?? 25) || 25));
+  const fromDate = normalizeWhitespace(params.fromDate) || "0000-01-01";
+  const toDate = normalizeWhitespace(params.toDate) || "9999-12-31";
+  if (fromDate > toDate)
+    throw new HttpError(400, "fromDate must be on or before toDate.");
+  const page = await queryPage(deps.documentClient, {
+    TableName: context.tableName,
+    ConsistentRead: true,
+    KeyConditionExpression: "PK = :pk AND SK BETWEEN :from AND :to",
+    ExpressionAttributeValues: {
+      ":pk": outreachActivityDatePk(context.tenantId),
+      ":from": `DATE#${fromDate}`,
+      ":to": `DATE#${toDate}#~`,
+    },
+    ExclusiveStartKey: decodeCursor(params.cursor),
+    Limit: limit,
+    ScanIndexForward: false,
+  });
+  const requestedGroupId = normalizeWhitespace(params.groupId);
+  const requestedServantId = normalizeWhitespace(params.servantId);
+  const requestedType = normalizeWhitespace(params.activityType);
+  const allowedGroups = access.unrestricted
+    ? undefined
+    : new Set(access.assignedGroupIds);
+  const items = ((page.Items ?? []) as OutreachActivityItem[])
+    .filter(
+      (item) =>
+        (!allowedGroups || allowedGroups.has(item.groupId)) &&
+        (!requestedGroupId || item.groupId === requestedGroupId) &&
+        (!requestedServantId || item.createdByUserId === requestedServantId) &&
+        (!requestedType || item.activityType === requestedType),
+    )
+    .sort(
+      (left, right) =>
+        right.activityDate.localeCompare(left.activityDate) ||
+        right.activityId.localeCompare(left.activityId),
+    );
+  return json(200, {
+    items: items.map(toOutreachActivity),
+    nextCursor: encodeCursor(
+      page.LastEvaluatedKey as Record<string, unknown> | undefined,
+    ),
+    summary: {
+      totalActivities: items.length,
+      uniqueHouseholds: new Set(items.map((item) => item.householdId)).size,
+      uniqueServants: new Set(items.map((item) => item.createdByUserId)).size,
+    },
+  } satisfies OutreachActivityReportResponse);
+};
+
+const requireUnrestrictedCongregationData = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
+  if (!(await resolveOutreachAccess(context, deps)).unrestricted)
+    throw new HttpError(
+      403,
+      "This congregation data is not available to servants.",
+    );
+};
+
+const replaceOutreachServants = async (
+  context: RequestContext,
+  groupId: string,
+  input: ReplaceOutreachGroupServantsInput,
+  deps: HandlerDependencies,
+) => {
+  await assertOutreachGroup(context, groupId, deps);
+  if (
+    !Array.isArray(input.servantIds) ||
+    input.servantIds.some((id) => typeof id !== "string" || !id.trim())
+  )
+    throw new HttpError(400, "servantIds must be an array of IDs.");
+  const requested = [...new Set(input.servantIds.map((id) => id.trim()))];
+  const users = await listTenantUsers(context, deps);
+  const servants = new Map(
+    users
+      .filter((user) => user.groups.includes("servant"))
+      .map((user) => [user.sub, user]),
+  );
+  if (requested.some((id) => !servants.has(id)))
+    throw new HttpError(
+      400,
+      "One or more servants were not found in this tenant.",
+    );
+  const current = await listOutreachAssignments<OutreachServantAssignmentItem>(
+    outreachGroupAssignmentsPk(context.tenantId, groupId),
+    "SERVANT#",
+    context,
+    deps,
+  );
+  const currentIds = new Set(current.map((item) => item.servantId));
+  const requestedIds = new Set(requested);
+  const writes: Array<Record<string, unknown>> = [];
+  for (const servantId of requested)
+    if (!currentIds.has(servantId)) {
+      const servant = servants.get(servantId)!;
+      const item: OutreachServantAssignmentItem = {
+        PK: outreachGroupAssignmentsPk(context.tenantId, groupId),
+        SK: outreachServantAssignmentSk(servantId),
+        entityType: "OUTREACH_SERVANT_ASSIGNMENT",
+        tenantId: context.tenantId,
+        groupId,
+        servantId,
+        displayName: servant.name,
+        email: servant.email,
+        createdAt: deps.now(),
+        updatedAt: deps.now(),
+      };
+      writes.push(
+        { Put: { TableName: context.tableName, Item: item } },
+        {
+          Put: {
+            TableName: context.tableName,
+            Item: {
+              ...item,
+              PK: outreachServantAssignmentsPk(context.tenantId, servantId),
+              SK: outreachGroupSk(groupId),
+            },
+          },
+        },
+      );
+    }
+  for (const assignment of current)
+    if (!requestedIds.has(assignment.servantId))
+      writes.push(
+        {
+          Delete: {
+            TableName: context.tableName,
+            Key: { PK: assignment.PK, SK: assignment.SK },
+          },
+        },
+        {
+          Delete: {
+            TableName: context.tableName,
+            Key: {
+              PK: outreachServantAssignmentsPk(
+                context.tenantId,
+                assignment.servantId,
+              ),
+              SK: outreachGroupSk(groupId),
+            },
+          },
+        },
+      );
+  if (writes.length) await transactWriteInChunks(deps.documentClient, writes);
+  if (writes.length)
+    await logAuditEvent(
+      context,
+      "outreach.servant_assignments_changed",
+      "success",
+      deps,
+      { metadata: { groupId, servantIds: requested } },
+    );
+  return json(200, {
+    items: await listOutreachGroupServants(context, groupId, deps),
+  });
+};
+
+const deleteOutreachGroup = async (
+  context: RequestContext,
+  groupId: string,
+  deps: HandlerDependencies,
+) => {
+  const group = await assertOutreachGroup(context, groupId, deps);
+  const [householdAssignments, servantAssignments] = await Promise.all([
+    listOutreachAssignments<OutreachHouseholdAssignmentItem>(
+      outreachGroupAssignmentsPk(context.tenantId, groupId),
+      "HOUSEHOLD#",
+      context,
+      deps,
+    ),
+    listOutreachAssignments<OutreachServantAssignmentItem>(
+      outreachGroupAssignmentsPk(context.tenantId, groupId),
+      "SERVANT#",
+      context,
+      deps,
+    ),
+  ]);
+  const assignments = [...householdAssignments, ...servantAssignments];
+  const keys = [
+    { PK: group.PK, SK: group.SK },
+    ...assignments.map((item) => ({ PK: item.PK, SK: item.SK })),
+  ];
+  for (const item of assignments)
+    keys.push({
+      PK:
+        "householdId" in item
+          ? outreachHouseholdAssignmentsPk(context.tenantId, item.householdId)
+          : outreachServantAssignmentsPk(context.tenantId, item.servantId),
+      SK: outreachGroupSk(groupId),
+    });
+  await deleteItemsInBatches(context, keys, deps);
+  await logAuditEvent(context, "outreach.group_deleted", "success", deps, {
+    metadata: { groupId },
+  });
+  return json(200, { deleted: true, groupId });
+};
+
+const getGoogleConnection = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -2256,7 +3479,10 @@ const getGoogleConnection = async (context: RequestContext, deps: HandlerDepende
   return hasMatchingTenant(context, item) ? item : null;
 };
 
-const getScheduleSettings = async (context: RequestContext, deps: HandlerDependencies) => {
+const getScheduleSettings = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -2337,7 +3563,10 @@ const isGoogleRefreshTokenInvalid = (details: string) =>
   details.includes("expired or revoked") ||
   details.includes("Token has been expired or revoked");
 
-const deleteGoogleConnection = async (context: RequestContext, deps: HandlerDependencies) => {
+const deleteGoogleConnection = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   await deps.documentClient.send(
     new DeleteCommand({
       Key: {
@@ -2349,7 +3578,10 @@ const deleteGoogleConnection = async (context: RequestContext, deps: HandlerDepe
   );
 };
 
-const listCalendars = async (context: RequestContext, deps: HandlerDependencies) => {
+const listCalendars = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#pk": "PK",
@@ -2363,16 +3595,22 @@ const listCalendars = async (context: RequestContext, deps: HandlerDependencies)
     TableName: context.tableName,
   });
 
-  return (items as CalendarItem[]).filter((item) => hasMatchingTenant(context, item)).sort((left, right) => {
-    if (left.primary !== right.primary) {
-      return left.primary ? -1 : 1;
-    }
+  return (items as CalendarItem[])
+    .filter((item) => hasMatchingTenant(context, item))
+    .sort((left, right) => {
+      if (left.primary !== right.primary) {
+        return left.primary ? -1 : 1;
+      }
 
-    return left.summary.localeCompare(right.summary);
-  });
+      return left.summary.localeCompare(right.summary);
+    });
 };
 
-const getCalendar = async (context: RequestContext, calendarId: string, deps: HandlerDependencies) => {
+const getCalendar = async (
+  context: RequestContext,
+  calendarId: string,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -2407,7 +3645,11 @@ const getEvent = async (
   return hasMatchingTenant(context, item) ? item : null;
 };
 
-const putCalendar = async (context: RequestContext, calendar: CalendarItem, deps: HandlerDependencies) => {
+const putCalendar = async (
+  context: RequestContext,
+  calendar: CalendarItem,
+  deps: HandlerDependencies,
+) => {
   await deps.documentClient.send(
     new PutCommand({
       Item: calendar,
@@ -2450,7 +3692,11 @@ const listEventsForCalendar = async (
   );
 };
 
-const listAllEventsForCalendar = async (context: RequestContext, calendarId: string, deps: HandlerDependencies) => {
+const listAllEventsForCalendar = async (
+  context: RequestContext,
+  calendarId: string,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#pk": "PK",
@@ -2464,10 +3710,16 @@ const listAllEventsForCalendar = async (context: RequestContext, calendarId: str
     TableName: context.tableName,
   });
 
-  return (items as EventItem[]).filter((item) => hasMatchingTenant(context, item));
+  return (items as EventItem[]).filter((item) =>
+    hasMatchingTenant(context, item),
+  );
 };
 
-const putEvent = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
+const putEvent = async (
+  context: RequestContext,
+  event: EventItem,
+  deps: HandlerDependencies,
+) => {
   await deps.documentClient.send(
     new PutCommand({
       Item: event,
@@ -2489,16 +3741,29 @@ const persistEventWithMemberAssignments = async (
     ...event,
     updatedAt: deps.now(),
   };
-  const assignedMembers = await syncEventMembers(context, normalizedEvent, normalizedEvent.memberIds ?? [], deps);
-  const visitationMembers = [...new Map(
-    [...assignedMembers, ...(options.autoLinkedMembers ?? [])].map((member) => [member.memberId, member]),
-  ).values()];
+  const assignedMembers = await syncEventMembers(
+    context,
+    normalizedEvent,
+    normalizedEvent.memberIds ?? [],
+    deps,
+  );
+  const visitationMembers = [
+    ...new Map(
+      [...assignedMembers, ...(options.autoLinkedMembers ?? [])].map(
+        (member) => [member.memberId, member],
+      ),
+    ).values(),
+  ];
   const persistedEvent: EventItem = {
     ...normalizedEvent,
     memberIds: assignedMembers.map((member) => member.memberId),
     memberNames: assignedMembers.map((member) => member.fullName),
-    dismissedAutoLinkedMemberIds: normalizeMemberIds(normalizedEvent.dismissedAutoLinkedMemberIds),
-    visitationType: assignedMembers.length ? normalizeVisitationType(normalizedEvent.visitationType) : undefined,
+    dismissedAutoLinkedMemberIds: normalizeMemberIds(
+      normalizedEvent.dismissedAutoLinkedMemberIds,
+    ),
+    visitationType: assignedMembers.length
+      ? normalizeVisitationType(normalizedEvent.visitationType)
+      : undefined,
   };
   await putEvent(context, persistedEvent, deps);
   await syncVisitationRecords(
@@ -2529,7 +3794,11 @@ const deleteEvent = async (
   );
 };
 
-const getMember = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+const getMember = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -2543,7 +3812,11 @@ const getMember = async (context: RequestContext, memberId: string, deps: Handle
   return (response.Item as MemberItem | undefined) ?? null;
 };
 
-const getMemberByUnityId = async (context: RequestContext, unityId: string, deps: HandlerDependencies) => {
+const getMemberByUnityId = async (
+  context: RequestContext,
+  unityId: string,
+  deps: HandlerDependencies,
+) => {
   const response = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI2PK",
@@ -2561,7 +3834,11 @@ const getMemberByUnityId = async (context: RequestContext, unityId: string, deps
   return (response[0] as MemberItem | undefined) ?? null;
 };
 
-const listMembersByUnityId = async (context: RequestContext, unityId: string, deps: HandlerDependencies) => {
+const listMembersByUnityId = async (
+  context: RequestContext,
+  unityId: string,
+  deps: HandlerDependencies,
+) => {
   const response = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI2PK",
@@ -2579,7 +3856,11 @@ const listMembersByUnityId = async (context: RequestContext, unityId: string, de
   return response as MemberItem[];
 };
 
-const getHousehold = async (context: RequestContext, householdId: string, deps: HandlerDependencies) => {
+const getHousehold = async (
+  context: RequestContext,
+  householdId: string,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -2638,7 +3919,10 @@ const listMembersByHouseholdId = async (
   return items as MemberItem[];
 };
 
-const listHouseholds = async (context: RequestContext, deps: HandlerDependencies) => {
+const listHouseholds = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI4PK",
@@ -2657,7 +3941,10 @@ const listHouseholds = async (context: RequestContext, deps: HandlerDependencies
   return items as HouseholdItem[];
 };
 
-const upsertHouseholdInImportState = (state: ImportExecutionState | undefined, household: HouseholdItem) => {
+const upsertHouseholdInImportState = (
+  state: ImportExecutionState | undefined,
+  household: HouseholdItem,
+) => {
   if (!state) {
     return;
   }
@@ -2678,17 +3965,28 @@ const buildHouseholdSearchText = (
   address: string | undefined,
   notes: string | undefined,
   members: Array<Pick<MemberItem, "fullName">>,
-) => normalizeSearchText(
-  householdName,
-  address,
-  notes,
-  ...members.map((member) => member.fullName),
-);
+) =>
+  normalizeSearchText(
+    householdName,
+    address,
+    notes,
+    ...members.map((member) => member.fullName),
+  );
 
 const buildHouseholdItem = (
   context: RequestContext,
   householdId: string,
-  input: Pick<CreateHouseholdInput, "householdName" | "address" | "postalCode" | "notes" | "primaryContactMemberId" | "location" | "areaId" | "tagIds">,
+  input: Pick<
+    CreateHouseholdInput,
+    | "householdName"
+    | "address"
+    | "postalCode"
+    | "notes"
+    | "primaryContactMemberId"
+    | "location"
+    | "areaId"
+    | "tagIds"
+  >,
   members: MemberItem[],
   deps: HandlerDependencies,
   existing?: HouseholdItem | null,
@@ -2696,7 +3994,8 @@ const buildHouseholdItem = (
   const householdName = normalizeWhitespace(input.householdName);
   const address = toOptionalString(input.address);
   const postalCode = toOptionalString(input.postalCode) ?? existing?.postalCode;
-  const location = normalizeHouseholdLocation(input.location) ?? existing?.location;
+  const location =
+    normalizeHouseholdLocation(input.location) ?? existing?.location;
   const areaId = resolveVisitationAreaId({
     areaId: toOptionalString(input.areaId) ?? existing?.areaId,
     postalCode,
@@ -2713,6 +4012,7 @@ const buildHouseholdItem = (
       initials: member.initials,
       phone: member.phone,
       email: member.email,
+      dateOfBirth: member.dateOfBirth,
       householdId,
       householdName,
     }))
@@ -2724,8 +4024,12 @@ const buildHouseholdItem = (
     SK: householdSk(householdId),
     GSI4PK: householdGsiPk(context.tenantId),
     GSI4SK: householdGsiSk(normalizeName(householdName), householdId),
-    GSI2PK: normalized.addressKey ? householdAddressGsiPk(context.tenantId) : undefined,
-    GSI2SK: normalized.addressKey ? householdAddressGsiSk(normalized.addressKey) : undefined,
+    GSI2PK: normalized.addressKey
+      ? householdAddressGsiPk(context.tenantId)
+      : undefined,
+    GSI2SK: normalized.addressKey
+      ? householdAddressGsiSk(normalized.addressKey)
+      : undefined,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
     tagIds: input.tagIds ?? existing?.tagIds,
@@ -2745,11 +4049,19 @@ const buildHouseholdItem = (
     memberCount: memberSummaries.length,
     primaryContactMemberId: toOptionalString(input.primaryContactMemberId),
     members: memberSummaries,
-    normalizedSearchText: buildHouseholdSearchText(householdName, address, notes, members),
+    normalizedSearchText: buildHouseholdSearchText(
+      householdName,
+      address,
+      notes,
+      members,
+    ),
   };
 };
 
-const getGeocodeCache = async (addressKey: string, deps: HandlerDependencies) => {
+const getGeocodeCache = async (
+  addressKey: string,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -2765,12 +4077,14 @@ const getGeocodeCache = async (addressKey: string, deps: HandlerDependencies) =>
   logHouseholdGeocodingEvent("cache.lookup", {
     addressKey,
     hit: Boolean(cacheItem),
-    ...(cacheItem ? {
-      cachedAt: cacheItem.geocodedAt ?? cacheItem.updatedAt,
-      cachedFailureReason: cacheItem.failureReason,
-      cachedStatus: cacheItem.geocodeStatus,
-      geocodeProvider: cacheItem.geocodeProvider,
-    } : {}),
+    ...(cacheItem
+      ? {
+          cachedAt: cacheItem.geocodedAt ?? cacheItem.updatedAt,
+          cachedFailureReason: cacheItem.failureReason,
+          cachedStatus: cacheItem.geocodeStatus,
+          geocodeProvider: cacheItem.geocodeProvider,
+        }
+      : {}),
   });
   return cacheItem;
 };
@@ -2782,12 +4096,14 @@ const putGeocodeCache = async (
 ) => {
   logHouseholdGeocodingEvent("cache.store", {
     addressKey: query.addressKey,
-    failureReason: result.geocodeStatus === "failed" ? result.failureReason : undefined,
+    failureReason:
+      result.geocodeStatus === "failed" ? result.failureReason : undefined,
     geocodedAt: result.geocodedAt,
     geocodeProvider: result.geocodeProvider,
     geocodeStatus: result.geocodeStatus,
     latitude: result.geocodeStatus === "success" ? result.latitude : undefined,
-    longitude: result.geocodeStatus === "success" ? result.longitude : undefined,
+    longitude:
+      result.geocodeStatus === "success" ? result.longitude : undefined,
   });
   await deps.documentClient.send(
     new PutCommand({
@@ -2801,61 +4117,66 @@ const putGeocodeCache = async (
         normalizedAddress: query.normalizedAddress,
         normalizedPostalCode: query.normalizedPostalCode,
         geocodeStatus: result.geocodeStatus,
-        latitude: result.geocodeStatus === "success" ? result.latitude : undefined,
-        longitude: result.geocodeStatus === "success" ? result.longitude : undefined,
+        latitude:
+          result.geocodeStatus === "success" ? result.latitude : undefined,
+        longitude:
+          result.geocodeStatus === "success" ? result.longitude : undefined,
         geocodedAt: result.geocodedAt,
         geocodeProvider: result.geocodeProvider,
-        failureReason: result.geocodeStatus === "failed" ? result.failureReason : undefined,
+        failureReason:
+          result.geocodeStatus === "failed" ? result.failureReason : undefined,
       } satisfies GeocodeCacheItem,
       TableName: process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "",
     }),
   );
 };
 
-const toHouseholdLocationFromLookup = (result: GeocodingLookupResult): HouseholdLocation => (
+const toHouseholdLocationFromLookup = (
+  result: GeocodingLookupResult,
+): HouseholdLocation =>
   result.geocodeStatus === "success"
     ? {
-      latitude: result.latitude,
-      longitude: result.longitude,
-      geocodeStatus: result.geocodeStatus,
-      geocodedAt: result.geocodedAt,
-      geocodeProvider: result.geocodeProvider,
-    }
+        latitude: result.latitude,
+        longitude: result.longitude,
+        geocodeStatus: result.geocodeStatus,
+        geocodedAt: result.geocodedAt,
+        geocodeProvider: result.geocodeProvider,
+      }
     : {
-      geocodeStatus: result.geocodeStatus,
-      geocodedAt: result.geocodedAt,
-      geocodeProvider: result.geocodeProvider,
-    }
-);
+        geocodeStatus: result.geocodeStatus,
+        geocodedAt: result.geocodedAt,
+        geocodeProvider: result.geocodeProvider,
+      };
 
-const toGeocodingLookupFromCache = (item: GeocodeCacheItem): GeocodingLookupResult => (
-  item.geocodeStatus === "success"
-  && Number.isFinite(item.latitude)
-  && Number.isFinite(item.longitude)
-  && item.latitude! >= -90
-  && item.latitude! <= 90
-  && item.longitude! >= -180
-  && item.longitude! <= 180
+const toGeocodingLookupFromCache = (
+  item: GeocodeCacheItem,
+): GeocodingLookupResult =>
+  item.geocodeStatus === "success" &&
+  Number.isFinite(item.latitude) &&
+  Number.isFinite(item.longitude) &&
+  item.latitude! >= -90 &&
+  item.latitude! <= 90 &&
+  item.longitude! >= -180 &&
+  item.longitude! <= 180
     ? {
-      geocodeStatus: "success",
-      latitude: item.latitude!,
-      longitude: item.longitude!,
-      geocodedAt: item.geocodedAt ?? item.updatedAt,
-      geocodeProvider: item.geocodeProvider,
-    }
+        geocodeStatus: "success",
+        latitude: item.latitude!,
+        longitude: item.longitude!,
+        geocodedAt: item.geocodedAt ?? item.updatedAt,
+        geocodeProvider: item.geocodeProvider,
+      }
     : {
-      geocodeStatus: "failed",
-      geocodedAt: item.geocodedAt ?? item.updatedAt,
-      geocodeProvider: item.geocodeProvider,
-      failureReason:
-        item.failureReason === "no_result"
-        || item.failureReason === "timeout"
-        || item.failureReason === "provider_error"
-        || item.failureReason === "invalid_coordinates"
-          ? item.failureReason
-          : "provider_error",
-    }
-);
+        geocodeStatus: "failed",
+        geocodedAt: item.geocodedAt ?? item.updatedAt,
+        geocodeProvider: item.geocodeProvider,
+        failureReason:
+          item.failureReason === "no_result" ||
+          item.failureReason === "timeout" ||
+          item.failureReason === "provider_error" ||
+          item.failureReason === "invalid_coordinates"
+            ? item.failureReason
+            : "provider_error",
+      };
 
 const nominatimGeocodingService: GeocodingService = {
   provider: "nominatim",
@@ -2865,7 +4186,12 @@ const nominatimGeocodingService: GeocodingService = {
     const params = new URLSearchParams();
     params.set("format", "jsonv2");
     params.set("limit", "1");
-    params.set("q", [query.normalizedAddress, query.normalizedPostalCode].filter(Boolean).join(", "));
+    params.set(
+      "q",
+      [query.normalizedAddress, query.normalizedPostalCode]
+        .filter(Boolean)
+        .join(", "),
+    );
     if (config.countryCodes) {
       params.set("countrycodes", config.countryCodes);
     }
@@ -2931,7 +4257,10 @@ const nominatimGeocodingService: GeocodingService = {
         };
       }
 
-      const payload = await response.json() as Array<{ lat?: string; lon?: string }>;
+      const payload = (await response.json()) as Array<{
+        lat?: string;
+        lon?: string;
+      }>;
       const first = payload[0];
       logHouseholdGeocodingEvent("provider.response.parsed", {
         addressKey: query.addressKey,
@@ -2956,12 +4285,12 @@ const nominatimGeocodingService: GeocodingService = {
       const latitude = Number(first.lat);
       const longitude = Number(first.lon);
       if (
-        !Number.isFinite(latitude)
-        || !Number.isFinite(longitude)
-        || latitude < -90
-        || latitude > 90
-        || longitude < -180
-        || longitude > 180
+        !Number.isFinite(latitude) ||
+        !Number.isFinite(longitude) ||
+        latitude < -90 ||
+        latitude > 90 ||
+        longitude < -180 ||
+        longitude > 180
       ) {
         logHouseholdGeocodingEvent("provider.result.invalid_coordinates", {
           addressKey: query.addressKey,
@@ -2992,12 +4321,14 @@ const nominatimGeocodingService: GeocodingService = {
         geocodeProvider: nominatimGeocodingService.provider,
       };
     } catch (error) {
-      const failureReason = error instanceof Error && error.name === "TimeoutError"
-        ? "timeout"
-        : "provider_error";
+      const failureReason =
+        error instanceof Error && error.name === "TimeoutError"
+          ? "timeout"
+          : "provider_error";
       logHouseholdGeocodingEvent("provider.request.failed", {
         addressKey: query.addressKey,
-        errorMessage: error instanceof Error ? error.message : "Unknown geocoding error",
+        errorMessage:
+          error instanceof Error ? error.message : "Unknown geocoding error",
         errorName: error instanceof Error ? error.name : typeof error,
         failureReason,
         geocodeProvider: nominatimGeocodingService.provider,
@@ -3015,10 +4346,15 @@ const nominatimGeocodingService: GeocodingService = {
 
 const getGeocodingService = (): GeocodingService => {
   const config = getGeocodingConfig();
-  return config.provider === "nominatim" ? nominatimGeocodingService : nominatimGeocodingService;
+  return config.provider === "nominatim"
+    ? nominatimGeocodingService
+    : nominatimGeocodingService;
 };
 
-const geocodeAddress = async (query: GeocodingQuery, deps: HandlerDependencies) => {
+const geocodeAddress = async (
+  query: GeocodingQuery,
+  deps: HandlerDependencies,
+) => {
   logHouseholdGeocodingEvent("lookup.started", {
     addressKey: query.addressKey,
     normalizedAddress: query.normalizedAddress,
@@ -3029,11 +4365,20 @@ const geocodeAddress = async (query: GeocodingQuery, deps: HandlerDependencies) 
     const cachedResult = toGeocodingLookupFromCache(cached);
     logHouseholdGeocodingEvent("lookup.cache_hit", {
       addressKey: query.addressKey,
-      failureReason: cachedResult.geocodeStatus === "failed" ? cachedResult.failureReason : undefined,
+      failureReason:
+        cachedResult.geocodeStatus === "failed"
+          ? cachedResult.failureReason
+          : undefined,
       geocodeProvider: cachedResult.geocodeProvider,
       geocodeStatus: cachedResult.geocodeStatus,
-      latitude: cachedResult.geocodeStatus === "success" ? cachedResult.latitude : undefined,
-      longitude: cachedResult.geocodeStatus === "success" ? cachedResult.longitude : undefined,
+      latitude:
+        cachedResult.geocodeStatus === "success"
+          ? cachedResult.latitude
+          : undefined,
+      longitude:
+        cachedResult.geocodeStatus === "success"
+          ? cachedResult.longitude
+          : undefined,
     });
     return cachedResult;
   }
@@ -3053,16 +4398,23 @@ const geocodeAddress = async (query: GeocodingQuery, deps: HandlerDependencies) 
     });
     const service = getGeocodingService();
     const result = await service.geocode(query, deps);
-    if (result.geocodeStatus === "success" || result.failureReason === "no_result" || result.failureReason === "invalid_coordinates") {
+    if (
+      result.geocodeStatus === "success" ||
+      result.failureReason === "no_result" ||
+      result.failureReason === "invalid_coordinates"
+    ) {
       await putGeocodeCache(query, result, deps);
     }
     logHouseholdGeocodingEvent("lookup.completed", {
       addressKey: query.addressKey,
-      failureReason: result.geocodeStatus === "failed" ? result.failureReason : undefined,
+      failureReason:
+        result.geocodeStatus === "failed" ? result.failureReason : undefined,
       geocodeProvider: result.geocodeProvider,
       geocodeStatus: result.geocodeStatus,
-      latitude: result.geocodeStatus === "success" ? result.latitude : undefined,
-      longitude: result.geocodeStatus === "success" ? result.longitude : undefined,
+      latitude:
+        result.geocodeStatus === "success" ? result.latitude : undefined,
+      longitude:
+        result.geocodeStatus === "success" ? result.longitude : undefined,
     });
     return result;
   })();
@@ -3119,7 +4471,9 @@ const updateHouseholdLocation = async (
   };
 };
 
-const prepareAutoGeocodeLocation = (_existing?: HouseholdItem | null): HouseholdLocation => ({
+const prepareAutoGeocodeLocation = (
+  _existing?: HouseholdItem | null,
+): HouseholdLocation => ({
   geocodeStatus: "pending",
   geocodeProvider: getGeocodingService().provider,
 });
@@ -3129,7 +4483,9 @@ const buildBatchPendingGeocodeLocation = (): HouseholdLocation => ({
   geocodeProvider: getGeocodingService().provider,
 });
 
-const normalizeHouseholdGeocodeJobMode = (value: unknown): HouseholdGeocodeJobMode =>
+const normalizeHouseholdGeocodeJobMode = (
+  value: unknown,
+): HouseholdGeocodeJobMode =>
   value === "retry_failed" ? "retry_failed" : "unmapped_only";
 
 const isHouseholdEligibleForGeocodeJob = (
@@ -3150,7 +4506,11 @@ const isHouseholdEligibleForGeocodeJob = (
     return true;
   }
 
-  if (status === "pending" || status === "not_started" || status === undefined) {
+  if (
+    status === "pending" ||
+    status === "not_started" ||
+    status === undefined
+  ) {
     return true;
   }
 
@@ -3174,9 +4534,26 @@ const selectNextHouseholdForGeocodeJob = (
     .sort((left, right) => {
       const leftStatus = left.location?.geocodeStatus ?? "not_started";
       const rightStatus = right.location?.geocodeStatus ?? "not_started";
-      const leftRank = leftStatus === "pending" ? 0 : leftStatus === "not_started" ? 1 : leftStatus === "failed" ? 2 : 3;
-      const rightRank = rightStatus === "pending" ? 0 : rightStatus === "not_started" ? 1 : rightStatus === "failed" ? 2 : 3;
-      return leftRank - rightRank || left.householdId.localeCompare(right.householdId);
+      const leftRank =
+        leftStatus === "pending"
+          ? 0
+          : leftStatus === "not_started"
+            ? 1
+            : leftStatus === "failed"
+              ? 2
+              : 3;
+      const rightRank =
+        rightStatus === "pending"
+          ? 0
+          : rightStatus === "not_started"
+            ? 1
+            : rightStatus === "failed"
+              ? 2
+              : 3;
+      return (
+        leftRank - rightRank ||
+        left.householdId.localeCompare(right.householdId)
+      );
     })[0] ?? null;
 
 const shouldTriggerAutoGeocoding = (
@@ -3210,29 +4587,41 @@ const applyAutomaticHouseholdGeocoding = async (
     normalizedAddress: household.normalizedAddress,
     normalizedPostalCode: household.normalizedPostalCode,
   });
-  const result = await geocodeAddress({
-    addressKey: household.addressKey,
-    normalizedAddress: household.normalizedAddress,
-    normalizedPostalCode: household.normalizedPostalCode,
-  }, deps);
+  const result = await geocodeAddress(
+    {
+      addressKey: household.addressKey,
+      normalizedAddress: household.normalizedAddress,
+      normalizedPostalCode: household.normalizedPostalCode,
+    },
+    deps,
+  );
 
   try {
-    const updatedHousehold = await updateHouseholdLocation(context, household, toHouseholdLocationFromLookup(result), deps);
+    const updatedHousehold = await updateHouseholdLocation(
+      context,
+      household,
+      toHouseholdLocationFromLookup(result),
+      deps,
+    );
     logHouseholdGeocodingEvent("household.autogeocode.finished", {
       addressKey: household.addressKey,
-      failureReason: result.geocodeStatus === "failed" ? result.failureReason : undefined,
+      failureReason:
+        result.geocodeStatus === "failed" ? result.failureReason : undefined,
       geocodeProvider: result.geocodeProvider,
       geocodeStatus: result.geocodeStatus,
       householdId: household.householdId,
-      latitude: result.geocodeStatus === "success" ? result.latitude : undefined,
-      longitude: result.geocodeStatus === "success" ? result.longitude : undefined,
+      latitude:
+        result.geocodeStatus === "success" ? result.latitude : undefined,
+      longitude:
+        result.geocodeStatus === "success" ? result.longitude : undefined,
     });
     return updatedHousehold;
   } catch (error) {
     if (isDynamoCancellationError(error)) {
       logHouseholdGeocodingEvent("household.location_update_skipped", {
         addressKey: household.addressKey,
-        errorMessage: error instanceof Error ? error.message : "Conditional update failed",
+        errorMessage:
+          error instanceof Error ? error.message : "Conditional update failed",
         householdId: household.householdId,
         reason: "concurrent_household_update",
       });
@@ -3241,7 +4630,10 @@ const applyAutomaticHouseholdGeocoding = async (
 
     logHouseholdGeocodingEvent("household.location_update_failed", {
       addressKey: household.addressKey,
-      errorMessage: error instanceof Error ? error.message : "Unknown location update error",
+      errorMessage:
+        error instanceof Error
+          ? error.message
+          : "Unknown location update error",
       errorName: error instanceof Error ? error.name : typeof error,
       householdId: household.householdId,
     });
@@ -3285,7 +4677,9 @@ const listHouseholdConflicts = async (
     TableName: context.tableName,
   });
 
-  return (items as HouseholdConflictItem[]).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return (items as HouseholdConflictItem[]).sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
+  );
 };
 
 const putHouseholdConflict = async (
@@ -3330,7 +4724,9 @@ const findHouseholdsByAddressMatch = async (
     return { normalized, households: [] as HouseholdItem[] };
   }
 
-  const cachedHousehold = state?.householdsByAddressKey.get(normalized.addressKey);
+  const cachedHousehold = state?.householdsByAddressKey.get(
+    normalized.addressKey,
+  );
   if (cachedHousehold) {
     logImportTiming("findHouseholdsByAddressMatch", startedAt, {
       addressKey: normalized.addressKey,
@@ -3341,7 +4737,11 @@ const findHouseholdsByAddressMatch = async (
     return { normalized, households: [cachedHousehold] };
   }
 
-  const indexedHousehold = await getHouseholdByAddressKey(context, normalized.addressKey, deps);
+  const indexedHousehold = await getHouseholdByAddressKey(
+    context,
+    normalized.addressKey,
+    deps,
+  );
   if (indexedHousehold) {
     upsertHouseholdInImportState(state, indexedHousehold);
     logImportTiming("findHouseholdsByAddressMatch", startedAt, {
@@ -3385,19 +4785,31 @@ const buildHouseholdConflictItem = (
   currentHouseholdName: currentHousehold.householdName,
   currentHouseholdAddress: currentHousehold.address,
   currentHouseholdAddressKey: currentHousehold.addressKey,
-  currentHouseholdGeocodeStatus: currentHousehold.location?.geocodeStatus
-    ?? (currentHousehold.location?.latitude !== undefined && currentHousehold.location?.longitude !== undefined ? "success" : undefined),
+  currentHouseholdGeocodeStatus:
+    currentHousehold.location?.geocodeStatus ??
+    (currentHousehold.location?.latitude !== undefined &&
+    currentHousehold.location?.longitude !== undefined
+      ? "success"
+      : undefined),
   importedAddress: member.address,
   importedPostalCode: member.postalCode,
   importedAddressKey: options.importedAddressKey,
   matchedHouseholdId: options.matchedHousehold?.householdId,
   matchedHouseholdName: options.matchedHousehold?.householdName,
   matchedHouseholdAddress: options.matchedHousehold?.address,
-  matchedHouseholdGeocodeStatus: options.matchedHousehold?.location?.geocodeStatus
-    ?? (options.matchedHousehold?.location?.latitude !== undefined && options.matchedHousehold.location?.longitude !== undefined ? "success" : undefined),
+  matchedHouseholdGeocodeStatus:
+    options.matchedHousehold?.location?.geocodeStatus ??
+    (options.matchedHousehold?.location?.latitude !== undefined &&
+    options.matchedHousehold.location?.longitude !== undefined
+      ? "success"
+      : undefined),
 });
 
-const getMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+const getMemberImportJob = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -3411,7 +4823,11 @@ const getMemberImportJob = async (context: RequestContext, jobId: string, deps: 
   return (response.Item as MemberImportJobItem | undefined) ?? null;
 };
 
-const getHouseholdGeocodeJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+const getHouseholdGeocodeJob = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
   const response = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -3425,7 +4841,10 @@ const getHouseholdGeocodeJob = async (context: RequestContext, jobId: string, de
   return (response.Item as HouseholdGeocodeJobItem | undefined) ?? null;
 };
 
-const listMemberImportJobs = async (context: RequestContext, deps: HandlerDependencies) => {
+const listMemberImportJobs = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#pk": "PK",
@@ -3440,11 +4859,17 @@ const listMemberImportJobs = async (context: RequestContext, deps: HandlerDepend
   });
 
   return items
-    .filter((item): item is MemberImportJobItem => item.entityType === "MEMBER_IMPORT_JOB")
+    .filter(
+      (item): item is MemberImportJobItem =>
+        item.entityType === "MEMBER_IMPORT_JOB",
+    )
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 };
 
-const listHouseholdGeocodeJobs = async (context: RequestContext, deps: HandlerDependencies) => {
+const listHouseholdGeocodeJobs = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#pk": "PK",
@@ -3458,26 +4883,38 @@ const listHouseholdGeocodeJobs = async (context: RequestContext, deps: HandlerDe
     TableName: context.tableName,
   });
 
-  return (items as HouseholdGeocodeJobItem[]).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  return (items as HouseholdGeocodeJobItem[]).sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  );
 };
 
-const getAdminJobs = async (context: RequestContext, deps: HandlerDependencies) => {
+const getAdminJobs = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   await requireAdminContext(context, deps, "admin.jobs.list");
 
-  const [memberImportJobs, householdGeocodeJobs, households] = await Promise.all([
-    listMemberImportJobs(context, deps),
-    listHouseholdGeocodeJobs(context, deps),
-    listHouseholds(context, deps),
-  ]);
+  const [memberImportJobs, householdGeocodeJobs, households] =
+    await Promise.all([
+      listMemberImportJobs(context, deps),
+      listHouseholdGeocodeJobs(context, deps),
+      listHouseholds(context, deps),
+    ]);
 
   const householdGeocodeCounts = households.reduce(
     (counts, household) => {
       const status = household.location?.geocodeStatus;
-      const hasCoordinates = household.location?.latitude !== undefined && household.location?.longitude !== undefined;
+      const hasCoordinates =
+        household.location?.latitude !== undefined &&
+        household.location?.longitude !== undefined;
 
       if (status === "failed") {
         counts.failed += 1;
-      } else if (status === "pending" || status === "not_started" || (!status && !hasCoordinates)) {
+      } else if (
+        status === "pending" ||
+        status === "not_started" ||
+        (!status && !hasCoordinates)
+      ) {
         counts.unmapped += 1;
       }
 
@@ -3488,14 +4925,20 @@ const getAdminJobs = async (context: RequestContext, deps: HandlerDependencies) 
 
   const response: AdminJobsResponse = {
     memberImportJobs: memberImportJobs.map((job) => toMemberImportJob(job)),
-    householdGeocodeJobs: householdGeocodeJobs.map((job) => toHouseholdGeocodeJob(job)),
+    householdGeocodeJobs: householdGeocodeJobs.map((job) =>
+      toHouseholdGeocodeJob(job),
+    ),
     householdGeocodeCounts,
   };
 
   return json(200, response);
 };
 
-const cancelMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+const cancelMemberImportJob = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
   await requireAdminContext(context, deps, "admin.member_import.cancel");
 
   const job = await getMemberImportJob(context, jobId, deps);
@@ -3503,7 +4946,11 @@ const cancelMemberImportJob = async (context: RequestContext, jobId: string, dep
     return json(404, { message: "Import job not found." });
   }
 
-  if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+  if (
+    job.status === "completed" ||
+    job.status === "failed" ||
+    job.status === "cancelled"
+  ) {
     return json(200, toMemberImportJob(job));
   }
 
@@ -3525,7 +4972,11 @@ const cancelMemberImportJob = async (context: RequestContext, jobId: string, dep
   return json(200, toMemberImportJob(cancelledJob));
 };
 
-const cancelHouseholdGeocodeJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+const cancelHouseholdGeocodeJob = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
   await requireAdminContext(context, deps, "admin.household_geocode.cancel");
 
   const job = await getHouseholdGeocodeJob(context, jobId, deps);
@@ -3533,7 +4984,11 @@ const cancelHouseholdGeocodeJob = async (context: RequestContext, jobId: string,
     return json(404, { message: "Household geocode job not found." });
   }
 
-  if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+  if (
+    job.status === "completed" ||
+    job.status === "failed" ||
+    job.status === "cancelled"
+  ) {
     return json(200, toHouseholdGeocodeJob(job));
   }
 
@@ -3548,9 +5003,15 @@ const cancelHouseholdGeocodeJob = async (context: RequestContext, jobId: string,
   };
 
   await putHouseholdGeocodeJob(context, cancelledJob, deps);
-  await logAuditEvent(context, "admin.household_geocode.cancel", "success", deps, {
-    metadata: { jobId, mode: job.mode, previousStatus: job.status },
-  });
+  await logAuditEvent(
+    context,
+    "admin.household_geocode.cancel",
+    "success",
+    deps,
+    {
+      metadata: { jobId, mode: job.mode, previousStatus: job.status },
+    },
+  );
 
   return json(200, toHouseholdGeocodeJob(cancelledJob));
 };
@@ -3572,8 +5033,10 @@ const tryAcquireMemberImportJobLease = async (
           SK: memberImportJobSk(jobId),
         },
         TableName: context.tableName,
-        UpdateExpression: "SET updatedAt = :updatedAt, startedAt = if_not_exists(startedAt, :startedAt), #status = :status, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt",
-        ConditionExpression: "#status <> :completed AND #status <> :failed AND #status <> :cancelled AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)",
+        UpdateExpression:
+          "SET updatedAt = :updatedAt, startedAt = if_not_exists(startedAt, :startedAt), #status = :status, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt",
+        ConditionExpression:
+          "#status <> :completed AND #status <> :failed AND #status <> :cancelled AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)",
         ExpressionAttributeNames: {
           "#status": "status",
         },
@@ -3595,8 +5058,9 @@ const tryAcquireMemberImportJobLease = async (
     return (response.Attributes as MemberImportJobItem | undefined) ?? null;
   } catch (error) {
     if (
-      error instanceof Error
-      && (error.name === "ConditionalCheckFailedException" || error.name === "TransactionCanceledException")
+      error instanceof Error &&
+      (error.name === "ConditionalCheckFailedException" ||
+        error.name === "TransactionCanceledException")
     ) {
       return null;
     }
@@ -3625,7 +5089,10 @@ const tryAcquireHouseholdGeocodeJobLease = async (
 ) => {
   const now = deps.now();
   const leaseOwner = deps.uuid();
-  const leaseExpiresAt = addMillisecondsToIso(now, householdGeocodeJobLeaseDurationMs);
+  const leaseExpiresAt = addMillisecondsToIso(
+    now,
+    householdGeocodeJobLeaseDurationMs,
+  );
 
   try {
     const response = await deps.documentClient.send(
@@ -3635,8 +5102,10 @@ const tryAcquireHouseholdGeocodeJobLease = async (
           SK: householdGeocodeJobSk(jobId),
         },
         TableName: context.tableName,
-        UpdateExpression: "SET updatedAt = :updatedAt, startedAt = if_not_exists(startedAt, :startedAt), #status = :status, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt",
-        ConditionExpression: "#status <> :completed AND #status <> :failed AND #status <> :cancelled AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)",
+        UpdateExpression:
+          "SET updatedAt = :updatedAt, startedAt = if_not_exists(startedAt, :startedAt), #status = :status, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt",
+        ConditionExpression:
+          "#status <> :completed AND #status <> :failed AND #status <> :cancelled AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)",
         ExpressionAttributeNames: {
           "#status": "status",
         },
@@ -3658,8 +5127,9 @@ const tryAcquireHouseholdGeocodeJobLease = async (
     return (response.Attributes as HouseholdGeocodeJobItem | undefined) ?? null;
   } catch (error) {
     if (
-      error instanceof Error
-      && (error.name === "ConditionalCheckFailedException" || error.name === "TransactionCanceledException")
+      error instanceof Error &&
+      (error.name === "ConditionalCheckFailedException" ||
+        error.name === "TransactionCanceledException")
     ) {
       return null;
     }
@@ -3680,23 +5150,41 @@ const ensureMemberAssignedToHousehold = async (
     return false;
   }
 
-  const updatedHousehold = await updateHouseholdMembership(context, household.householdId, {
-    householdName: household.householdName,
-    address: household.address,
-    postalCode: household.postalCode,
-    notes: household.notes,
-    location: household.location,
-    areaId: household.areaId,
-    memberIds: [...new Set([...(household.members ?? []).map((entry) => entry.memberId), member.memberId])],
-    primaryContactMemberId: household.primaryContactMemberId,
-  }, deps, household, { allowReassign: true });
+  const updatedHousehold = await updateHouseholdMembership(
+    context,
+    household.householdId,
+    {
+      householdName: household.householdName,
+      address: household.address,
+      postalCode: household.postalCode,
+      notes: household.notes,
+      location: household.location,
+      areaId: household.areaId,
+      memberIds: [
+        ...new Set([
+          ...(household.members ?? []).map((entry) => entry.memberId),
+          member.memberId,
+        ]),
+      ],
+      primaryContactMemberId: household.primaryContactMemberId,
+    },
+    deps,
+    household,
+    { allowReassign: true },
+  );
   upsertHouseholdInImportState(state, updatedHousehold);
-  if (state && member.householdId && member.householdId !== household.householdId) {
+  if (
+    state &&
+    member.householdId &&
+    member.householdId !== household.householdId
+  ) {
     const previousHousehold = state.householdsById.get(member.householdId);
     if (previousHousehold) {
       upsertHouseholdInImportState(state, {
         ...previousHousehold,
-        members: (previousHousehold.members ?? []).filter((entry) => entry.memberId !== member.memberId),
+        members: (previousHousehold.members ?? []).filter(
+          (entry) => entry.memberId !== member.memberId,
+        ),
         memberCount: Math.max(0, previousHousehold.memberCount - 1),
       });
     }
@@ -3719,7 +5207,10 @@ const ensureMemberAssignedToHousehold = async (
   return true;
 };
 
-const buildAutoHouseholdId = (addressKey: string | undefined, deps: HandlerDependencies) => {
+const buildAutoHouseholdId = (
+  addressKey: string | undefined,
+  deps: HandlerDependencies,
+) => {
   if (!addressKey) {
     return deps.uuid();
   }
@@ -3735,7 +5226,10 @@ const resolveImportHouseholdAssignment = async (
   state?: ImportExecutionState,
 ) => {
   const startedAt = Date.now();
-  const normalized = normalizeAddress({ address: member.address, postalCode: member.postalCode });
+  const normalized = normalizeAddress({
+    address: member.address,
+    postalCode: member.postalCode,
+  });
   if (!normalized.addressKey) {
     await deleteHouseholdConflict(context, member.memberId, deps);
     logImportTiming("resolveImportHouseholdAssignment", startedAt, {
@@ -3752,26 +5246,41 @@ const resolveImportHouseholdAssignment = async (
   }
 
   if (member.householdId) {
-    const household = state?.householdsById.get(member.householdId) ?? await getHousehold(context, member.householdId, deps);
+    const household =
+      state?.householdsById.get(member.householdId) ??
+      (await getHousehold(context, member.householdId, deps));
     if (household) {
       upsertHouseholdInImportState(state, household);
     }
     const currentHouseholdAddressKey = household
-      ? (household.addressKey ?? normalizeAddress({
-        address: household.address,
-        postalCode: household.postalCode,
-      }).addressKey)
+      ? (household.addressKey ??
+        normalizeAddress({
+          address: household.address,
+          postalCode: household.postalCode,
+        }).addressKey)
       : undefined;
-    if (household && currentHouseholdAddressKey && currentHouseholdAddressKey !== normalized.addressKey) {
-      const { households: matchedHouseholds } = await findHouseholdsByAddressMatch(
+    if (
+      household &&
+      currentHouseholdAddressKey &&
+      currentHouseholdAddressKey !== normalized.addressKey
+    ) {
+      const { households: matchedHouseholds } =
+        await findHouseholdsByAddressMatch(
+          context,
+          member.address,
+          member.postalCode,
+          deps,
+          state,
+        );
+      const matchedHousehold =
+        matchedHouseholds.find(
+          (item) => item.householdId !== household.householdId,
+        ) ?? null;
+      const existingConflict = await getHouseholdConflict(
         context,
-        member.address,
-        member.postalCode,
+        member.memberId,
         deps,
-        state,
       );
-      const matchedHousehold = matchedHouseholds.find((item) => item.householdId !== household.householdId) ?? null;
-      const existingConflict = await getHouseholdConflict(context, member.memberId, deps);
       await putHouseholdConflict(
         context,
         buildHouseholdConflictItem(context, member, household, deps, {
@@ -3832,7 +5341,13 @@ const resolveImportHouseholdAssignment = async (
   );
   const household = households[0];
   if (household) {
-    const assigned = await ensureMemberAssignedToHousehold(context, member, household, deps, state);
+    const assigned = await ensureMemberAssignedToHousehold(
+      context,
+      member,
+      household,
+      deps,
+      state,
+    );
     await deleteHouseholdConflict(context, member.memberId, deps);
     logImportTiming("resolveImportHouseholdAssignment", startedAt, {
       memberId: member.memberId,
@@ -3849,14 +5364,20 @@ const resolveImportHouseholdAssignment = async (
   }
 
   const householdId = buildAutoHouseholdId(normalized.addressKey, deps);
-  const createdHousehold = await updateHouseholdMembership(context, householdId, {
-    householdName: buildAddressBasedHouseholdName(member.address),
-    address: member.address,
-    postalCode: member.postalCode,
-    notes: undefined,
-    location: buildBatchPendingGeocodeLocation(),
-    memberIds: [member.memberId],
-  }, deps, null);
+  const createdHousehold = await updateHouseholdMembership(
+    context,
+    householdId,
+    {
+      householdName: buildAddressBasedHouseholdName(member.address),
+      address: member.address,
+      postalCode: member.postalCode,
+      notes: undefined,
+      location: buildBatchPendingGeocodeLocation(),
+      memberIds: [member.memberId],
+    },
+    deps,
+    null,
+  );
   upsertHouseholdInImportState(state, createdHousehold);
 
   await logMemberActivity(
@@ -3883,7 +5404,11 @@ const resolveImportHouseholdAssignment = async (
   };
 };
 
-const listMemberImportChunks = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+const listMemberImportChunks = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
   const response = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#pk": "PK",
@@ -3926,7 +5451,9 @@ const processImportRow = async (
 
   try {
     const existing = state.existingMembersByUnityId.get(unityId) ?? null;
-    const combinedAddress = extractCanadianPostalCodeFromAddress(row.values["Address"]);
+    const combinedAddress = extractCanadianPostalCodeFromAddress(
+      row.values["Address"],
+    );
     const member = buildMemberItem(
       context,
       {
@@ -3942,7 +5469,9 @@ const processImportRow = async (
         gender: toOptionalString(row.values["Gender"]),
         familyStatus: toOptionalString(row.values["Family Status"]),
         church: toOptionalString(row.values["Church"]),
-        fatherOfConfession: toOptionalString(row.values["Father of Confession"]),
+        fatherOfConfession: toOptionalString(
+          row.values["Father of Confession"],
+        ),
         deaconshipRank: toOptionalString(row.values["Deaconship Rank"]),
         ordinationDate: toIsoDate(row.values["Ordination Date"]),
         churchProvince: toOptionalString(row.values["Church Province"]),
@@ -3950,7 +5479,9 @@ const processImportRow = async (
         churchRegion: toOptionalString(row.values["Church Region"]),
         diocese: toOptionalString(row.values["Diocese"]),
         address: combinedAddress.address,
-        postalCode: toOptionalString(row.values["Postal Code"]) ?? combinedAddress.postalCode,
+        postalCode:
+          toOptionalString(row.values["Postal Code"]) ??
+          combinedAddress.postalCode,
         activated: toOptionalBoolean(row.values["Activated"]),
         approved: toOptionalBoolean(row.values["Approved"]),
         locked: toOptionalBoolean(row.values["Locked"]),
@@ -3970,12 +5501,19 @@ const processImportRow = async (
     member.notes = existing?.notes;
     await putMember(context, member, deps);
     state.existingMembersByUnityId.set(unityId, member);
-    const householdAssignment = await resolveImportHouseholdAssignment(context, member, deps, state);
+    const householdAssignment = await resolveImportHouseholdAssignment(
+      context,
+      member,
+      deps,
+      state,
+    );
     await logMemberActivity(
       context,
       member.memberId,
       existing ? "Member Updated" : "Member Imported",
-      existing ? `${member.fullName} refreshed from Unity import.` : `${member.fullName} imported from Unity.`,
+      existing
+        ? `${member.fullName} refreshed from Unity import.`
+        : `${member.fullName} imported from Unity.`,
       deps,
       { unityId, row: row.rowNumber, fileName },
     );
@@ -4008,7 +5546,8 @@ const processImportRow = async (
       errors: [
         {
           row: row.rowNumber,
-          message: error instanceof Error ? error.message : "Unknown import error.",
+          message:
+            error instanceof Error ? error.message : "Unknown import error.",
         },
       ],
     };
@@ -4020,7 +5559,10 @@ const processImportRow = async (
   }
 };
 
-const listMembers = async (context: RequestContext, deps: HandlerDependencies) => {
+const listMembers = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI1PK",
@@ -4041,16 +5583,25 @@ const listMembers = async (context: RequestContext, deps: HandlerDependencies) =
 
 const resolveAutoLinkedInteractionMembers = async (
   context: RequestContext,
-  event: Pick<EventItem, "calendarId" | "eventId" | "googleEventId" | "summary" | "attendees"> & { bookingVisitorEmail?: string },
+  event: Pick<
+    EventItem,
+    "calendarId" | "eventId" | "googleEventId" | "summary" | "attendees"
+  > & { bookingVisitorEmail?: string },
   deps: HandlerDependencies,
 ): Promise<AutoLinkedInteractionResult> => {
   const normalizedTitle = normalizeWhitespace(event.summary).toLowerCase();
-  const matchedPrefix = autoLinkInteractionPrefixes.find(({ prefix }) => normalizedTitle.startsWith(prefix));
+  const matchedPrefix = autoLinkInteractionPrefixes.find(({ prefix }) =>
+    normalizedTitle.startsWith(prefix),
+  );
   if (!matchedPrefix) {
     return { matchedMembers: [] };
   }
 
-  const extractedEmails = extractEmails(event.summary, ...(event.attendees ?? []), event.bookingVisitorEmail);
+  const extractedEmails = extractEmails(
+    event.summary,
+    ...(event.attendees ?? []),
+    event.bookingVisitorEmail,
+  );
   const extractedEmailSet = new Set(extractedEmails);
   const bookingEmail = normalizeEmail(event.bookingVisitorEmail);
   const normalizedTitleBody = normalizeName(
@@ -4066,7 +5617,9 @@ const resolveAutoLinkedInteractionMembers = async (
     }
 
     const normalizedMemberName = normalizeName(member.fullName);
-    return normalizedMemberName ? includesNormalizedName(normalizedTitleBody, normalizedMemberName) : false;
+    return normalizedMemberName
+      ? includesNormalizedName(normalizedTitleBody, normalizedMemberName)
+      : false;
   });
 
   if (!matchedMembers.length) {
@@ -4086,7 +5639,11 @@ const resolveAutoLinkedInteractionMembers = async (
   };
 };
 
-const listMemberActivities = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+const listMemberActivities = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#pk": "PK",
@@ -4100,10 +5657,16 @@ const listMemberActivities = async (context: RequestContext, memberId: string, d
     TableName: context.tableName,
   });
 
-  return (items as MemberActivityItem[]).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  return (items as MemberActivityItem[]).sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  );
 };
 
-const listMemberEvents = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+const listMemberEvents = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI2PK",
@@ -4119,10 +5682,16 @@ const listMemberEvents = async (context: RequestContext, memberId: string, deps:
     TableName: context.tableName,
   });
 
-  return (items as EventMemberItem[]).sort((left, right) => left.eventStart.localeCompare(right.eventStart));
+  return (items as EventMemberItem[]).sort((left, right) =>
+    left.eventStart.localeCompare(right.eventStart),
+  );
 };
 
-const listUpcomingEventAssignments = async (context: RequestContext, from: string, deps: HandlerDependencies) => {
+const listUpcomingEventAssignments = async (
+  context: RequestContext,
+  from: string,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI3PK",
@@ -4141,7 +5710,11 @@ const listUpcomingEventAssignments = async (context: RequestContext, from: strin
   return items as EventMemberItem[];
 };
 
-const listMemberVisitations = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+const listMemberVisitations = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI2PK",
@@ -4157,15 +5730,23 @@ const listMemberVisitations = async (context: RequestContext, memberId: string, 
     TableName: context.tableName,
   });
 
-  return (items as VisitationItem[]).sort((left, right) => right.visitDate.localeCompare(left.visitDate));
+  return (items as VisitationItem[]).sort((left, right) =>
+    right.visitDate.localeCompare(left.visitDate),
+  );
 };
 
-const listVisitationsForMemberRecord = async (context: RequestContext, member: MemberItem, deps: HandlerDependencies) => {
+const listVisitationsForMemberRecord = async (
+  context: RequestContext,
+  member: MemberItem,
+  deps: HandlerDependencies,
+) => {
   const relatedMembers = member.unityId
     ? await listMembersByUnityId(context, member.unityId, deps)
     : [member];
   const memberIds = [...new Set(relatedMembers.map((item) => item.memberId))];
-  const visitations = await Promise.all(memberIds.map((memberId) => listMemberVisitations(context, memberId, deps)));
+  const visitations = await Promise.all(
+    memberIds.map((memberId) => listMemberVisitations(context, memberId, deps)),
+  );
 
   return visitations
     .flat()
@@ -4184,7 +5765,10 @@ const listVisitationsForEvent = async (
       "#sk": "SK",
     },
     ExpressionAttributeValues: {
-      ":pk": tenantVisitationPk(context.tenantId, eventVisitationId(calendarId, eventId)),
+      ":pk": tenantVisitationPk(
+        context.tenantId,
+        eventVisitationId(calendarId, eventId),
+      ),
       ":memberPrefix": "MEMBER#",
     },
     KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :memberPrefix)",
@@ -4194,7 +5778,11 @@ const listVisitationsForEvent = async (
   return items as VisitationItem[];
 };
 
-const getVisitationGroup = async (context: RequestContext, visitationId: string, deps: HandlerDependencies) => {
+const getVisitationGroup = async (
+  context: RequestContext,
+  visitationId: string,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#pk": "PK",
@@ -4211,7 +5799,10 @@ const getVisitationGroup = async (context: RequestContext, visitationId: string,
   return items as VisitationItem[];
 };
 
-const listTenantVisitations = async (context: RequestContext, deps: HandlerDependencies) => {
+const listTenantVisitations = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI1PK",
@@ -4227,7 +5818,9 @@ const listTenantVisitations = async (context: RequestContext, deps: HandlerDepen
     TableName: context.tableName,
   });
 
-  return (items as VisitationItem[]).sort((left, right) => right.visitDate.localeCompare(left.visitDate));
+  return (items as VisitationItem[]).sort((left, right) =>
+    right.visitDate.localeCompare(left.visitDate),
+  );
 };
 
 const listEventMembers = async (
@@ -4249,10 +5842,16 @@ const listEventMembers = async (
     TableName: context.tableName,
   });
 
-  return (items as EventMemberItem[]).sort((left, right) => left.memberName.localeCompare(right.memberName));
+  return (items as EventMemberItem[]).sort((left, right) =>
+    left.memberName.localeCompare(right.memberName),
+  );
 };
 
-const putMember = async (context: RequestContext, member: MemberItem, deps: HandlerDependencies) => {
+const putMember = async (
+  context: RequestContext,
+  member: MemberItem,
+  deps: HandlerDependencies,
+) => {
   await deps.documentClient.send(
     new PutCommand({
       ...tagSnapshotGuard(member.tagIds),
@@ -4305,7 +5904,8 @@ const buildMemberItem = (
   deps: HandlerDependencies,
   existing?: MemberItem | null,
 ): MemberItem => {
-  const hasInputField = (field: keyof CreateMemberInput) => Object.prototype.hasOwnProperty.call(input, field);
+  const hasInputField = (field: keyof CreateMemberInput) =>
+    Object.prototype.hasOwnProperty.call(input, field);
   const timestamp = deps.now();
   const memberId = existing?.memberId ?? deps.uuid();
   const fullName = normalizeWhitespace(input.fullName ?? existing?.fullName);
@@ -4323,8 +5923,12 @@ const buildMemberItem = (
     GSI1SK: memberGsiSk(normalizedName, memberId),
     GSI2PK: unityId ? memberUnityGsiPk(context.tenantId) : undefined,
     GSI2SK: unityId ? memberUnityGsiSk(unityId) : undefined,
-    GSI5PK: householdId ? householdMemberGsiPk(context.tenantId, householdId) : undefined,
-    GSI5SK: householdId ? householdMemberGsiSk(normalizedName, memberId) : undefined,
+    GSI5PK: householdId
+      ? householdMemberGsiPk(context.tenantId, householdId)
+      : undefined,
+    GSI5SK: householdId
+      ? householdMemberGsiSk(normalizedName, memberId)
+      : undefined,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
     tagIds: input.tagIds ?? existing?.tagIds,
@@ -4340,37 +5944,60 @@ const buildMemberItem = (
       ? toOptionalString(input.householdName)
       : toOptionalString(existing?.householdName),
     fullName,
-    firstName: toOptionalString(input.firstName ?? existing?.firstName ?? firstName),
-    lastName: toOptionalString(input.lastName ?? existing?.lastName ?? lastName),
+    firstName: toOptionalString(
+      input.firstName ?? existing?.firstName ?? firstName,
+    ),
+    lastName: toOptionalString(
+      input.lastName ?? existing?.lastName ?? lastName,
+    ),
     initials: toInitials(fullName),
     phone: toOptionalString(input.phone ?? existing?.phone),
     email: toOptionalString(input.email ?? existing?.email),
-    whatsappPhone: toOptionalString(input.whatsappPhone ?? existing?.whatsappPhone ?? input.phone ?? existing?.phone),
+    whatsappPhone: toOptionalString(
+      input.whatsappPhone ??
+        existing?.whatsappPhone ??
+        input.phone ??
+        existing?.phone,
+    ),
     address: toOptionalString(input.address ?? existing?.address),
     postalCode: toOptionalString(input.postalCode ?? existing?.postalCode),
     dateOfBirth: toIsoDate(input.dateOfBirth ?? existing?.dateOfBirth),
     age: toOptionalNumber(input.age ?? existing?.age),
     gender: toOptionalString(input.gender ?? existing?.gender),
-    familyStatus: toOptionalString(input.familyStatus ?? existing?.familyStatus),
+    familyStatus: toOptionalString(
+      input.familyStatus ?? existing?.familyStatus,
+    ),
     church: toOptionalString(input.church ?? existing?.church),
-    fatherOfConfession: toOptionalString(input.fatherOfConfession ?? existing?.fatherOfConfession),
-    deaconshipRank: toOptionalString(input.deaconshipRank ?? existing?.deaconshipRank),
+    fatherOfConfession: toOptionalString(
+      input.fatherOfConfession ?? existing?.fatherOfConfession,
+    ),
+    deaconshipRank: toOptionalString(
+      input.deaconshipRank ?? existing?.deaconshipRank,
+    ),
     ordinationDate: toIsoDate(input.ordinationDate ?? existing?.ordinationDate),
-    churchProvince: toOptionalString(input.churchProvince ?? existing?.churchProvince),
+    churchProvince: toOptionalString(
+      input.churchProvince ?? existing?.churchProvince,
+    ),
     churchCity: toOptionalString(input.churchCity ?? existing?.churchCity),
-    churchRegion: toOptionalString(input.churchRegion ?? existing?.churchRegion),
+    churchRegion: toOptionalString(
+      input.churchRegion ?? existing?.churchRegion,
+    ),
     diocese: toOptionalString(input.diocese ?? existing?.diocese),
     activated: toOptionalBoolean(input.activated ?? existing?.activated),
     approved: toOptionalBoolean(input.approved ?? existing?.approved),
     locked: toOptionalBoolean(input.locked ?? existing?.locked),
     visibility: toOptionalString(input.visibility ?? existing?.visibility),
     username: toOptionalString(input.username ?? existing?.username),
-    registrationDate: toIsoDate(input.registrationDate ?? existing?.registrationDate),
+    registrationDate: toIsoDate(
+      input.registrationDate ?? existing?.registrationDate,
+    ),
     groups: Array.isArray(input.groups)
       ? input.groups.map((entry) => normalizeWhitespace(entry)).filter(Boolean)
       : existing?.groups,
     customFlag: toOptionalString(input.customFlag ?? existing?.customFlag),
-    licensePlate: toOptionalString(input.licensePlate ?? existing?.licensePlate),
+    licensePlate: toOptionalString(
+      input.licensePlate ?? existing?.licensePlate,
+    ),
     notes: toOptionalString(existing?.notes ?? input.notes),
     normalizedSearchText: normalizeSearchText(
       fullName,
@@ -4389,8 +6016,15 @@ const syncEventMembers = async (
   memberIds: string[],
   deps: HandlerDependencies,
 ) => {
-  const current = await listEventMembers(context, event.calendarId, event.eventId, deps);
-  const currentByMemberId = new Map(current.map((item) => [item.memberId, item]));
+  const current = await listEventMembers(
+    context,
+    event.calendarId,
+    event.eventId,
+    deps,
+  );
+  const currentByMemberId = new Map(
+    current.map((item) => [item.memberId, item]),
+  );
   const currentIds = new Set(current.map((item) => item.memberId));
   const nextIds = [...new Set(memberIds.filter(Boolean))];
 
@@ -4410,8 +6044,12 @@ const syncEventMembers = async (
       )
     : ({ Responses: {} } as { Responses?: Record<string, MemberItem[]> });
 
-  const fetchedMembers = ((batch.Responses?.[context.tableName] ?? []) as MemberItem[]).filter(Boolean);
-  const membersById = new Map(fetchedMembers.map((item) => [item.memberId, item]));
+  const fetchedMembers = (
+    (batch.Responses?.[context.tableName] ?? []) as MemberItem[]
+  ).filter(Boolean);
+  const membersById = new Map(
+    fetchedMembers.map((item) => [item.memberId, item]),
+  );
   const transactItems: Array<Record<string, unknown>> = [];
   const visitationType = normalizeVisitationType(event.visitationType);
 
@@ -4422,7 +6060,10 @@ const syncEventMembers = async (
 
     transactItems.push({
       Delete: {
-        Key: { PK: tenantEventPk(context.tenantId, event.eventId), SK: eventMemberSk(item.memberId) },
+        Key: {
+          PK: tenantEventPk(context.tenantId, event.eventId),
+          SK: eventMemberSk(item.memberId),
+        },
         TableName: context.tableName,
       },
     });
@@ -4470,7 +6111,8 @@ const syncEventMembers = async (
       eventLocation: event.location,
       eventDescription: event.description,
       allDay: event.allDay,
-      assignmentStatus: event.status === "cancelled" ? "cancelled" : "scheduled",
+      assignmentStatus:
+        event.status === "cancelled" ? "cancelled" : "scheduled",
       visitStatus: event.status === "cancelled" ? "cancelled" : "scheduled",
       createdByUserId: existingAssignment?.createdByUserId ?? context.actorSub,
       createdByName: existingAssignment?.createdByName ?? context.actorName,
@@ -4513,14 +6155,23 @@ const syncVisitationRecords = async (
   visitationTypeOverride: VisitationType | undefined,
   deps: HandlerDependencies,
 ) => {
-  const existingRecords = await listVisitationsForEvent(context, event.calendarId, event.eventId, deps);
-  const existingMemberIds = new Set(existingRecords.map((item) => item.memberId));
+  const existingRecords = await listVisitationsForEvent(
+    context,
+    event.calendarId,
+    event.eventId,
+    deps,
+  );
+  const existingMemberIds = new Set(
+    existingRecords.map((item) => item.memberId),
+  );
   const nextMembers = members;
   const nextMemberIds = new Set(nextMembers.map((item) => item.memberId));
   const visitationId = eventVisitationId(event.calendarId, event.eventId);
   const memberIds = nextMembers.map((item) => item.memberId);
   const memberNames = nextMembers.map((item) => item.fullName);
-  const visitationType = normalizeVisitationType(visitationTypeOverride ?? event.visitationType);
+  const visitationType = normalizeVisitationType(
+    visitationTypeOverride ?? event.visitationType,
+  );
 
   for (const record of existingRecords) {
     if (nextMemberIds.has(record.memberId)) {
@@ -4543,11 +6194,17 @@ const syncVisitationRecords = async (
       PK: tenantVisitationPk(context.tenantId, visitationId),
       SK: visitationMemberSk(member.memberId),
       GSI1PK: tenantPk(context.tenantId),
-      GSI1SK: tenantVisitationGsiSk(event.start, context.actorSub, member.memberId, visitationId),
+      GSI1SK: tenantVisitationGsiSk(
+        event.start,
+        context.actorSub,
+        member.memberId,
+        visitationId,
+      ),
       GSI2PK: tenantMemberPk(context.tenantId, member.memberId),
       GSI2SK: memberVisitationGsiSk(event.start, visitationId),
       createdAt: existingMemberIds.has(member.memberId)
-        ? existingRecords.find((item) => item.memberId === member.memberId)?.createdAt ?? event.createdAt
+        ? (existingRecords.find((item) => item.memberId === member.memberId)
+            ?.createdAt ?? event.createdAt)
         : event.createdAt,
       updatedAt: deps.now(),
       entityType: "VISITATION",
@@ -4560,8 +6217,12 @@ const syncVisitationRecords = async (
       memberNames,
       visitorUserId: context.actorSub,
       visitorDisplayName: context.actorName,
-      createdByUserId: existingRecords.find((item) => item.memberId === member.memberId)?.createdByUserId ?? context.actorSub,
-      createdByName: existingRecords.find((item) => item.memberId === member.memberId)?.createdByName ?? context.actorName,
+      createdByUserId:
+        existingRecords.find((item) => item.memberId === member.memberId)
+          ?.createdByUserId ?? context.actorSub,
+      createdByName:
+        existingRecords.find((item) => item.memberId === member.memberId)
+          ?.createdByName ?? context.actorName,
       visitDate: event.start,
       title: event.summary,
       endDate: event.end,
@@ -4573,7 +6234,9 @@ const syncVisitationRecords = async (
       calendarEventId: event.googleEventId ?? event.eventId,
       calendarId: event.calendarId,
       calendarOwnerUserId: event.userId,
-      calendarOwnerName: existingRecords.find((item) => item.memberId === member.memberId)?.calendarOwnerName ?? context.actorName,
+      calendarOwnerName:
+        existingRecords.find((item) => item.memberId === member.memberId)
+          ?.calendarOwnerName ?? context.actorName,
     };
 
     await deps.documentClient.send(
@@ -4584,18 +6247,18 @@ const syncVisitationRecords = async (
     );
 
     if (existingMemberIds.has(member.memberId)) {
-      const existingRecord = existingRecords.find((item) => item.memberId === member.memberId);
+      const existingRecord = existingRecords.find(
+        (item) => item.memberId === member.memberId,
+      );
       if (
-        existingRecord
-        && (
-          normalizeVisitationType(existingRecord.type) !== visitationType
-          || existingRecord.title !== record.title
-          || existingRecord.visitDate !== record.visitDate
-          || existingRecord.endDate !== record.endDate
-          || existingRecord.location !== record.location
-          || existingRecord.notes !== record.notes
-          || existingRecord.visitStatus !== record.visitStatus
-        )
+        existingRecord &&
+        (normalizeVisitationType(existingRecord.type) !== visitationType ||
+          existingRecord.title !== record.title ||
+          existingRecord.visitDate !== record.visitDate ||
+          existingRecord.endDate !== record.endDate ||
+          existingRecord.location !== record.location ||
+          existingRecord.notes !== record.notes ||
+          existingRecord.visitStatus !== record.visitStatus)
       ) {
         await logMemberActivity(
           context,
@@ -4610,7 +6273,11 @@ const syncVisitationRecords = async (
   }
 };
 
-const loadMembersByIds = async (context: RequestContext, memberIds: string[], deps: HandlerDependencies) => {
+const loadMembersByIds = async (
+  context: RequestContext,
+  memberIds: string[],
+  deps: HandlerDependencies,
+) => {
   const normalizedIds = normalizeMemberIds(memberIds);
   const keys = normalizedIds.map((memberId) => ({
     PK: tenantPk(context.tenantId),
@@ -4632,12 +6299,20 @@ const loadMembersByIds = async (context: RequestContext, memberIds: string[], de
   );
 
   const membersById = new Map(
-    ((batch.Responses?.[context.tableName] ?? []) as MemberItem[]).filter(Boolean).map((item) => [item.memberId, item]),
+    ((batch.Responses?.[context.tableName] ?? []) as MemberItem[])
+      .filter(Boolean)
+      .map((item) => [item.memberId, item]),
   );
-  return normalizedIds.map((memberId) => membersById.get(memberId)).filter(Boolean) as MemberItem[];
+  return normalizedIds
+    .map((memberId) => membersById.get(memberId))
+    .filter(Boolean) as MemberItem[];
 };
 
-const resolveHouseholdMemberIds = async (context: RequestContext, householdIds: string[] | undefined, deps: HandlerDependencies) => {
+const resolveHouseholdMemberIds = async (
+  context: RequestContext,
+  householdIds: string[] | undefined,
+  deps: HandlerDependencies,
+) => {
   const normalizedIds = normalizeMemberIds(householdIds);
   const memberIds = new Set<string>();
 
@@ -4671,29 +6346,56 @@ const updateHouseholdMembership = async (
     throw new HttpError(400, "One or more household members were not found.");
   }
 
-  const household = buildHouseholdItem(context, householdId, input, members, deps, existing);
+  const household = buildHouseholdItem(
+    context,
+    householdId,
+    input,
+    members,
+    deps,
+    existing,
+  );
   if (household.addressKey) {
-    const existingHousehold = await getHouseholdByAddressKey(context, household.addressKey, deps);
+    const existingHousehold = await getHouseholdByAddressKey(
+      context,
+      household.addressKey,
+      deps,
+    );
     if (existingHousehold && existingHousehold.householdId !== householdId) {
       throw new HttpError(409, "A household already exists for this address.");
     }
   }
 
-  const existingMembers = existing ? await listMembersByHouseholdId(context, householdId, deps) : [];
+  const existingMembers = existing
+    ? await listMembersByHouseholdId(context, householdId, deps)
+    : [];
   const nextIds = new Set(memberIds);
   const priorHouseholdIds = new Set<string>();
   for (const member of members) {
     if (member.householdId && member.householdId !== householdId) {
       if (!options.allowReassign) {
-        throw new HttpError(409, `${member.fullName} already belongs to another household.`);
+        throw new HttpError(
+          409,
+          `${member.fullName} already belongs to another household.`,
+        );
       }
       priorHouseholdIds.add(member.householdId);
     }
   }
 
-  const tagWrites = await tagAssignmentWrites(context, household, existing, deps);
+  const tagWrites = await tagAssignmentWrites(
+    context,
+    household,
+    existing,
+    deps,
+  );
   const transactItems: Array<Record<string, unknown>> = [
-    { Put: { Item: household, TableName: context.tableName, ...tagSnapshotGuard(existing?.tagIds) } },
+    {
+      Put: {
+        Item: household,
+        TableName: context.tableName,
+        ...tagSnapshotGuard(existing?.tagIds),
+      },
+    },
     ...tagWrites,
   ];
 
@@ -4703,8 +6405,14 @@ const updateHouseholdMembership = async (
       continue;
     }
 
-    const priorMembership = await listMembersByHouseholdId(context, priorHouseholdId, deps);
-    const remainingMembers = priorMembership.filter((item) => !memberIds.includes(item.memberId));
+    const priorMembership = await listMembersByHouseholdId(
+      context,
+      priorHouseholdId,
+      deps,
+    );
+    const remainingMembers = priorMembership.filter(
+      (item) => !memberIds.includes(item.memberId),
+    );
     const updatedPriorHousehold = buildHouseholdItem(
       context,
       priorHouseholdId,
@@ -4716,7 +6424,8 @@ const updateHouseholdMembership = async (
         location: priorHousehold.location,
         areaId: priorHousehold.areaId,
         primaryContactMemberId:
-          priorHousehold.primaryContactMemberId && memberIds.includes(priorHousehold.primaryContactMemberId)
+          priorHousehold.primaryContactMemberId &&
+          memberIds.includes(priorHousehold.primaryContactMemberId)
             ? undefined
             : priorHousehold.primaryContactMemberId,
       },
@@ -4794,8 +6503,15 @@ const updateHouseholdMembership = async (
 
   try {
     if (tagWrites.length) {
-      await deps.documentClient.send(new TransactWriteCommand({ TransactItems: transactItems.slice(0, 100) }));
-      await transactWriteInChunks(deps.documentClient, transactItems.slice(100));
+      await deps.documentClient.send(
+        new TransactWriteCommand({
+          TransactItems: transactItems.slice(0, 100),
+        }),
+      );
+      await transactWriteInChunks(
+        deps.documentClient,
+        transactItems.slice(100),
+      );
     } else {
       await transactWriteInChunks(deps.documentClient, transactItems);
     }
@@ -4824,7 +6540,11 @@ const updateHouseholdMembership = async (
   return household;
 };
 
-const putVisitationRecord = async (context: RequestContext, record: VisitationItem, deps: HandlerDependencies) => {
+const putVisitationRecord = async (
+  context: RequestContext,
+  record: VisitationItem,
+  deps: HandlerDependencies,
+) => {
   await deps.documentClient.send(
     new PutCommand({
       Item: record,
@@ -4837,19 +6557,26 @@ const persistManualVisitationGroup = async (
   context: RequestContext,
   visitationId: string,
   existing: VisitationItem[] | null,
-  input: CreateManualVisitationInput | Required<Pick<CreateManualVisitationInput, "title" | "visitDate" | "memberIds">> & {
-    type?: VisitationType;
-    location?: string;
-    notes?: string;
-    visitStatus?: string;
-    visitorUserId?: string;
-    visitorDisplayName?: string;
-  },
+  input:
+    | CreateManualVisitationInput
+    | (Required<
+        Pick<CreateManualVisitationInput, "title" | "visitDate" | "memberIds">
+      > & {
+        type?: VisitationType;
+        location?: string;
+        notes?: string;
+        visitStatus?: string;
+        visitorUserId?: string;
+        visitorDisplayName?: string;
+      }),
   deps: HandlerDependencies,
 ) => {
   const members = await loadMembersByIds(context, input.memberIds, deps);
   if (members.length !== normalizeMemberIds(input.memberIds).length) {
-    throw new HttpError(400, "One or more selected members could not be found.");
+    throw new HttpError(
+      400,
+      "One or more selected members could not be found.",
+    );
   }
 
   const memberIds = members.map((member) => member.memberId);
@@ -4857,10 +6584,20 @@ const persistManualVisitationGroup = async (
   const createdAt = existing?.[0]?.createdAt ?? deps.now();
   const createdByUserId = existing?.[0]?.createdByUserId ?? context.actorSub;
   const createdByName = existing?.[0]?.createdByName ?? context.actorName;
-  const visitorUserId = toOptionalString(input.visitorUserId) ?? existing?.[0]?.visitorUserId ?? context.actorSub;
-  const visitorDisplayName = toOptionalString(input.visitorDisplayName) ?? existing?.[0]?.visitorDisplayName ?? context.actorName;
-  const existingByMemberId = new Map((existing ?? []).map((item) => [item.memberId, item]));
-  const visitationType = normalizeVisitationType(input.type ?? existing?.[0]?.type);
+  const visitorUserId =
+    toOptionalString(input.visitorUserId) ??
+    existing?.[0]?.visitorUserId ??
+    context.actorSub;
+  const visitorDisplayName =
+    toOptionalString(input.visitorDisplayName) ??
+    existing?.[0]?.visitorDisplayName ??
+    context.actorName;
+  const existingByMemberId = new Map(
+    (existing ?? []).map((item) => [item.memberId, item]),
+  );
+  const visitationType = normalizeVisitationType(
+    input.type ?? existing?.[0]?.type,
+  );
 
   for (const record of existing ?? []) {
     await deps.documentClient.send(
@@ -4880,7 +6617,12 @@ const persistManualVisitationGroup = async (
       PK: tenantVisitationPk(context.tenantId, visitationId),
       SK: visitationMemberSk(member.memberId),
       GSI1PK: tenantPk(context.tenantId),
-      GSI1SK: tenantVisitationGsiSk(input.visitDate, visitorUserId, member.memberId, visitationId),
+      GSI1SK: tenantVisitationGsiSk(
+        input.visitDate,
+        visitorUserId,
+        member.memberId,
+        visitationId,
+      ),
       GSI2PK: tenantMemberPk(context.tenantId, member.memberId),
       GSI2SK: memberVisitationGsiSk(input.visitDate, visitationId),
       createdAt: existingRecord?.createdAt ?? createdAt,
@@ -4916,8 +6658,18 @@ const persistManualVisitationGroup = async (
   return await getVisitationGroup(context, visitationId, deps);
 };
 
-const deleteCachedEventOnly = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
-  await deleteEvent(context, event.userId, event.calendarId, event.eventId, deps);
+const deleteCachedEventOnly = async (
+  context: RequestContext,
+  event: EventItem,
+  deps: HandlerDependencies,
+) => {
+  await deleteEvent(
+    context,
+    event.userId,
+    event.calendarId,
+    event.eventId,
+    deps,
+  );
 };
 
 const deleteEventMemberAssignmentsForEvent = async (
@@ -4925,7 +6677,12 @@ const deleteEventMemberAssignmentsForEvent = async (
   event: Pick<EventItem, "calendarId" | "eventId">,
   deps: HandlerDependencies,
 ) => {
-  const existingMembers = await listEventMembers(context, event.calendarId, event.eventId, deps);
+  const existingMembers = await listEventMembers(
+    context,
+    event.calendarId,
+    event.eventId,
+    deps,
+  );
   for (const member of existingMembers) {
     await deps.documentClient.send(
       new DeleteCommand({
@@ -4939,15 +6696,27 @@ const deleteEventMemberAssignmentsForEvent = async (
   }
 };
 
-const deleteStoredEvent = async (context: RequestContext, event: EventItem, deps: HandlerDependencies) => {
+const deleteStoredEvent = async (
+  context: RequestContext,
+  event: EventItem,
+  deps: HandlerDependencies,
+) => {
   await deleteCachedEventOnly(context, event, deps);
   await deleteEventMemberAssignmentsForEvent(context, event, deps);
-  const visitationRecords = await listVisitationsForEvent(context, event.calendarId, event.eventId, deps);
+  const visitationRecords = await listVisitationsForEvent(
+    context,
+    event.calendarId,
+    event.eventId,
+    deps,
+  );
   for (const record of visitationRecords) {
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
-          PK: tenantVisitationPk(context.tenantId, eventVisitationId(event.calendarId, event.eventId)),
+          PK: tenantVisitationPk(
+            context.tenantId,
+            eventVisitationId(event.calendarId, event.eventId),
+          ),
           SK: visitationMemberSk(record.memberId),
         },
         TableName: context.tableName,
@@ -4956,7 +6725,10 @@ const deleteStoredEvent = async (context: RequestContext, event: EventItem, deps
   }
 };
 
-const listAuditLogs = async (context: RequestContext, deps: HandlerDependencies) => {
+const listAuditLogs = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const items = await queryAll(deps.documentClient, {
     ExpressionAttributeNames: {
       "#pk": "PK",
@@ -5005,7 +6777,8 @@ const scanTenantItemsByEntityTypes = async (
   return items as BaseItem[];
 };
 
-const toDeleteKeys = (items: Array<Pick<BaseItem, "PK" | "SK">>) => items.map((item) => ({ PK: item.PK, SK: item.SK }));
+const toDeleteKeys = (items: Array<Pick<BaseItem, "PK" | "SK">>) =>
+  items.map((item) => ({ PK: item.PK, SK: item.SK }));
 
 const countEntityTypes = (items: BaseItem[]) =>
   items.reduce<Record<string, number>>((accumulator, item) => {
@@ -5018,7 +6791,10 @@ const buildResetSummary = (
   affectedEntities: Record<string, number>,
 ): AdminResetSummary => ({
   action,
-  recordsDeleted: Object.values(affectedEntities).reduce((total, value) => total + value, 0),
+  recordsDeleted: Object.values(affectedEntities).reduce(
+    (total, value) => total + value,
+    0,
+  ),
   affectedEntities: Object.entries(affectedEntities)
     .filter(([, deleted]) => deleted > 0)
     .map(([entityType, deleted]) => ({ entityType, deleted }))
@@ -5026,17 +6802,34 @@ const buildResetSummary = (
   status: "success",
 });
 
-const resetGoogleCachedEvents = async (context: RequestContext, deps: HandlerDependencies) => {
-  const records = await scanTenantItemsByEntityTypes(context, ["schedule_event", "EVENT_MEMBER", "VISITATION"], deps);
-  const eventRecords = records.filter((item): item is EventItem => item.entityType === "schedule_event");
-  const assignmentRecords = records.filter((item): item is EventMemberItem => item.entityType === "EVENT_MEMBER");
+const resetGoogleCachedEvents = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
+  const records = await scanTenantItemsByEntityTypes(
+    context,
+    ["schedule_event", "EVENT_MEMBER", "VISITATION"],
+    deps,
+  );
+  const eventRecords = records.filter(
+    (item): item is EventItem => item.entityType === "schedule_event",
+  );
+  const assignmentRecords = records.filter(
+    (item): item is EventMemberItem => item.entityType === "EVENT_MEMBER",
+  );
   const visitationRecords = records.filter(
-    (item): item is VisitationItem => item.entityType === "VISITATION" && (item as VisitationItem).source === "calendar",
+    (item): item is VisitationItem =>
+      item.entityType === "VISITATION" &&
+      (item as VisitationItem).source === "calendar",
   );
 
   await deleteItemsInBatches(
     context,
-    [...toDeleteKeys(eventRecords), ...toDeleteKeys(assignmentRecords), ...toDeleteKeys(visitationRecords)],
+    [
+      ...toDeleteKeys(eventRecords),
+      ...toDeleteKeys(assignmentRecords),
+      ...toDeleteKeys(visitationRecords),
+    ],
     deps,
   );
 
@@ -5047,7 +6840,10 @@ const resetGoogleCachedEvents = async (context: RequestContext, deps: HandlerDep
   });
 };
 
-const resetGoogleConnections = async (context: RequestContext, deps: HandlerDependencies) => {
+const resetGoogleConnections = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const records = await scanTenantItemsByEntityTypes(
     context,
     [
@@ -5061,16 +6857,23 @@ const resetGoogleConnections = async (context: RequestContext, deps: HandlerDepe
     ],
     deps,
   );
-  const eventRecords = records.filter((item): item is EventItem => item.entityType === "schedule_event");
-  const assignmentRecords = records.filter((item): item is EventMemberItem => item.entityType === "EVENT_MEMBER");
-  const visitationRecords = records.filter(
-    (item): item is VisitationItem => item.entityType === "VISITATION" && (item as VisitationItem).source === "calendar",
+  const eventRecords = records.filter(
+    (item): item is EventItem => item.entityType === "schedule_event",
   );
-  const connectionRecords = records.filter((item) =>
-    item.entityType === "google_connection" ||
-    item.entityType === "schedule_calendar" ||
-    item.entityType === "schedule_settings" ||
-    item.entityType === "oauth_state"
+  const assignmentRecords = records.filter(
+    (item): item is EventMemberItem => item.entityType === "EVENT_MEMBER",
+  );
+  const visitationRecords = records.filter(
+    (item): item is VisitationItem =>
+      item.entityType === "VISITATION" &&
+      (item as VisitationItem).source === "calendar",
+  );
+  const connectionRecords = records.filter(
+    (item) =>
+      item.entityType === "google_connection" ||
+      item.entityType === "schedule_calendar" ||
+      item.entityType === "schedule_settings" ||
+      item.entityType === "oauth_state",
   );
   const groupedCounts = countEntityTypes([
     ...eventRecords,
@@ -5093,32 +6896,50 @@ const resetGoogleConnections = async (context: RequestContext, deps: HandlerDepe
   return buildResetSummary("google_connections", groupedCounts);
 };
 
-const resetVisitations = async (context: RequestContext, deps: HandlerDependencies) => {
+const resetVisitations = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const visitations = await listTenantVisitations(context, deps);
-  await deleteItemsInBatches(
-    context,
-    toDeleteKeys(visitations),
-    deps,
-  );
+  await deleteItemsInBatches(context, toDeleteKeys(visitations), deps);
 
   return buildResetSummary("visitations", { VISITATION: visitations.length });
 };
 
-const resetMembers = async (context: RequestContext, deps: HandlerDependencies) => {
+const resetMembers = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const records = await scanTenantItemsByEntityTypes(
     context,
     ["MEMBER", "MEMBER_ACTIVITY", "HOUSEHOLD"],
     deps,
   );
-  const members = records.filter((item): item is MemberItem => item.entityType === "MEMBER");
-  const memberActivities = records.filter((item): item is MemberActivityItem => item.entityType === "MEMBER_ACTIVITY");
-  const households = records.filter((item): item is HouseholdItem => item.entityType === "HOUSEHOLD");
+  const members = records.filter(
+    (item): item is MemberItem => item.entityType === "MEMBER",
+  );
+  const memberActivities = records.filter(
+    (item): item is MemberActivityItem => item.entityType === "MEMBER_ACTIVITY",
+  );
+  const households = records.filter(
+    (item): item is HouseholdItem => item.entityType === "HOUSEHOLD",
+  );
   let tagAssignments = 0;
   for (const entity of [...members, ...households]) {
     tagAssignments += entity.tagIds?.length ?? 0;
-    if (entity.tagIds?.length) await persistTaggedEntity(context, { ...entity, tagIds: [] }, entity, deps);
+    if (entity.tagIds?.length)
+      await persistTaggedEntity(
+        context,
+        { ...entity, tagIds: [] },
+        entity,
+        deps,
+      );
   }
-  await deleteItemsInBatches(context, [...toDeleteKeys(members), ...toDeleteKeys(memberActivities)], deps);
+  await deleteItemsInBatches(
+    context,
+    [...toDeleteKeys(members), ...toDeleteKeys(memberActivities)],
+    deps,
+  );
   await deleteItemsInBatches(context, toDeleteKeys(households), deps);
 
   return buildResetSummary("members", {
@@ -5129,20 +6950,22 @@ const resetMembers = async (context: RequestContext, deps: HandlerDependencies) 
   });
 };
 
-const resetAuditLogs = async (context: RequestContext, deps: HandlerDependencies) => {
+const resetAuditLogs = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const auditLogs = await listAuditLogs(context, deps);
-  await deleteItemsInBatches(
-    context,
-    toDeleteKeys(auditLogs),
-    deps,
-  );
+  await deleteItemsInBatches(context, toDeleteKeys(auditLogs), deps);
 
   return buildResetSummary("audit_logs", {
     AUDIT_LOG: auditLogs.length,
   });
 };
 
-const resetEntireTenant = async (context: RequestContext, deps: HandlerDependencies) => {
+const resetEntireTenant = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const [tenantRecords, geocodeCacheRecords] = await Promise.all([
     scanAll(deps.documentClient, {
       ExpressionAttributeNames: {
@@ -5165,23 +6988,29 @@ const resetEntireTenant = async (context: RequestContext, deps: HandlerDependenc
       TableName: context.tableName,
     }),
   ]);
-  const records = [...tenantRecords as BaseItem[], ...geocodeCacheRecords as BaseItem[]];
+  const records = [
+    ...(tenantRecords as BaseItem[]),
+    ...(geocodeCacheRecords as BaseItem[]),
+  ];
 
-  const groupedCounts = records.reduce<Record<string, number>>((accumulator, item) => {
-    accumulator[item.entityType] = (accumulator[item.entityType] ?? 0) + 1;
-    return accumulator;
-  }, {});
-
-  await deleteItemsInBatches(
-    context,
-    toDeleteKeys(records),
-    deps,
+  const groupedCounts = records.reduce<Record<string, number>>(
+    (accumulator, item) => {
+      accumulator[item.entityType] = (accumulator[item.entityType] ?? 0) + 1;
+      return accumulator;
+    },
+    {},
   );
+
+  await deleteItemsInBatches(context, toDeleteKeys(records), deps);
 
   return buildResetSummary("tenant_all", groupedCounts);
 };
 
-const deleteOAuthState = async (state: string, tableName: string, deps: HandlerDependencies) => {
+const deleteOAuthState = async (
+  state: string,
+  tableName: string,
+  deps: HandlerDependencies,
+) => {
   await deps.documentClient.send(
     new DeleteCommand({
       Key: {
@@ -5198,7 +7027,9 @@ const refreshGoogleAccessTokenIfNeeded = async (
   connection: GoogleConnectionItem,
   deps: HandlerDependencies,
 ) => {
-  const expiresAt = connection.tokenExpiresAt ? new Date(connection.tokenExpiresAt).getTime() : 0;
+  const expiresAt = connection.tokenExpiresAt
+    ? new Date(connection.tokenExpiresAt).getTime()
+    : 0;
   const now = Date.now();
 
   if (!expiresAt || expiresAt - now > 60_000) {
@@ -5261,7 +7092,11 @@ const googleFetch = async (
   deps: HandlerDependencies,
   init?: RequestInit,
 ) => {
-  const currentConnection = await refreshGoogleAccessTokenIfNeeded(context, connection, deps);
+  const currentConnection = await refreshGoogleAccessTokenIfNeeded(
+    context,
+    connection,
+    deps,
+  );
   if (!hasRequiredGoogleScopes(currentConnection.scopes)) {
     await markGoogleConnectionScopeError(context, currentConnection, deps);
     throw new HttpError(400, googleReconnectMessage);
@@ -5299,7 +7134,12 @@ const fetchGoogleCalendars = async (
   connection: GoogleConnectionItem,
   deps: HandlerDependencies,
 ) => {
-  const response = await googleFetch(context, connection, GOOGLE_CALENDAR_LIST_URL, deps);
+  const response = await googleFetch(
+    context,
+    connection,
+    GOOGLE_CALENDAR_LIST_URL,
+    deps,
+  );
   const payload = (await response.json()) as {
     items?: Array<{
       id: string;
@@ -5323,7 +7163,9 @@ const syncCalendarListFromGoogle = async (
 ) => {
   const now = deps.now();
   const existingCalendars = await listCalendars(context, deps);
-  const existingById = new Map(existingCalendars.map((calendar) => [calendar.calendarId, calendar]));
+  const existingById = new Map(
+    existingCalendars.map((calendar) => [calendar.calendarId, calendar]),
+  );
   const googleCalendars = await fetchGoogleCalendars(context, connection, deps);
 
   const syncedCalendars: CalendarItem[] = [];
@@ -5409,11 +7251,11 @@ const upsertGoogleEventIntoCache = async (
   const allDay = !googleEvent.start?.dateTime;
   const defaultStartDate = now.slice(0, 10);
   const start = allDay
-    ? googleEvent.start?.date ?? defaultStartDate
-    : googleEvent.start?.dateTime ?? `${defaultStartDate}T00:00:00.000Z`;
+    ? (googleEvent.start?.date ?? defaultStartDate)
+    : (googleEvent.start?.dateTime ?? `${defaultStartDate}T00:00:00.000Z`);
   const end = allDay
-    ? googleEvent.end?.date ?? shiftDateOnlyValue(start, 1)
-    : googleEvent.end?.dateTime ?? `${defaultStartDate}T23:59:59.999Z`;
+    ? (googleEvent.end?.date ?? shiftDateOnlyValue(start, 1))
+    : (googleEvent.end?.dateTime ?? `${defaultStartDate}T23:59:59.999Z`);
   const existing = await deps.documentClient.send(
     new GetCommand({
       Key: {
@@ -5424,19 +7266,35 @@ const upsertGoogleEventIntoCache = async (
     }),
   );
 
-  const existingItem = existingOverride ?? (existing.Item as EventItem | undefined);
-  const dismissedAutoLinkedMemberIds = normalizeMemberIds(existingItem?.dismissedAutoLinkedMemberIds);
-  const metadataMemberIds = parseGoogleMemberIds(googleEvent.extendedProperties?.private?.memberIds);
-  const memberIds = metadataMemberIds.length ? metadataMemberIds : normalizeMemberIds(existingItem?.memberIds);
-  const existingVisitations = await listVisitationsForEvent(context, calendar.calendarId, googleEvent.id, deps);
-  const existingVisitationMemberIds = [...new Set(existingVisitations.map((record) => record.memberId))];
+  const existingItem =
+    existingOverride ?? (existing.Item as EventItem | undefined);
+  const dismissedAutoLinkedMemberIds = normalizeMemberIds(
+    existingItem?.dismissedAutoLinkedMemberIds,
+  );
+  const metadataMemberIds = parseGoogleMemberIds(
+    googleEvent.extendedProperties?.private?.memberIds,
+  );
+  const memberIds = metadataMemberIds.length
+    ? metadataMemberIds
+    : normalizeMemberIds(existingItem?.memberIds);
+  const existingVisitations = await listVisitationsForEvent(
+    context,
+    calendar.calendarId,
+    googleEvent.id,
+    deps,
+  );
+  const existingVisitationMemberIds = [
+    ...new Set(existingVisitations.map((record) => record.memberId)),
+  ];
   const autoLinkedInteraction = existingVisitations.length
     ? {
         interactionType:
-          existingItem?.autoLinkedVisitationType
-          ?? (existingVisitations[0] ? normalizeVisitationType(existingVisitations[0].type) : undefined),
+          existingItem?.autoLinkedVisitationType ??
+          (existingVisitations[0]
+            ? normalizeVisitationType(existingVisitations[0].type)
+            : undefined),
         matchedMembers: (await listMembers(context, deps)).filter((member) =>
-          existingVisitationMemberIds.includes(member.memberId)
+          existingVisitationMemberIds.includes(member.memberId),
         ),
       }
     : await resolveAutoLinkedInteractionMembers(
@@ -5446,9 +7304,16 @@ const upsertGoogleEventIntoCache = async (
           eventId: googleEvent.id,
           googleEventId: googleEvent.id,
           summary: googleEvent.summary ?? "(Untitled event)",
-          attendees: normalizeAttendees((googleEvent.attendees ?? []).map((entry) => entry.email ?? "")),
-          ...(googleEvent.extendedProperties?.private?.source === "public_booking" && googleEvent.extendedProperties.private.visitorEmail
-            ? { bookingVisitorEmail: googleEvent.extendedProperties.private.visitorEmail }
+          attendees: normalizeAttendees(
+            (googleEvent.attendees ?? []).map((entry) => entry.email ?? ""),
+          ),
+          ...(googleEvent.extendedProperties?.private?.source ===
+            "public_booking" &&
+          googleEvent.extendedProperties.private.visitorEmail
+            ? {
+                bookingVisitorEmail:
+                  googleEvent.extendedProperties.private.visitorEmail,
+              }
             : {}),
         },
         deps,
@@ -5474,19 +7339,27 @@ const upsertGoogleEventIntoCache = async (
     summary: googleEvent.summary ?? "(Untitled event)",
     description: googleEvent.description,
     location: googleEvent.location,
-    attendees: normalizeAttendees((googleEvent.attendees ?? []).map((entry) => entry.email ?? "")),
+    attendees: normalizeAttendees(
+      (googleEvent.attendees ?? []).map((entry) => entry.email ?? ""),
+    ),
     start,
     end,
     allDay,
     status: googleEvent.status ?? "confirmed",
     source,
     htmlLink: googleEvent.htmlLink,
-    autoLinkedMemberIds: filteredAutoLinkedMembers.map((member) => member.memberId),
-    autoLinkedMemberNames: filteredAutoLinkedMembers.map((member) => member.fullName),
+    autoLinkedMemberIds: filteredAutoLinkedMembers.map(
+      (member) => member.memberId,
+    ),
+    autoLinkedMemberNames: filteredAutoLinkedMembers.map(
+      (member) => member.fullName,
+    ),
     dismissedAutoLinkedMemberIds,
     autoLinkedVisitationType: autoLinkedInteraction.interactionType,
     memberIds,
-    visitationType: memberIds.length ? normalizeVisitationType(existingItem?.visitationType) : undefined,
+    visitationType: memberIds.length
+      ? normalizeVisitationType(existingItem?.visitationType)
+      : undefined,
   };
   return await persistEventWithMemberAssignments(
     context,
@@ -5508,7 +7381,10 @@ const applyFullSync = async (
   connection: GoogleConnectionItem,
   deps: HandlerDependencies,
 ) => {
-  const syncRange = normalizeInitialSyncRange(calendar.sync.initialSyncRange, deps.now());
+  const syncRange = normalizeInitialSyncRange(
+    calendar.sync.initialSyncRange,
+    deps.now(),
+  );
   const { timeMin, timeMax } = buildInitialSyncWindow(syncRange);
   const params = new URLSearchParams({
     singleEvents: "true",
@@ -5520,8 +7396,14 @@ const applyFullSync = async (
     params.set("timeMax", timeMax);
   }
 
-  const allExisting = await listAllEventsForCalendar(context, calendar.calendarId, deps);
-  const existingByEventId = new Map(allExisting.map((event) => [event.eventId, event]));
+  const allExisting = await listAllEventsForCalendar(
+    context,
+    calendar.calendarId,
+    deps,
+  );
+  const existingByEventId = new Map(
+    allExisting.map((event) => [event.eventId, event]),
+  );
   const seenEventIds = new Set<string>();
 
   let pageToken = "";
@@ -5557,7 +7439,14 @@ const applyFullSync = async (
         continue;
       }
 
-      await upsertGoogleEventIntoCache(context, calendar, event, "GOOGLE", existingByEventId.get(event.id), deps);
+      await upsertGoogleEventIntoCache(
+        context,
+        calendar,
+        event,
+        "GOOGLE",
+        existingByEventId.get(event.id),
+        deps,
+      );
     }
 
     pageToken = payload.nextPageToken ?? "";
@@ -5570,7 +7459,13 @@ const applyFullSync = async (
     }
   }
 
-  const cachedEvents = await listEventsForCalendar(context, calendar.calendarId, timeMin, timeMax, deps);
+  const cachedEvents = await listEventsForCalendar(
+    context,
+    calendar.calendarId,
+    timeMin,
+    timeMax,
+    deps,
+  );
   return {
     cachedEvents,
     syncToken: nextSyncToken,
@@ -5613,12 +7508,24 @@ const applyIncrementalSync = async (
 
     for (const event of payload.items ?? []) {
       if (event.status === "cancelled") {
-        const existingEvent = await getEvent(context, calendar.calendarId, event.id, deps);
+        const existingEvent = await getEvent(
+          context,
+          calendar.calendarId,
+          event.id,
+          deps,
+        );
         if (existingEvent) {
           await deleteStoredEvent(context, existingEvent, deps);
         }
       } else {
-        await upsertGoogleEventIntoCache(context, calendar, event, "GOOGLE", undefined, deps);
+        await upsertGoogleEventIntoCache(
+          context,
+          calendar,
+          event,
+          "GOOGLE",
+          undefined,
+          deps,
+        );
       }
     }
 
@@ -5626,8 +7533,16 @@ const applyIncrementalSync = async (
     nextSyncToken = payload.nextSyncToken ?? nextSyncToken;
   } while (pageToken);
 
-  const syncWindow = buildInitialSyncWindow(normalizeInitialSyncRange(calendar.sync.initialSyncRange, deps.now()));
-  const cachedEvents = await listEventsForCalendar(context, calendar.calendarId, syncWindow.timeMin, syncWindow.timeMax, deps);
+  const syncWindow = buildInitialSyncWindow(
+    normalizeInitialSyncRange(calendar.sync.initialSyncRange, deps.now()),
+  );
+  const cachedEvents = await listEventsForCalendar(
+    context,
+    calendar.calendarId,
+    syncWindow.timeMin,
+    syncWindow.timeMax,
+    deps,
+  );
   return {
     cachedEvents,
     syncToken: nextSyncToken,
@@ -5684,8 +7599,10 @@ const refreshCalendarEvents = async (
       source: "GOOGLE" as SyncSource,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown sync error.";
-    const recoverable = message.includes("Sync token") || message.includes("410");
+    const message =
+      error instanceof Error ? error.message : "Unknown sync error.";
+    const recoverable =
+      message.includes("Sync token") || message.includes("410");
     if (recoverable) {
       const resetCalendar: CalendarItem = {
         ...calendar,
@@ -5730,7 +7647,13 @@ const getCachedCalendarEvents = async (
   timeMax: string | undefined,
   deps: HandlerDependencies,
 ) => {
-  const events = await listEventsForCalendar(context, calendar.calendarId, timeMin, timeMax, deps);
+  const events = await listEventsForCalendar(
+    context,
+    calendar.calendarId,
+    timeMin,
+    timeMax,
+    deps,
+  );
   const now = deps.now();
   const updatedCalendar: CalendarItem = {
     ...calendar,
@@ -5738,7 +7661,8 @@ const getCachedCalendarEvents = async (
     sync: {
       ...calendar.sync,
       lastSyncSource: "CACHE",
-      lastSyncStatus: calendar.sync.lastSyncStatus === "error" ? "error" : "success",
+      lastSyncStatus:
+        calendar.sync.lastSyncStatus === "error" ? "error" : "success",
     },
   };
 
@@ -5769,7 +7693,8 @@ const syncSelectedCalendars = async (
       (options.calendarIds?.length
         ? options.calendarIds.includes(calendar.calendarId)
         : calendar.selected) &&
-      (!options.calendarIds?.length || options.calendarIds.includes(calendar.calendarId)),
+      (!options.calendarIds?.length ||
+        options.calendarIds.includes(calendar.calendarId)),
   );
 
   if (!calendars.length) {
@@ -5783,7 +7708,8 @@ const syncSelectedCalendars = async (
   const results: SyncResult[] = [];
 
   for (const calendar of calendars) {
-    const refreshNeeded = !options.cacheOnly && shouldRefreshCalendar(calendar, options.forceSync);
+    const refreshNeeded =
+      !options.cacheOnly && shouldRefreshCalendar(calendar, options.forceSync);
     if (refreshNeeded) {
       if (!connection) {
         throw new Error("Connect Google Calendar before running a sync.");
@@ -5800,7 +7726,15 @@ const syncSelectedCalendars = async (
         ),
       );
     } else {
-      results.push(await getCachedCalendarEvents(context, calendar, options.timeMin, options.timeMax, deps));
+      results.push(
+        await getCachedCalendarEvents(
+          context,
+          calendar,
+          options.timeMin,
+          options.timeMax,
+          deps,
+        ),
+      );
     }
   }
 
@@ -5822,7 +7756,9 @@ const parseTagIds = (value: unknown): string[] => {
   if (
     !Array.isArray(value) ||
     value.length > 20 ||
-    value.some((id) => typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))
+    value.some(
+      (id) => typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(id),
+    )
   ) {
     throw new HttpError(400, "Select up to 20 valid tags.");
   }
@@ -5833,28 +7769,53 @@ const parseTagMode = (value: unknown): "any" | "all" => {
     throw new HttpError(400, "Tag match mode must be any or all.");
   return value === "all" ? "all" : "any";
 };
-const parseTagFilters = (params: Record<string, string | undefined>): TagFilters => ({
+const parseTagFilters = (
+  params: Record<string, string | undefined>,
+): TagFilters => ({
   tagIds: parseTagIds(params.tagIds?.split(",").filter(Boolean)),
   tagMatchMode: parseTagMode(params.tagMatchMode),
 });
-const tagKey = (context: RequestContext, id: string) => ({ PK: tenantPk(context.tenantId), SK: `TAG#${id}` });
+const tagKey = (context: RequestContext, id: string) => ({
+  PK: tenantPk(context.tenantId),
+  SK: `TAG#${id}`,
+});
 const tagNameKey = (context: RequestContext, name: string) => ({
   PK: tenantPk(context.tenantId),
   SK: `TAG_NAME#${name}`,
 });
-const tagPartition = (context: RequestContext, id: string) => `${tenantPk(context.tenantId)}#TAG#${id}`;
-const toTag = ({ PK: _pk, SK: _sk, revision: _revision, ...tag }: TagItem): Tag => tag;
-const getTag = async (context: RequestContext, id: string, deps: HandlerDependencies) => {
+const tagPartition = (context: RequestContext, id: string) =>
+  `${tenantPk(context.tenantId)}#TAG#${id}`;
+const toTag = ({
+  PK: _pk,
+  SK: _sk,
+  revision: _revision,
+  ...tag
+}: TagItem): Tag => tag;
+const getTag = async (
+  context: RequestContext,
+  id: string,
+  deps: HandlerDependencies,
+) => {
   const result = await deps.documentClient.send(
-    new GetCommand({ TableName: context.tableName, Key: tagKey(context, id), ConsistentRead: true }),
+    new GetCommand({
+      TableName: context.tableName,
+      Key: tagKey(context, id),
+      ConsistentRead: true,
+    }),
   );
   return result.Item as TagItem | undefined;
 };
-const normalizeTagInput = (input: TagInput): TagInput & { normalizedName: string } => {
-  if (typeof input.name !== "string") throw new HttpError(400, "Tag name is required.");
+const normalizeTagInput = (
+  input: TagInput,
+): TagInput & { normalizedName: string } => {
+  if (typeof input.name !== "string")
+    throw new HttpError(400, "Tag name is required.");
   const name = input.name.normalize("NFKC").trim().replace(/\s+/g, " ");
   if (!name || name.length > 60 || /[\x00-\x1f\x7f]/.test(name))
-    throw new HttpError(400, "Tag name must contain 1–60 printable characters.");
+    throw new HttpError(
+      400,
+      "Tag name must contain 1–60 printable characters.",
+    );
   if (!["member", "household", "both"].includes(input.target))
     throw new HttpError(400, "Invalid tag target.");
   if (input.active !== undefined && typeof input.active !== "boolean")
@@ -5890,20 +7851,28 @@ const handleTags = async (
       TableName: context.tableName,
       ConsistentRead: true,
       KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
-      ExpressionAttributeValues: { ":pk": tenantPk(context.tenantId), ":prefix": "TAG#" },
+      ExpressionAttributeValues: {
+        ":pk": tenantPk(context.tenantId),
+        ":prefix": "TAG#",
+      },
     });
     return json(200, {
       items: (items as TagItem[])
         .filter(
           (tag) =>
-            (event.queryStringParameters?.includeInactive === "true" || tag.active) &&
+            (event.queryStringParameters?.includeInactive === "true" ||
+              tag.active) &&
             (!target || tag.target === target || tag.target === "both"),
         )
         .map(toTag)
         .sort((a, b) => a.name.localeCompare(b.name)),
     });
   }
-  await requireAdminContext(context, deps, `admin.tags.${method.toLowerCase()}`);
+  await requireAdminContext(
+    context,
+    deps,
+    `admin.tags.${method.toLowerCase()}`,
+  );
   const existing = id ? await getTag(context, id, deps) : undefined;
   if (id && !existing) throw new HttpError(404, "Tag not found.");
   if (method === "DELETE" && existing) {
@@ -5922,32 +7891,49 @@ const handleTags = async (
               Delete: {
                 TableName: context.tableName,
                 Key: tagKey(context, existing.tagId),
-                ConditionExpression: "assignmentCount = :zero AND revision = :version",
-                ExpressionAttributeValues: { ":zero": 0, ":version": existing.revision },
+                ConditionExpression:
+                  "assignmentCount = :zero AND revision = :version",
+                ExpressionAttributeValues: {
+                  ":zero": 0,
+                  ":version": existing.revision,
+                },
               },
             },
-            { Delete: { TableName: context.tableName, Key: tagNameKey(context, existing.normalizedName) } },
+            {
+              Delete: {
+                TableName: context.tableName,
+                Key: tagNameKey(context, existing.normalizedName),
+              },
+            },
           ],
         }),
       );
     } catch (error) {
       if (isDynamoCancellationError(error))
-        throw new HttpError(409, "The tag changed or was assigned while deleting. Refresh and try again.");
+        throw new HttpError(
+          409,
+          "The tag changed or was assigned while deleting. Refresh and try again.",
+        );
       throw error;
     }
     return json(200, { deleted: true });
   }
-  if ((method !== "POST" || id) && (method !== "PUT" || !id)) throw new HttpError(405, "Method not allowed.");
+  if ((method !== "POST" || id) && (method !== "PUT" || !id))
+    throw new HttpError(405, "Method not allowed.");
   let raw: TagInput;
   try {
     raw = parseBody<TagInput>(event.body);
   } catch {
     throw new HttpError(400, "Invalid JSON body.");
   }
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "Invalid tag input.");
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    throw new HttpError(400, "Invalid tag input.");
   const input = normalizeTagInput({ ...existing, ...raw });
   if (existing && existing.target !== input.target && existing.assignmentCount)
-    throw new HttpError(409, "Remove assignments before changing the tag target.");
+    throw new HttpError(
+      409,
+      "Remove assignments before changing the tag target.",
+    );
   const tagId = existing?.tagId ?? deps.uuid();
   const timestamp = deps.now();
   const item: TagItem = {
@@ -5997,11 +7983,16 @@ const handleTags = async (
     });
     if (existing)
       writes.push({
-        Delete: { TableName: context.tableName, Key: tagNameKey(context, existing.normalizedName) },
+        Delete: {
+          TableName: context.tableName,
+          Key: tagNameKey(context, existing.normalizedName),
+        },
       });
   }
   try {
-    await deps.documentClient.send(new TransactWriteCommand({ TransactItems: writes }));
+    await deps.documentClient.send(
+      new TransactWriteCommand({ TransactItems: writes }),
+    );
   } catch (error) {
     if (isDynamoCancellationError(error))
       throw new HttpError(
@@ -6016,8 +8007,13 @@ const handleTags = async (
 // Every full entity write guards its tag snapshot, including imports and moves.
 // This prevents an unrelated stale write from undoing a concurrent tag edit.
 const tagSnapshotGuard = (ids: string[] | undefined) => ({
-  ConditionExpression: ids === undefined ? "attribute_not_exists(tagIds)" : "tagIds = :previousTags",
-  ...(ids === undefined ? {} : { ExpressionAttributeValues: { ":previousTags": ids } }),
+  ConditionExpression:
+    ids === undefined
+      ? "attribute_not_exists(tagIds)"
+      : "tagIds = :previousTags",
+  ...(ids === undefined
+    ? {}
+    : { ExpressionAttributeValues: { ":previousTags": ids } }),
 });
 const tagAssignmentWrites = async (
   context: RequestContext,
@@ -6031,9 +8027,19 @@ const tagAssignmentWrites = async (
   const target = entity.entityType === "MEMBER" ? "member" : "household";
   const added = next.filter((id) => !before.includes(id));
   const removed = before.filter((id) => !next.includes(id));
-  const definitions = await Promise.all(added.map((id) => getTag(context, id, deps)));
-  if (definitions.some((tag) => !tag || !tag.active || (tag.target !== target && tag.target !== "both")))
-    throw new HttpError(400, "One or more tags are missing, inactive, or do not apply to this entity.");
+  const definitions = await Promise.all(
+    added.map((id) => getTag(context, id, deps)),
+  );
+  if (
+    definitions.some(
+      (tag) =>
+        !tag || !tag.active || (tag.target !== target && tag.target !== "both"),
+    )
+  )
+    throw new HttpError(
+      400,
+      "One or more tags are missing, inactive, or do not apply to this entity.",
+    );
   const writes: Array<Record<string, unknown>> = [];
   for (const id of [...added, ...removed]) {
     const adding = added.includes(id);
@@ -6045,7 +8051,14 @@ const tagAssignmentWrites = async (
         ConditionExpression: adding
           ? "attribute_exists(PK) AND #active = :active AND (#target = :target OR #target = :both)"
           : "attribute_exists(PK) AND assignmentCount > :zero",
-        ...(adding ? { ExpressionAttributeNames: { "#target": "target", "#active": "active" } } : {}),
+        ...(adding
+          ? {
+              ExpressionAttributeNames: {
+                "#target": "target",
+                "#active": "active",
+              },
+            }
+          : {}),
         ExpressionAttributeValues: adding
           ? { ":delta": 1, ":active": true, ":target": target, ":both": "both" }
           : { ":delta": -1, ":zero": 0 },
@@ -6080,13 +8093,22 @@ const persistTaggedEntity = async (
 ) => {
   const writes = await tagAssignmentWrites(context, entity, previous, deps);
   try {
-    const put = { TableName: context.tableName, Item: entity, ...tagSnapshotGuard(previous?.tagIds) };
+    const put = {
+      TableName: context.tableName,
+      Item: entity,
+      ...tagSnapshotGuard(previous?.tagIds),
+    };
     if (!writes.length) await deps.documentClient.send(new PutCommand(put));
     else
-      await deps.documentClient.send(new TransactWriteCommand({ TransactItems: [{ Put: put }, ...writes] }));
+      await deps.documentClient.send(
+        new TransactWriteCommand({ TransactItems: [{ Put: put }, ...writes] }),
+      );
   } catch (error) {
     if (isDynamoCancellationError(error))
-      throw new HttpError(409, "Tags changed while saving. Refresh and try again.");
+      throw new HttpError(
+        409,
+        "Tags changed while saving. Refresh and try again.",
+      );
     throw error;
   }
 };
@@ -6095,7 +8117,12 @@ const deleteTaggedEntity = async (
   entity: MemberItem | HouseholdItem,
   deps: HandlerDependencies,
 ) => {
-  const writes = await tagAssignmentWrites(context, { ...entity, tagIds: [] }, entity, deps);
+  const writes = await tagAssignmentWrites(
+    context,
+    { ...entity, tagIds: [] },
+    entity,
+    deps,
+  );
   const deletion = {
     TableName: context.tableName,
     Key: { PK: entity.PK, SK: entity.SK },
@@ -6104,12 +8131,17 @@ const deleteTaggedEntity = async (
   try {
     if (writes.length)
       await deps.documentClient.send(
-        new TransactWriteCommand({ TransactItems: [{ Delete: deletion }, ...writes] }),
+        new TransactWriteCommand({
+          TransactItems: [{ Delete: deletion }, ...writes],
+        }),
       );
     else await deps.documentClient.send(new DeleteCommand(deletion));
   } catch (error) {
     if (isDynamoCancellationError(error))
-      throw new HttpError(409, "Tags changed while deleting. Refresh and try again.");
+      throw new HttpError(
+        409,
+        "Tags changed while deleting. Refresh and try again.",
+      );
     throw error;
   }
 };
@@ -6126,16 +8158,23 @@ const taggedEntityIds = async (
         TableName: context.tableName,
         ConsistentRead: true,
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
-        ExpressionAttributeValues: { ":pk": tagPartition(context, id), ":prefix": `${target}#` },
+        ExpressionAttributeValues: {
+          ":pk": tagPartition(context, id),
+          ":prefix": `${target}#`,
+        },
       });
-      return new Set(items.map((item) => String(item.SK).slice(target.length + 1)));
+      return new Set(
+        items.map((item) => String(item.SK).slice(target.length + 1)),
+      );
     }),
   );
   return filters.tagMatchMode === "all"
-    ? new Set([...groups[0]].filter((id) => groups.every((group) => group.has(id))))
+    ? new Set(
+        [...groups[0]].filter((id) => groups.every((group) => group.has(id))),
+      )
     : new Set(groups.flatMap((group) => [...group]));
 };
-const loadTaggedEntities = async <T,>(
+const loadTaggedEntities = async <T>(
   context: RequestContext,
   ids: Set<string>,
   prefix: string,
@@ -6143,27 +8182,50 @@ const loadTaggedEntities = async <T,>(
 ): Promise<T[]> => {
   const items: T[] = [];
   for (const batch of chunkItems([...ids], 100)) {
-    let request: Record<string, { Keys: Record<string, string>[]; ConsistentRead?: boolean }> = {
+    let request: Record<
+      string,
+      { Keys: Record<string, string>[]; ConsistentRead?: boolean }
+    > = {
       [context.tableName]: {
-        Keys: batch.map((id) => ({ PK: tenantPk(context.tenantId), SK: `${prefix}#${id}` })),
+        Keys: batch.map((id) => ({
+          PK: tenantPk(context.tenantId),
+          SK: `${prefix}#${id}`,
+        })),
         ConsistentRead: true,
       },
     };
     for (let attempt = 0; Object.keys(request).length; attempt++) {
-      if (attempt === 6) throw new HttpError(503, "Tag results are temporarily unavailable. Please retry.");
-      const response = await deps.documentClient.send(new BatchGetCommand({ RequestItems: request }));
+      if (attempt === 6)
+        throw new HttpError(
+          503,
+          "Tag results are temporarily unavailable. Please retry.",
+        );
+      const response = await deps.documentClient.send(
+        new BatchGetCommand({ RequestItems: request }),
+      );
       items.push(...((response.Responses?.[context.tableName] ?? []) as T[]));
       request = (response.UnprocessedKeys ?? {}) as typeof request;
-      if (Object.keys(request).length) await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
+      if (Object.keys(request).length)
+        await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
     }
   }
   return items;
 };
-const taggedMembers = async (context: RequestContext, filters: TagFilters, deps: HandlerDependencies) => {
+const taggedMembers = async (
+  context: RequestContext,
+  filters: TagFilters,
+  deps: HandlerDependencies,
+) => {
   const ids = await taggedEntityIds(context, filters, "MEMBER", deps);
-  return ids ? loadTaggedEntities<MemberItem>(context, ids, "MEMBER", deps) : listMembers(context, deps);
+  return ids
+    ? loadTaggedEntities<MemberItem>(context, ids, "MEMBER", deps)
+    : listMembers(context, deps);
 };
-const taggedHouseholds = async (context: RequestContext, filters: TagFilters, deps: HandlerDependencies) => {
+const taggedHouseholds = async (
+  context: RequestContext,
+  filters: TagFilters,
+  deps: HandlerDependencies,
+) => {
   const ids = await taggedEntityIds(context, filters, "HOUSEHOLD", deps);
   return ids
     ? loadTaggedEntities<HouseholdItem>(context, ids, "HOUSEHOLD", deps)
@@ -6178,20 +8240,42 @@ const taggedReportMembers = async (
     taggedMembers(context, filters, deps),
     taggedEntityIds(
       context,
-      { tagIds: filters.householdTagIds, tagMatchMode: filters.householdTagMatchMode },
+      {
+        tagIds: filters.householdTagIds,
+        tagMatchMode: filters.householdTagMatchMode,
+      },
       "HOUSEHOLD",
       deps,
     ),
   ]);
   return householdIds
-    ? members.filter((member) => member.householdId && householdIds.has(member.householdId))
+    ? members.filter(
+        (member) => member.householdId && householdIds.has(member.householdId),
+      )
     : members;
 };
 
-const getMembers = async (context: RequestContext, deps: HandlerDependencies, event: APIGatewayProxyEventV2WithJWTAuthorizer) => {
-  const eligible = await taggedMembers(context, parseTagFilters(event.queryStringParameters ?? {}), deps);
+const getMembers = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+) => {
+  const allowed = await listAccessibleHouseholdIds(context, deps);
+  const eligible = (
+    await taggedMembers(
+      context,
+      parseTagFilters(event.queryStringParameters ?? {}),
+      deps,
+    )
+  ).filter(
+    (item) =>
+      allowed === undefined ||
+      Boolean(item.householdId && allowed.has(item.householdId)),
+  );
   const search = normalizeName(event.queryStringParameters?.q);
-  const items = search ? eligible.filter((item) => item.normalizedSearchText.includes(search)) : eligible;
+  const items = search
+    ? eligible.filter((item) => item.normalizedSearchText.includes(search))
+    : eligible;
   const response: MemberDirectoryResponse = {
     items: items.map(toMember),
     total: items.length,
@@ -6199,10 +8283,27 @@ const getMembers = async (context: RequestContext, deps: HandlerDependencies, ev
   return json(200, response);
 };
 
-const getMembersIndex = async (context: RequestContext, deps: HandlerDependencies, event: APIGatewayProxyEventV2WithJWTAuthorizer) => {
-  const eligible = await taggedMembers(context, parseTagFilters(event.queryStringParameters ?? {}), deps);
+const getMembersIndex = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+) => {
+  const allowed = await listAccessibleHouseholdIds(context, deps);
+  const eligible = (
+    await taggedMembers(
+      context,
+      parseTagFilters(event.queryStringParameters ?? {}),
+      deps,
+    )
+  ).filter(
+    (item) =>
+      allowed === undefined ||
+      Boolean(item.householdId && allowed.has(item.householdId)),
+  );
   const search = normalizeName(event.queryStringParameters?.q);
-  const items = search ? eligible.filter((item) => item.normalizedSearchText.includes(search)) : eligible;
+  const items = search
+    ? eligible.filter((item) => item.normalizedSearchText.includes(search))
+    : eligible;
   const response: MemberIndexResponse = {
     items: items.map(toMemberIndexItem),
     generatedAt: deps.now(),
@@ -6210,7 +8311,10 @@ const getMembersIndex = async (context: RequestContext, deps: HandlerDependencie
   return json(200, response);
 };
 
-const getHouseholdConflictsResponse = async (context: RequestContext, deps: HandlerDependencies) => {
+const getHouseholdConflictsResponse = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const items = await listHouseholdConflicts(context, deps);
   return json(200, {
     items: items.map(toHouseholdConflict),
@@ -6218,19 +8322,27 @@ const getHouseholdConflictsResponse = async (context: RequestContext, deps: Hand
   } satisfies HouseholdConflictListResponse);
 };
 
-const getMemberDetails = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+const getMemberDetails = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
   const member = await getMember(context, memberId, deps);
-  if (!member) {
+  if (!member || !(await canAccessMember(context, memberId, deps))) {
     return json(404, { message: "Member not found." });
   }
 
   const activity = await listMemberActivities(context, memberId, deps);
-  const household = member.householdId ? await getHousehold(context, member.householdId, deps) : null;
+  const household = member.householdId
+    ? await getHousehold(context, member.householdId, deps)
+    : null;
   const householdConflict = await getHouseholdConflict(context, memberId, deps);
   const response: MemberDetailResponse = {
     member: toMember(member),
     household: household ? toHouseholdSummary(household) : undefined,
-    householdConflict: householdConflict ? toHouseholdConflict(householdConflict) : undefined,
+    householdConflict: householdConflict
+      ? toHouseholdConflict(householdConflict)
+      : undefined,
     activity: activity.map(toMemberActivity),
   };
   return json(200, response);
@@ -6241,23 +8353,62 @@ const getHouseholds = async (
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
   deps: HandlerDependencies,
 ) => {
+  const allowed = await listAccessibleHouseholdIds(context, deps);
   const query = normalizeName(event.queryStringParameters?.q);
-  const limit = Math.min(100, Math.max(1, Number.parseInt(String(event.queryStringParameters?.limit ?? "25"), 10) || 25));
+  const limit = Math.min(
+    100,
+    Math.max(
+      1,
+      Number.parseInt(String(event.queryStringParameters?.limit ?? "25"), 10) ||
+        25,
+    ),
+  );
 
   const tagFilters = parseTagFilters(event.queryStringParameters ?? {});
   if (query || tagFilters.tagIds?.length) {
     const items = (await taggedHouseholds(context, tagFilters, deps))
+      .filter((item) => allowed === undefined || allowed.has(item.householdId))
       .filter((item) => !query || item.normalizedSearchText.includes(query))
-      .sort((a, b) => a.householdName.localeCompare(b.householdName) || a.householdId.localeCompare(b.householdId));
-    const offset = Number(decodeCursor(event.queryStringParameters?.cursor)?.offset ?? 0);
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new HttpError(400, "Invalid pagination cursor.");
+      .sort(
+        (a, b) =>
+          a.householdName.localeCompare(b.householdName) ||
+          a.householdId.localeCompare(b.householdId),
+      );
+    const offset = Number(
+      decodeCursor(event.queryStringParameters?.cursor)?.offset ?? 0,
+    );
+    if (!Number.isSafeInteger(offset) || offset < 0)
+      throw new HttpError(400, "Invalid pagination cursor.");
     return json(200, {
-      items: items.slice(offset, offset + limit).map((item) => toHouseholdSummary(item)),
+      items: items
+        .slice(offset, offset + limit)
+        .map((item) => toHouseholdSummary(item)),
       total: items.length,
-      nextCursor: offset + limit < items.length ? encodeCursor({ offset: offset + limit }) : undefined,
+      nextCursor:
+        offset + limit < items.length
+          ? encodeCursor({ offset: offset + limit })
+          : undefined,
     } satisfies HouseholdDirectoryResponse);
   }
 
+  if (allowed !== undefined) {
+    const items = (await listHouseholds(context, deps)).filter((item) =>
+      allowed.has(item.householdId),
+    );
+    const offset = Number(
+      decodeCursor(event.queryStringParameters?.cursor)?.offset ?? 0,
+    );
+    return json(200, {
+      items: items
+        .slice(offset, offset + limit)
+        .map((item) => toHouseholdSummary(item)),
+      total: items.length,
+      nextCursor:
+        offset + limit < items.length
+          ? encodeCursor({ offset: offset + limit })
+          : undefined,
+    } satisfies HouseholdDirectoryResponse);
+  }
   const page = await queryPage(deps.documentClient, {
     ExpressionAttributeNames: {
       "#gsiPk": "GSI4PK",
@@ -6290,15 +8441,23 @@ const getHouseholds = async (
     TableName: context.tableName,
   });
   return json(200, {
-    items: ((page.Items ?? []) as HouseholdItem[]).map((item) => toHouseholdSummary(item)),
-    nextCursor: encodeCursor(page.LastEvaluatedKey as Record<string, unknown> | undefined),
+    items: ((page.Items ?? []) as HouseholdItem[]).map((item) =>
+      toHouseholdSummary(item),
+    ),
+    nextCursor: encodeCursor(
+      page.LastEvaluatedKey as Record<string, unknown> | undefined,
+    ),
     total,
   } satisfies HouseholdDirectoryResponse);
 };
 
-const getHouseholdDetails = async (context: RequestContext, householdId: string, deps: HandlerDependencies) => {
+const getHouseholdDetails = async (
+  context: RequestContext,
+  householdId: string,
+  deps: HandlerDependencies,
+) => {
   const household = await getHousehold(context, householdId, deps);
-  if (!household) {
+  if (!household || !(await canAccessHousehold(context, householdId, deps))) {
     return json(404, { message: "Household not found." });
   }
 
@@ -6342,9 +8501,9 @@ const createHousehold = async (
   );
   const geocodingInput = shouldAutoGeocode
     ? {
-      ...input,
-      location: prepareAutoGeocodeLocation(),
-    }
+        ...input,
+        location: prepareAutoGeocodeLocation(),
+      }
     : input;
 
   const validationError = validateHouseholdInput(geocodingInput);
@@ -6353,25 +8512,48 @@ const createHousehold = async (
   }
 
   if (normalized.addressKey) {
-    const existing = await getHouseholdByAddressKey(context, normalized.addressKey, deps);
+    const existing = await getHouseholdByAddressKey(
+      context,
+      normalized.addressKey,
+      deps,
+    );
     if (existing) {
-      return json(409, { message: "A household already exists for this address." });
+      return json(409, {
+        message: "A household already exists for this address.",
+      });
     }
   }
   const householdId = buildAutoHouseholdId(normalized.addressKey, deps);
-  const household = await updateHouseholdMembership(context, householdId, geocodingInput, deps, null, options);
+  const household = await updateHouseholdMembership(
+    context,
+    householdId,
+    geocodingInput,
+    deps,
+    null,
+    options,
+  );
 
   let responseHousehold = household;
   if (shouldAutoGeocode) {
     try {
-      responseHousehold = await applyAutomaticHouseholdGeocoding(context, household, deps);
+      responseHousehold = await applyAutomaticHouseholdGeocoding(
+        context,
+        household,
+        deps,
+      );
     } catch (error) {
-      console.warn("[household-geocoding]", JSON.stringify({
-        action: "create",
-        addressKey: household.addressKey,
-        error: error instanceof Error ? error.message : "Unexpected geocoding error",
-        householdId: household.householdId,
-      }));
+      console.warn(
+        "[household-geocoding]",
+        JSON.stringify({
+          action: "create",
+          addressKey: household.addressKey,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unexpected geocoding error",
+          householdId: household.householdId,
+        }),
+      );
     }
   }
 
@@ -6400,7 +8582,8 @@ const updateHousehold = async (
     location: input.location ?? existing.location,
     areaId: input.areaId ?? existing.areaId,
     memberIds: input.memberIds ?? membership.map((member) => member.memberId),
-    primaryContactMemberId: input.primaryContactMemberId ?? existing.primaryContactMemberId,
+    primaryContactMemberId:
+      input.primaryContactMemberId ?? existing.primaryContactMemberId,
   };
   const nextNormalized = normalizeAddress({
     address: toOptionalString(merged.address),
@@ -6413,9 +8596,9 @@ const updateHousehold = async (
   );
   const geocodingInput = shouldAutoGeocode
     ? {
-      ...merged,
-      location: prepareAutoGeocodeLocation(existing),
-    }
+        ...merged,
+        location: prepareAutoGeocodeLocation(existing),
+      }
     : merged;
 
   const validationError = validateHouseholdInput(geocodingInput);
@@ -6423,26 +8606,46 @@ const updateHousehold = async (
     return json(400, { message: validationError });
   }
 
-  const household = await updateHouseholdMembership(context, householdId, geocodingInput, deps, existing);
+  const household = await updateHouseholdMembership(
+    context,
+    householdId,
+    geocodingInput,
+    deps,
+    existing,
+  );
 
   let responseHousehold = household;
   if (shouldAutoGeocode) {
     try {
-      responseHousehold = await applyAutomaticHouseholdGeocoding(context, household, deps);
+      responseHousehold = await applyAutomaticHouseholdGeocoding(
+        context,
+        household,
+        deps,
+      );
     } catch (error) {
-      console.warn("[household-geocoding]", JSON.stringify({
-        action: "update",
-        addressKey: household.addressKey,
-        error: error instanceof Error ? error.message : "Unexpected geocoding error",
-        householdId: household.householdId,
-      }));
+      console.warn(
+        "[household-geocoding]",
+        JSON.stringify({
+          action: "update",
+          addressKey: household.addressKey,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unexpected geocoding error",
+          householdId: household.householdId,
+        }),
+      );
     }
   }
 
   return json(200, toHouseholdSummary(responseHousehold));
 };
 
-const deleteHousehold = async (context: RequestContext, householdId: string, deps: HandlerDependencies) => {
+const deleteHousehold = async (
+  context: RequestContext,
+  householdId: string,
+  deps: HandlerDependencies,
+) => {
   const household = await getHousehold(context, householdId, deps);
   if (!household) {
     return json(404, { message: "Household not found." });
@@ -6451,6 +8654,55 @@ const deleteHousehold = async (context: RequestContext, householdId: string, dep
   const members = await listMembersByHouseholdId(context, householdId, deps);
   if (members.length > 0) {
     return json(400, { message: "Only empty households can be deleted." });
+  }
+
+  // Historical Outreach activities are retained as tenant audit/report records. Their
+  // household relation is removed so a deleted household cannot remain reachable via
+  // an active Outreach group.
+  const outreachAssignments =
+    await listOutreachAssignments<OutreachHouseholdAssignmentItem>(
+      outreachHouseholdAssignmentsPk(context.tenantId, householdId),
+      "OUTREACH_GROUP#",
+      context,
+      deps,
+    );
+  if (outreachAssignments.length) {
+    await transactWriteInChunks(
+      deps.documentClient,
+      outreachAssignments.flatMap((assignment) => [
+        {
+          Delete: {
+            TableName: context.tableName,
+            Key: { PK: assignment.PK, SK: assignment.SK },
+          },
+        },
+        {
+          Delete: {
+            TableName: context.tableName,
+            Key: {
+              PK: outreachGroupAssignmentsPk(
+                context.tenantId,
+                assignment.groupId,
+              ),
+              SK: outreachHouseholdAssignmentSk(householdId),
+            },
+          },
+        },
+      ]),
+    );
+    await logAuditEvent(
+      context,
+      "outreach.household_assignments_removed",
+      "success",
+      deps,
+      {
+        metadata: {
+          householdId,
+          groupIds: outreachAssignments.map((item) => item.groupId),
+          reason: "household_deleted",
+        },
+      },
+    );
   }
 
   await deleteTaggedEntity(context, household, deps);
@@ -6497,17 +8749,26 @@ const attachMemberToHousehold = async (
   }
   const membership = await listMembersByHouseholdId(context, householdId, deps);
 
-  const memberIds = [...new Set([...membership.map((entry) => entry.memberId), memberId])];
-  const updated = await updateHouseholdMembership(context, householdId, {
-    householdName: household.householdName,
-    address: household.address,
-    postalCode: household.postalCode,
-    notes: household.notes,
-    location: household.location,
-    areaId: household.areaId,
-    memberIds,
-    primaryContactMemberId: household.primaryContactMemberId,
-  }, deps, household, { allowReassign: true });
+  const memberIds = [
+    ...new Set([...membership.map((entry) => entry.memberId), memberId]),
+  ];
+  const updated = await updateHouseholdMembership(
+    context,
+    householdId,
+    {
+      householdName: household.householdName,
+      address: household.address,
+      postalCode: household.postalCode,
+      notes: household.notes,
+      location: household.location,
+      areaId: household.areaId,
+      memberIds,
+      primaryContactMemberId: household.primaryContactMemberId,
+    },
+    deps,
+    household,
+    { allowReassign: true },
+  );
 
   return json(200, toHouseholdSummary(updated));
 };
@@ -6524,18 +8785,28 @@ const removeMemberFromHousehold = async (
   }
   const membership = await listMembersByHouseholdId(context, householdId, deps);
 
-  const nextIds = membership.map((entry) => entry.memberId).filter((id) => id !== memberId);
-  const updated = await updateHouseholdMembership(context, householdId, {
-    householdName: household.householdName,
-    address: household.address,
-    postalCode: household.postalCode,
-    notes: household.notes,
-    location: household.location,
-    areaId: household.areaId,
-    memberIds: nextIds,
-    primaryContactMemberId:
-      household.primaryContactMemberId === memberId ? undefined : household.primaryContactMemberId,
-  }, deps, household);
+  const nextIds = membership
+    .map((entry) => entry.memberId)
+    .filter((id) => id !== memberId);
+  const updated = await updateHouseholdMembership(
+    context,
+    householdId,
+    {
+      householdName: household.householdName,
+      address: household.address,
+      postalCode: household.postalCode,
+      notes: household.notes,
+      location: household.location,
+      areaId: household.areaId,
+      memberIds: nextIds,
+      primaryContactMemberId:
+        household.primaryContactMemberId === memberId
+          ? undefined
+          : household.primaryContactMemberId,
+    },
+    deps,
+    household,
+  );
 
   return json(200, toHouseholdSummary(updated));
 };
@@ -6570,19 +8841,31 @@ const resolveHouseholdConflict = async (
   }
 
   if (input.action === "MOVE_TO_MATCHING_HOUSEHOLD") {
-    const matchedHouseholdId = conflict.matchedHouseholdId
-      ?? (await findHouseholdsByAddressMatch(
-        context,
-        conflict.importedAddress ?? member.address,
-        conflict.importedPostalCode ?? member.postalCode,
-        deps,
-      )).households.find((household) => household.householdId !== conflict.currentHouseholdId)?.householdId;
+    const matchedHouseholdId =
+      conflict.matchedHouseholdId ??
+      (
+        await findHouseholdsByAddressMatch(
+          context,
+          conflict.importedAddress ?? member.address,
+          conflict.importedPostalCode ?? member.postalCode,
+          deps,
+        )
+      ).households.find(
+        (household) => household.householdId !== conflict.currentHouseholdId,
+      )?.householdId;
 
     if (!matchedHouseholdId) {
-      return json(400, { message: "No matching household is available for this conflict." });
+      return json(400, {
+        message: "No matching household is available for this conflict.",
+      });
     }
 
-    const response = await attachMemberToHousehold(context, memberId, matchedHouseholdId, deps);
+    const response = await attachMemberToHousehold(
+      context,
+      memberId,
+      matchedHouseholdId,
+      deps,
+    );
     await deleteHouseholdConflict(context, memberId, deps);
     await logMemberActivity(
       context,
@@ -6605,13 +8888,25 @@ const resolveHouseholdConflict = async (
       : null;
 
     const response = existingHousehold
-      ? await attachMemberToHousehold(context, memberId, existingHousehold.householdId, deps)
-      : await createHousehold(context, {
-        householdName: buildAddressBasedHouseholdName(conflict.importedAddress ?? member.address),
-        address: conflict.importedAddress ?? member.address,
-        postalCode: conflict.importedPostalCode ?? member.postalCode,
-        memberIds: [memberId],
-      }, deps, { allowReassign: true });
+      ? await attachMemberToHousehold(
+          context,
+          memberId,
+          existingHousehold.householdId,
+          deps,
+        )
+      : await createHousehold(
+          context,
+          {
+            householdName: buildAddressBasedHouseholdName(
+              conflict.importedAddress ?? member.address,
+            ),
+            address: conflict.importedAddress ?? member.address,
+            postalCode: conflict.importedPostalCode ?? member.postalCode,
+            memberIds: [memberId],
+          },
+          deps,
+          { allowReassign: true },
+        );
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       await deleteHouseholdConflict(context, memberId, deps);
@@ -6636,7 +8931,11 @@ const resolveHouseholdConflict = async (
   return json(400, { message: "Unsupported resolution action." });
 };
 
-const createMember = async (context: RequestContext, input: CreateMemberInput, deps: HandlerDependencies) => {
+const createMember = async (
+  context: RequestContext,
+  input: CreateMemberInput,
+  deps: HandlerDependencies,
+) => {
   if (input.tagIds !== undefined) parseTagIds(input.tagIds);
   const validationError = validateMemberInput(input);
   if (validationError) {
@@ -6646,13 +8945,21 @@ const createMember = async (context: RequestContext, input: CreateMemberInput, d
   if (input.unityId) {
     const duplicate = await getMemberByUnityId(context, input.unityId, deps);
     if (duplicate) {
-      return json(409, { message: "A member with this Unity ID already exists." });
+      return json(409, {
+        message: "A member with this Unity ID already exists.",
+      });
     }
   }
 
   const member = buildMemberItem(context, input, deps, null);
   await persistTaggedEntity(context, member, undefined, deps);
-  await logMemberActivity(context, member.memberId, "Member Created", `${member.fullName} added.`, deps);
+  await logMemberActivity(
+    context,
+    member.memberId,
+    "Member Created",
+    `${member.fullName} added.`,
+    deps,
+  );
   return json(201, toMember(member));
 };
 
@@ -6668,7 +8975,11 @@ const updateMember = async (
     return json(404, { message: "Member not found." });
   }
 
-  const merged = { ...existing, ...input, fullName: input.fullName ?? existing.fullName };
+  const merged = {
+    ...existing,
+    ...input,
+    fullName: input.fullName ?? existing.fullName,
+  };
   const validationError = validateMemberInput(merged);
   if (validationError) {
     return json(400, { message: validationError });
@@ -6677,18 +8988,30 @@ const updateMember = async (
   if (input.unityId && input.unityId !== existing.unityId) {
     const duplicate = await getMemberByUnityId(context, input.unityId, deps);
     if (duplicate && duplicate.memberId !== memberId) {
-      return json(409, { message: "A member with this Unity ID already exists." });
+      return json(409, {
+        message: "A member with this Unity ID already exists.",
+      });
     }
   }
 
   const member = buildMemberItem(context, merged, deps, existing);
   member.notes = toOptionalString(existing.notes ?? input.notes);
   await persistTaggedEntity(context, member, existing, deps);
-  await logMemberActivity(context, member.memberId, "Member Updated", `${member.fullName} updated.`, deps);
+  await logMemberActivity(
+    context,
+    member.memberId,
+    "Member Updated",
+    `${member.fullName} updated.`,
+    deps,
+  );
   return json(200, toMember(member));
 };
 
-const deleteMember = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+const deleteMember = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
   const member = await getMember(context, memberId, deps);
   if (!member) {
     return json(404, { message: "Member not found." });
@@ -6697,26 +9020,41 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
   if (member.householdId) {
     const household = await getHousehold(context, member.householdId, deps);
     if (household) {
-      const householdMembers = await listMembersByHouseholdId(context, household.householdId, deps);
-      await updateHouseholdMembership(context, household.householdId, {
-        householdName: household.householdName,
-        address: household.address,
-        postalCode: household.postalCode,
-        notes: household.notes,
-        location: household.location,
-        areaId: household.areaId,
-        memberIds: householdMembers
-          .map((item) => item.memberId)
-          .filter((id) => id !== memberId),
-        primaryContactMemberId:
-          household.primaryContactMemberId === memberId ? undefined : household.primaryContactMemberId,
-      }, deps, household);
+      const householdMembers = await listMembersByHouseholdId(
+        context,
+        household.householdId,
+        deps,
+      );
+      await updateHouseholdMembership(
+        context,
+        household.householdId,
+        {
+          householdName: household.householdName,
+          address: household.address,
+          postalCode: household.postalCode,
+          notes: household.notes,
+          location: household.location,
+          areaId: household.areaId,
+          memberIds: householdMembers
+            .map((item) => item.memberId)
+            .filter((id) => id !== memberId),
+          primaryContactMemberId:
+            household.primaryContactMemberId === memberId
+              ? undefined
+              : household.primaryContactMemberId,
+        },
+        deps,
+        household,
+      );
     }
   }
 
   const eventLinks = await listMemberEvents(context, memberId, deps);
   const visitations = await listMemberVisitations(context, memberId, deps);
-  const affectedCalendarEvents = new Map<string, { calendarId: string; eventId: string }>();
+  const affectedCalendarEvents = new Map<
+    string,
+    { calendarId: string; eventId: string }
+  >();
 
   for (const link of eventLinks) {
     affectedCalendarEvents.set(`${link.calendarId}#${link.eventId}`, {
@@ -6726,14 +9064,21 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
   }
 
   for (const visitation of visitations) {
-    if (visitation.source !== "calendar" || !visitation.calendarId || !visitation.eventId) {
+    if (
+      visitation.source !== "calendar" ||
+      !visitation.calendarId ||
+      !visitation.eventId
+    ) {
       continue;
     }
 
-    affectedCalendarEvents.set(`${visitation.calendarId}#${visitation.eventId}`, {
-      calendarId: visitation.calendarId,
-      eventId: visitation.eventId,
-    });
+    affectedCalendarEvents.set(
+      `${visitation.calendarId}#${visitation.eventId}`,
+      {
+        calendarId: visitation.calendarId,
+        eventId: visitation.eventId,
+      },
+    );
   }
 
   for (const { calendarId, eventId } of affectedCalendarEvents.values()) {
@@ -6742,10 +9087,20 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
       continue;
     }
 
-    const nextAssignedMemberIds = normalizeMemberIds(event.memberIds).filter((id) => id !== memberId);
-    const nextAutoLinkedMemberIds = normalizeMemberIds(event.autoLinkedMemberIds).filter((id) => id !== memberId);
-    const nextDismissedAutoLinkedMemberIds = normalizeMemberIds(event.dismissedAutoLinkedMemberIds).filter((id) => id !== memberId);
-    const nextAutoLinkedMembers = await loadMembersByIds(context, nextAutoLinkedMemberIds, deps);
+    const nextAssignedMemberIds = normalizeMemberIds(event.memberIds).filter(
+      (id) => id !== memberId,
+    );
+    const nextAutoLinkedMemberIds = normalizeMemberIds(
+      event.autoLinkedMemberIds,
+    ).filter((id) => id !== memberId);
+    const nextDismissedAutoLinkedMemberIds = normalizeMemberIds(
+      event.dismissedAutoLinkedMemberIds,
+    ).filter((id) => id !== memberId);
+    const nextAutoLinkedMembers = await loadMembersByIds(
+      context,
+      nextAutoLinkedMemberIds,
+      deps,
+    );
 
     await persistEventWithMemberAssignments(
       context,
@@ -6753,7 +9108,9 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
         ...event,
         memberIds: nextAssignedMemberIds,
         autoLinkedMemberIds: nextAutoLinkedMembers.map((item) => item.memberId),
-        autoLinkedMemberNames: nextAutoLinkedMembers.map((item) => item.fullName),
+        autoLinkedMemberNames: nextAutoLinkedMembers.map(
+          (item) => item.fullName,
+        ),
         dismissedAutoLinkedMemberIds: nextDismissedAutoLinkedMemberIds,
       },
       deps,
@@ -6764,22 +9121,36 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
     );
   }
 
-  for (const visitation of visitations.filter((item) => item.source === "manual")) {
-    const group = await getVisitationGroup(context, visitation.visitationId, deps);
+  for (const visitation of visitations.filter(
+    (item) => item.source === "manual",
+  )) {
+    const group = await getVisitationGroup(
+      context,
+      visitation.visitationId,
+      deps,
+    );
     const nextMembers = await loadMembersByIds(
       context,
       group.map((item) => item.memberId).filter((id) => id !== memberId),
       deps,
     );
 
-    await persistManualVisitationGroup(context, visitation.visitationId, group, {
-      ...visitation,
-      memberIds: nextMembers.map((item) => item.memberId),
-    }, deps);
+    await persistManualVisitationGroup(
+      context,
+      visitation.visitationId,
+      group,
+      {
+        ...visitation,
+        memberIds: nextMembers.map((item) => item.memberId),
+      },
+      deps,
+    );
   }
 
   const manualVisitations = visitations;
-  for (const visitation of manualVisitations.filter((item) => item.source === "manual")) {
+  for (const visitation of manualVisitations.filter(
+    (item) => item.source === "manual",
+  )) {
     await deps.documentClient.send(
       new DeleteCommand({
         Key: {
@@ -6792,14 +9163,26 @@ const deleteMember = async (context: RequestContext, memberId: string, deps: Han
   }
 
   await deleteTaggedEntity(context, member, deps);
-  await logMemberActivity(context, memberId, "Member Deleted", `${member.fullName} deleted.`, deps);
+  await logMemberActivity(
+    context,
+    memberId,
+    "Member Deleted",
+    `${member.fullName} deleted.`,
+    deps,
+  );
   return json(200, { deleted: true, memberId });
 };
 
-const createMemberImportJob = async (context: RequestContext, input: MemberImportInput, deps: HandlerDependencies) => {
+const createMemberImportJob = async (
+  context: RequestContext,
+  input: MemberImportInput,
+  deps: HandlerDependencies,
+) => {
   const rows = await parseImportWorkbook(input);
   if (!rows.length) {
-    return json(400, { message: "No Unity member rows were found in this workbook." });
+    return json(400, {
+      message: "No Unity member rows were found in this workbook.",
+    });
   }
 
   const createdAt = deps.now();
@@ -6824,21 +9207,27 @@ const createMemberImportJob = async (context: RequestContext, input: MemberImpor
     result: emptyImportResult(),
   };
 
-  const chunkItemsToWrite: MemberImportChunkItem[] = chunks.map((chunk, chunkIndex) => ({
-    PK: tenantPk(context.tenantId),
-    SK: memberImportChunkSk(jobId, chunkIndex),
-    createdAt,
-    updatedAt: createdAt,
-    entityType: "MEMBER_IMPORT_CHUNK",
-    tenantId: context.tenantId,
-    jobId,
-    chunkIndex,
-    rowCount: chunk.length,
-    rows: chunk,
-  }));
+  const chunkItemsToWrite: MemberImportChunkItem[] = chunks.map(
+    (chunk, chunkIndex) => ({
+      PK: tenantPk(context.tenantId),
+      SK: memberImportChunkSk(jobId, chunkIndex),
+      createdAt,
+      updatedAt: createdAt,
+      entityType: "MEMBER_IMPORT_CHUNK",
+      tenantId: context.tenantId,
+      jobId,
+      chunkIndex,
+      rowCount: chunk.length,
+      rows: chunk,
+    }),
+  );
 
   await putImportJob(context, jobItem, deps);
-  await putItemsInBatches(deps.documentClient, context.tableName, chunkItemsToWrite);
+  await putItemsInBatches(
+    deps.documentClient,
+    context.tableName,
+    chunkItemsToWrite,
+  );
   logImportEvent("createMemberImportJob", {
     jobId,
     totalRows: rows.length,
@@ -6858,7 +9247,11 @@ const createHouseholdGeocodeJob = async (
 
   const mode = normalizeHouseholdGeocodeJobMode(input.mode);
   const existingJobs = await listHouseholdGeocodeJobs(context, deps);
-  const activeJob = existingJobs.find((job) => job.mode === mode && (job.status === "queued" || job.status === "running"));
+  const activeJob = existingJobs.find(
+    (job) =>
+      job.mode === mode &&
+      (job.status === "queued" || job.status === "running"),
+  );
   if (activeJob) {
     return json(200, toHouseholdGeocodeJob(activeJob));
   }
@@ -6866,7 +9259,9 @@ const createHouseholdGeocodeJob = async (
   const households = await listHouseholds(context, deps);
   const createdAt = deps.now();
   const startedAt = createdAt;
-  const total = households.filter((household) => isHouseholdEligibleForGeocodeJob(household, { mode, startedAt })).length;
+  const total = households.filter((household) =>
+    isHouseholdEligibleForGeocodeJob(household, { mode, startedAt }),
+  ).length;
   const jobId = deps.uuid();
   const job: HouseholdGeocodeJobItem = {
     PK: tenantPk(context.tenantId),
@@ -6888,14 +9283,24 @@ const createHouseholdGeocodeJob = async (
   };
 
   await putHouseholdGeocodeJob(context, job, deps);
-  await logAuditEvent(context, "admin.household_geocode.start", "success", deps, {
-    metadata: { jobId, mode, total },
-  });
+  await logAuditEvent(
+    context,
+    "admin.household_geocode.start",
+    "success",
+    deps,
+    {
+      metadata: { jobId, mode, total },
+    },
+  );
 
   return json(202, toHouseholdGeocodeJob(job));
 };
 
-const putImportJob = async (context: RequestContext, item: MemberImportJobItem, deps: HandlerDependencies) => {
+const putImportJob = async (
+  context: RequestContext,
+  item: MemberImportJobItem,
+  deps: HandlerDependencies,
+) => {
   await deps.documentClient.send(
     new PutCommand({
       Item: item,
@@ -6904,14 +9309,22 @@ const putImportJob = async (context: RequestContext, item: MemberImportJobItem, 
   );
 };
 
-const processMemberImportJob = async (context: RequestContext, jobId: string, deps: HandlerDependencies) => {
+const processMemberImportJob = async (
+  context: RequestContext,
+  jobId: string,
+  deps: HandlerDependencies,
+) => {
   const startedAt = Date.now();
   const job = await getMemberImportJob(context, jobId, deps);
   if (!job) {
     return json(404, { message: "Import job not found." });
   }
 
-  if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+  if (
+    job.status === "completed" ||
+    job.status === "failed" ||
+    job.status === "cancelled"
+  ) {
     logImportEvent("processMemberImportJob.skipped", {
       jobId,
       status: job.status,
@@ -6988,16 +9401,29 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
   for (const chunk of chunksToProcess) {
     processedRowDelta += chunk.rowCount;
     for (const row of chunk.rows) {
-      const outcome = await processImportRow(context, row, job.fileName, importState, deps);
+      const outcome = await processImportRow(
+        context,
+        row,
+        job.fileName,
+        importState,
+        deps,
+      );
       chunkResult = {
         created: chunkResult.created + outcome.created,
         updated: chunkResult.updated + outcome.updated,
         skipped: chunkResult.skipped + outcome.skipped,
-        householdsCreated: chunkResult.householdsCreated + outcome.householdsCreated,
-        householdsMatched: chunkResult.householdsMatched + outcome.householdsMatched,
-        membersAssignedToHouseholds: chunkResult.membersAssignedToHouseholds + outcome.membersAssignedToHouseholds,
-        membersWithoutHouseholds: chunkResult.membersWithoutHouseholds + outcome.membersWithoutHouseholds,
-        householdConflicts: chunkResult.householdConflicts + outcome.householdConflicts,
+        householdsCreated:
+          chunkResult.householdsCreated + outcome.householdsCreated,
+        householdsMatched:
+          chunkResult.householdsMatched + outcome.householdsMatched,
+        membersAssignedToHouseholds:
+          chunkResult.membersAssignedToHouseholds +
+          outcome.membersAssignedToHouseholds,
+        membersWithoutHouseholds:
+          chunkResult.membersWithoutHouseholds +
+          outcome.membersWithoutHouseholds,
+        householdConflicts:
+          chunkResult.householdConflicts + outcome.householdConflicts,
         errors: [...chunkResult.errors, ...outcome.errors],
       };
     }
@@ -7010,21 +9436,36 @@ const processMemberImportJob = async (context: RequestContext, jobId: string, de
   );
 
   const updatedAt = deps.now();
-  const processedRows = Math.min(leasedJob.totalRows, leasedJob.processedRows + processedRowDelta);
-  const processedChunks = Math.min(leasedJob.totalChunks, leasedJob.processedChunks + chunksToProcess.length);
+  const processedRows = Math.min(
+    leasedJob.totalRows,
+    leasedJob.processedRows + processedRowDelta,
+  );
+  const processedChunks = Math.min(
+    leasedJob.totalChunks,
+    leasedJob.processedChunks + chunksToProcess.length,
+  );
   const result: MemberImportResult = {
     created: (leasedJob.result.created ?? 0) + chunkResult.created,
     updated: (leasedJob.result.updated ?? 0) + chunkResult.updated,
     skipped: (leasedJob.result.skipped ?? 0) + chunkResult.skipped,
-    householdsCreated: (leasedJob.result.householdsCreated ?? 0) + chunkResult.householdsCreated,
-    householdsMatched: (leasedJob.result.householdsMatched ?? 0) + chunkResult.householdsMatched,
-    membersAssignedToHouseholds: (leasedJob.result.membersAssignedToHouseholds ?? 0) + chunkResult.membersAssignedToHouseholds,
-    membersWithoutHouseholds: (leasedJob.result.membersWithoutHouseholds ?? 0) + chunkResult.membersWithoutHouseholds,
-    householdConflicts: (leasedJob.result.householdConflicts ?? 0) + chunkResult.householdConflicts,
+    householdsCreated:
+      (leasedJob.result.householdsCreated ?? 0) + chunkResult.householdsCreated,
+    householdsMatched:
+      (leasedJob.result.householdsMatched ?? 0) + chunkResult.householdsMatched,
+    membersAssignedToHouseholds:
+      (leasedJob.result.membersAssignedToHouseholds ?? 0) +
+      chunkResult.membersAssignedToHouseholds,
+    membersWithoutHouseholds:
+      (leasedJob.result.membersWithoutHouseholds ?? 0) +
+      chunkResult.membersWithoutHouseholds,
+    householdConflicts:
+      (leasedJob.result.householdConflicts ?? 0) +
+      chunkResult.householdConflicts,
     errorCount: (leasedJob.result.errorCount ?? 0) + chunkResult.errors.length,
     errors: mergeImportErrors(leasedJob.result.errors, chunkResult.errors),
   };
-  const status: MemberImportJobStatus = processedChunks >= leasedJob.totalChunks ? "completed" : "running";
+  const status: MemberImportJobStatus =
+    processedChunks >= leasedJob.totalChunks ? "completed" : "running";
   const nextJob: MemberImportJobItem = {
     ...leasedJob,
     updatedAt,
@@ -7077,11 +9518,19 @@ const processHouseholdGeocodeJob = async (
     return json(404, { message: "Household geocode job not found." });
   }
 
-  if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+  if (
+    job.status === "completed" ||
+    job.status === "failed" ||
+    job.status === "cancelled"
+  ) {
     return json(200, toHouseholdGeocodeJob(job));
   }
 
-  const leasedJob = await tryAcquireHouseholdGeocodeJobLease(context, jobId, deps);
+  const leasedJob = await tryAcquireHouseholdGeocodeJobLease(
+    context,
+    jobId,
+    deps,
+  );
   if (!leasedJob) {
     const currentJob = await getHouseholdGeocodeJob(context, jobId, deps);
     return json(200, toHouseholdGeocodeJob(currentJob ?? job));
@@ -7117,13 +9566,15 @@ const processHouseholdGeocodeJob = async (
       },
       deps,
     );
-    jobFailureReason = updatedHousehold.location?.geocodeStatus === "failed"
-      ? "failed"
-      : undefined;
+    jobFailureReason =
+      updatedHousehold.location?.geocodeStatus === "failed"
+        ? "failed"
+        : undefined;
   } catch (error) {
     logHouseholdGeocodingEvent("job.household_processing_failed", {
       addressKey: nextHousehold.addressKey,
-      errorMessage: error instanceof Error ? error.message : "Unexpected job error",
+      errorMessage:
+        error instanceof Error ? error.message : "Unexpected job error",
       errorName: error instanceof Error ? error.name : typeof error,
       householdId: nextHousehold.householdId,
       jobId,
@@ -7132,8 +9583,12 @@ const processHouseholdGeocodeJob = async (
     jobFailureReason = "job_error";
   }
 
-  const success = leasedJob.success + (updatedHousehold.location?.geocodeStatus === "success" ? 1 : 0);
-  const failed = leasedJob.failed + (updatedHousehold.location?.geocodeStatus === "success" ? 0 : 1);
+  const success =
+    leasedJob.success +
+    (updatedHousehold.location?.geocodeStatus === "success" ? 1 : 0);
+  const failed =
+    leasedJob.failed +
+    (updatedHousehold.location?.geocodeStatus === "success" ? 0 : 1);
   const processed = leasedJob.processed + 1;
   const remaining = Math.max(0, leasedJob.total - processed);
   const completedAt = remaining === 0 ? deps.now() : undefined;
@@ -7160,14 +9615,20 @@ const processHouseholdGeocodeJob = async (
   return json(200, toHouseholdGeocodeJob(nextJob));
 };
 
-const getMemberEventsResponse = async (context: RequestContext, memberId: string, deps: HandlerDependencies) => {
+const getMemberEventsResponse = async (
+  context: RequestContext,
+  memberId: string,
+  deps: HandlerDependencies,
+) => {
   const member = await getMember(context, memberId, deps);
   if (!member) {
     return json(404, { message: "Member not found." });
   }
 
   const items = await listVisitationsForMemberRecord(context, member, deps);
-  return json(200, { items: items.map((item) => toMemberVisitation(item, context.actorSub)) });
+  return json(200, {
+    items: items.map((item) => toMemberVisitation(item, context.actorSub)),
+  });
 };
 
 const createManualVisitation = async (
@@ -7186,11 +9647,19 @@ const createManualVisitation = async (
     return json(404, { message: "Member not found." });
   }
 
-  const nextMemberIds = [...new Set([memberId, ...normalizeMemberIds(input.memberIds)])];
-  const records = await persistManualVisitationGroup(context, deps.uuid(), null, {
-    ...input,
-    memberIds: nextMemberIds,
-  }, deps);
+  const nextMemberIds = [
+    ...new Set([memberId, ...normalizeMemberIds(input.memberIds)]),
+  ];
+  const records = await persistManualVisitationGroup(
+    context,
+    deps.uuid(),
+    null,
+    {
+      ...input,
+      memberIds: nextMemberIds,
+    },
+    deps,
+  );
   for (const record of records) {
     const visitationType = normalizeVisitationType(record.type);
     await logMemberActivity(
@@ -7202,7 +9671,9 @@ const createManualVisitation = async (
       { visitationId: record.visitationId, type: visitationType },
     );
   }
-  return json(201, { items: records.map((item) => toMemberVisitation(item, context.actorSub)) });
+  return json(201, {
+    items: records.map((item) => toMemberVisitation(item, context.actorSub)),
+  });
 };
 
 const updateManualVisitation = async (
@@ -7213,12 +9684,17 @@ const updateManualVisitation = async (
   deps: HandlerDependencies,
 ) => {
   const existing = await getVisitationGroup(context, visitationId, deps);
-  if (!existing.length || !existing.some((item) => item.memberId === memberId)) {
+  if (
+    !existing.length ||
+    !existing.some((item) => item.memberId === memberId)
+  ) {
     return json(404, { message: "Visitation not found." });
   }
 
   if (existing[0]?.source !== "manual") {
-    return json(400, { message: "Only manual visitations can be updated here." });
+    return json(400, {
+      message: "Only manual visitations can be updated here.",
+    });
   }
 
   const merged: CreateManualVisitationInput = {
@@ -7230,14 +9706,21 @@ const updateManualVisitation = async (
     notes: input.notes ?? existing[0].notes,
     memberIds: normalizeMemberIds(input.memberIds ?? existing[0].memberIds),
     visitorUserId: input.visitorUserId ?? existing[0].visitorUserId,
-    visitorDisplayName: input.visitorDisplayName ?? existing[0].visitorDisplayName,
+    visitorDisplayName:
+      input.visitorDisplayName ?? existing[0].visitorDisplayName,
   };
   const validationError = validateManualVisitationInput(merged);
   if (validationError) {
     return json(400, { message: validationError });
   }
 
-  const records = await persistManualVisitationGroup(context, visitationId, existing, merged, deps);
+  const records = await persistManualVisitationGroup(
+    context,
+    visitationId,
+    existing,
+    merged,
+    deps,
+  );
   for (const record of records) {
     const visitationType = normalizeVisitationType(record.type);
     await logMemberActivity(
@@ -7249,7 +9732,9 @@ const updateManualVisitation = async (
       { visitationId: record.visitationId, type: visitationType },
     );
   }
-  return json(200, { items: records.map((item) => toMemberVisitation(item, context.actorSub)) });
+  return json(200, {
+    items: records.map((item) => toMemberVisitation(item, context.actorSub)),
+  });
 };
 
 const deleteManualVisitation = async (
@@ -7259,12 +9744,17 @@ const deleteManualVisitation = async (
   deps: HandlerDependencies,
 ) => {
   const existing = await getVisitationGroup(context, visitationId, deps);
-  if (!existing.length || !existing.some((item) => item.memberId === memberId)) {
+  if (
+    !existing.length ||
+    !existing.some((item) => item.memberId === memberId)
+  ) {
     return json(404, { message: "Visitation not found." });
   }
 
   if (existing[0]?.source !== "manual") {
-    return json(400, { message: "Only manual visitations can be deleted here." });
+    return json(400, {
+      message: "Only manual visitations can be deleted here.",
+    });
   }
 
   for (const record of existing) {
@@ -7298,7 +9788,9 @@ const getEventMembersResponse = async (
   }
 
   const items = await listEventMembers(context, calendarId, eventId, deps);
-  const response: EventMembersResponse = { items: items.map(toEventMemberSummary) };
+  const response: EventMembersResponse = {
+    items: items.map(toEventMemberSummary),
+  };
   return json(200, response);
 };
 
@@ -7325,35 +9817,45 @@ const updateEventMembersResponse = async (
     },
     deps,
   );
-  const assignedMembers = await loadMembersByIds(context, persistedEvent.memberIds ?? [], deps);
-  return json(200, { items: assignedMembers.map((member) => toEventMemberSummary({
-    PK: "",
-    SK: "",
-    createdAt: persistedEvent.createdAt,
-    updatedAt: persistedEvent.updatedAt,
-    entityType: "EVENT_MEMBER",
-    tenantId: context.tenantId,
-    calendarId: persistedEvent.calendarId,
-    eventId: persistedEvent.eventId,
-    calendarOwnerUserId: persistedEvent.userId,
-    calendarOwnerName: context.actorName,
-    memberId: member.memberId,
-    memberName: member.fullName,
-    memberPhoneSnapshot: member.phone,
-    memberEmailSnapshot: member.email,
-    unityIdSnapshot: member.unityId,
-    sourceSnapshot: member.source,
-    eventTitle: persistedEvent.summary,
-    eventStart: persistedEvent.start,
-    eventEnd: persistedEvent.end,
-    eventLocation: persistedEvent.location,
-    eventDescription: persistedEvent.description,
-    allDay: persistedEvent.allDay,
-    assignmentStatus: persistedEvent.status === "cancelled" ? "cancelled" : "scheduled",
-    visitStatus: persistedEvent.status === "cancelled" ? "cancelled" : "scheduled",
-    createdByUserId: context.actorSub,
-    createdByName: context.actorName,
-  })) });
+  const assignedMembers = await loadMembersByIds(
+    context,
+    persistedEvent.memberIds ?? [],
+    deps,
+  );
+  return json(200, {
+    items: assignedMembers.map((member) =>
+      toEventMemberSummary({
+        PK: "",
+        SK: "",
+        createdAt: persistedEvent.createdAt,
+        updatedAt: persistedEvent.updatedAt,
+        entityType: "EVENT_MEMBER",
+        tenantId: context.tenantId,
+        calendarId: persistedEvent.calendarId,
+        eventId: persistedEvent.eventId,
+        calendarOwnerUserId: persistedEvent.userId,
+        calendarOwnerName: context.actorName,
+        memberId: member.memberId,
+        memberName: member.fullName,
+        memberPhoneSnapshot: member.phone,
+        memberEmailSnapshot: member.email,
+        unityIdSnapshot: member.unityId,
+        sourceSnapshot: member.source,
+        eventTitle: persistedEvent.summary,
+        eventStart: persistedEvent.start,
+        eventEnd: persistedEvent.end,
+        eventLocation: persistedEvent.location,
+        eventDescription: persistedEvent.description,
+        allDay: persistedEvent.allDay,
+        assignmentStatus:
+          persistedEvent.status === "cancelled" ? "cancelled" : "scheduled",
+        visitStatus:
+          persistedEvent.status === "cancelled" ? "cancelled" : "scheduled",
+        createdByUserId: context.actorSub,
+        createdByName: context.actorName,
+      }),
+    ),
+  });
 };
 
 const getVisitationReport = async (
@@ -7367,22 +9869,40 @@ const getVisitationReport = async (
     listTenantVisitations(context, deps),
     listUpcomingEventAssignments(context, deps.now(), deps),
   ]);
-  const reportVisitations = filters.type === "all"
-    ? visitations
-    : visitations.filter((item) => normalizeVisitationType(item.type) === filters.type);
-  const allVisitors: ReportVisitorOption[] = [...new Map(
-    reportVisitations.map((item) => [item.visitorUserId, {
-      visitorUserId: item.visitorUserId,
-      visitorDisplayName: item.visitorDisplayName,
-    }]),
-  ).values()].sort((left, right) => left.visitorDisplayName.localeCompare(right.visitorDisplayName));
+  const reportVisitations =
+    filters.type === "all"
+      ? visitations
+      : visitations.filter(
+          (item) => normalizeVisitationType(item.type) === filters.type,
+        );
+  const allVisitors: ReportVisitorOption[] = [
+    ...new Map(
+      reportVisitations.map((item) => [
+        item.visitorUserId,
+        {
+          visitorUserId: item.visitorUserId,
+          visitorDisplayName: item.visitorDisplayName,
+        },
+      ]),
+    ).values(),
+  ].sort((left, right) =>
+    left.visitorDisplayName.localeCompare(right.visitorDisplayName),
+  );
 
-  const availableGroups = [...new Set(
-    members.flatMap((member) => member.groups ?? []).map((group) => normalizeWhitespace(group)).filter(Boolean),
-  )].sort((left, right) => left.localeCompare(right));
+  const availableGroups = [
+    ...new Set(
+      members
+        .flatMap((member) => member.groups ?? [])
+        .map((group) => normalizeWhitespace(group))
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
 
   const filteredMembers = members.filter((member) => {
-    if (filters.memberScope === "active_only" && (member.locked || member.activated === false)) {
+    if (
+      filters.memberScope === "active_only" &&
+      (member.locked || member.activated === false)
+    ) {
       return false;
     }
 
@@ -7398,13 +9918,18 @@ const getVisitationReport = async (
       return false;
     }
 
-    if (filters.search && !member.normalizedSearchText.includes(normalizeName(filters.search))) {
+    if (
+      filters.search &&
+      !member.normalizedSearchText.includes(normalizeName(filters.search))
+    ) {
       return false;
     }
 
     return true;
   });
-  const filteredMemberIds = new Set(filteredMembers.map((member) => member.memberId));
+  const filteredMemberIds = new Set(
+    filteredMembers.map((member) => member.memberId),
+  );
 
   const topVisitorsByUserId = new Map<string, VisitorLeaderboardEntry>();
   const currentUserActivity: CurrentUserVisitationActivity = {
@@ -7412,12 +9937,21 @@ const getVisitationReport = async (
     thisMonth: 0,
     thisYear: 0,
   };
-  const activityTypeCounts = new Map<ActivityTypeDistributionBucket["key"], number>();
-  const latestInRangeTypeByMemberId = new Map<string, { type: VisitationType; visitDate: string }>();
+  const activityTypeCounts = new Map<
+    ActivityTypeDistributionBucket["key"],
+    number
+  >();
+  const latestInRangeTypeByMemberId = new Map<
+    string,
+    { type: VisitationType; visitDate: string }
+  >();
   const monthlyActivityCounts = new Map<string, number>();
   const everyoneLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
   const filteredLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
-  const currentUserLifetimeByMemberId = new Map<string, VisitationScopeMetrics>();
+  const currentUserLifetimeByMemberId = new Map<
+    string,
+    VisitationScopeMetrics
+  >();
   const everyoneRangeCountByMemberId = new Map<string, number>();
   const filteredRangeCountByMemberId = new Map<string, number>();
   const currentUserRangeCountByMemberId = new Map<string, number>();
@@ -7429,7 +9963,10 @@ const getVisitationReport = async (
     target.set(memberId, (target.get(memberId) ?? 0) + 1);
   };
 
-  const updateScopeMetrics = (target: Map<string, VisitationScopeMetrics>, visitation: VisitationItem) => {
+  const updateScopeMetrics = (
+    target: Map<string, VisitationScopeMetrics>,
+    visitation: VisitationItem,
+  ) => {
     const current = target.get(visitation.memberId) ?? {
       visitCountInRange: 0,
       totalLifetimeVisits: 0,
@@ -7439,7 +9976,10 @@ const getVisitationReport = async (
       lastVisitType: undefined,
     };
     current.totalLifetimeVisits += 1;
-    if (!current.lastVisitDate || visitation.visitDate > current.lastVisitDate) {
+    if (
+      !current.lastVisitDate ||
+      visitation.visitDate > current.lastVisitDate
+    ) {
       current.lastVisitDate = visitation.visitDate;
       current.lastVisitedBy = visitation.visitorDisplayName;
       current.lastVisitType = normalizeVisitationType(visitation.type);
@@ -7457,7 +9997,11 @@ const getVisitationReport = async (
 
     updateScopeMetrics(everyoneLifetimeByMemberId, visitation);
 
-    const matchesVisitor = matchesReportVisitorFilter(visitation, filters, context.actorSub);
+    const matchesVisitor = matchesReportVisitorFilter(
+      visitation,
+      filters,
+      context.actorSub,
+    );
     if (matchesVisitor) {
       updateScopeMetrics(filteredLifetimeByMemberId, visitation);
     }
@@ -7494,9 +10038,15 @@ const getVisitationReport = async (
 
     incrementCount(filteredRangeCountByMemberId, visitation.memberId);
     const normalizedType = normalizeVisitationType(visitation.type);
-    activityTypeCounts.set(normalizedType, (activityTypeCounts.get(normalizedType) ?? 0) + 1);
+    activityTypeCounts.set(
+      normalizedType,
+      (activityTypeCounts.get(normalizedType) ?? 0) + 1,
+    );
     const monthKey = visitation.visitDate.slice(0, 7);
-    monthlyActivityCounts.set(monthKey, (monthlyActivityCounts.get(monthKey) ?? 0) + 1);
+    monthlyActivityCounts.set(
+      monthKey,
+      (monthlyActivityCounts.get(monthKey) ?? 0) + 1,
+    );
     const latestInRange = latestInRangeTypeByMemberId.get(visitation.memberId);
     if (!latestInRange || visitation.visitDate > latestInRange.visitDate) {
       latestInRangeTypeByMemberId.set(visitation.memberId, {
@@ -7519,10 +10069,16 @@ const getVisitationReport = async (
 
   const nextScheduledVisitByMemberId = new Map<string, string>();
   for (const assignment of upcomingAssignments) {
-    if (assignment.assignmentStatus === "cancelled" || nextScheduledVisitByMemberId.has(assignment.memberId)) {
+    if (
+      assignment.assignmentStatus === "cancelled" ||
+      nextScheduledVisitByMemberId.has(assignment.memberId)
+    ) {
       continue;
     }
-    nextScheduledVisitByMemberId.set(assignment.memberId, assignment.eventStart);
+    nextScheduledVisitByMemberId.set(
+      assignment.memberId,
+      assignment.eventStart,
+    );
   }
 
   const OVERDUE_DAYS = 90;
@@ -7533,7 +10089,10 @@ const getVisitationReport = async (
       return null;
     }
 
-    return Math.max(0, Math.floor((nowTime - new Date(value).getTime()) / 86_400_000));
+    return Math.max(
+      0,
+      Math.floor((nowTime - new Date(value).getTime()) / 86_400_000),
+    );
   };
 
   const getMemberStatus = (
@@ -7558,16 +10117,23 @@ const getVisitationReport = async (
   };
 
   const sortCaregiverNames = (caregiverNames?: string[]) =>
-    [...(caregiverNames ?? [])].sort((left, right) => left.localeCompare(right));
+    [...(caregiverNames ?? [])].sort((left, right) =>
+      left.localeCompare(right),
+    );
 
   const allRows: VisitationOverviewRow[] = [];
   for (const member of filteredMembers) {
     const everyoneLifetime = everyoneLifetimeByMemberId.get(member.memberId);
     const filteredLifetime = filteredLifetimeByMemberId.get(member.memberId);
-    const currentUserLifetime = currentUserLifetimeByMemberId.get(member.memberId);
-    const matchingCount = filteredRangeCountByMemberId.get(member.memberId) ?? 0;
-    const everyoneRangeCount = everyoneRangeCountByMemberId.get(member.memberId) ?? 0;
-    const currentUserRangeCount = currentUserRangeCountByMemberId.get(member.memberId) ?? 0;
+    const currentUserLifetime = currentUserLifetimeByMemberId.get(
+      member.memberId,
+    );
+    const matchingCount =
+      filteredRangeCountByMemberId.get(member.memberId) ?? 0;
+    const everyoneRangeCount =
+      everyoneRangeCountByMemberId.get(member.memberId) ?? 0;
+    const currentUserRangeCount =
+      currentUserRangeCountByMemberId.get(member.memberId) ?? 0;
     const status: VisitationOverviewRow["status"] =
       matchingCount === 0
         ? "Not Visited"
@@ -7607,7 +10173,9 @@ const getVisitationReport = async (
           totalLifetimeVisits: currentUserLifetime?.totalLifetimeVisits ?? 0,
           lastVisitDate: currentUserLifetime?.lastVisitDate,
           lastVisitedBy: currentUserLifetime?.lastVisitedBy,
-          caregiverNames: sortCaregiverNames(currentUserLifetime?.caregiverNames),
+          caregiverNames: sortCaregiverNames(
+            currentUserLifetime?.caregiverNames,
+          ),
           lastVisitType: currentUserLifetime?.lastVisitType,
         },
       },
@@ -7632,7 +10200,11 @@ const getVisitationReport = async (
     }
 
     if (filters.status !== "all") {
-      const memberStatus = getMemberStatus(row.totalLifetimeVisits, row.visitCountInRange, row.lastVisitDate);
+      const memberStatus = getMemberStatus(
+        row.totalLifetimeVisits,
+        row.visitCountInRange,
+        row.lastVisitDate,
+      );
       if (memberStatus !== filters.status) {
         continue;
       }
@@ -7643,11 +10215,23 @@ const getVisitationReport = async (
 
   if (filters.tagIds?.length || filters.householdTagIds?.length) {
     const matchingIds = new Set(allRows.map((row) => row.memberId));
-    activityTypeCounts.clear(); monthlyActivityCounts.clear(); topVisitorsByUserId.clear();
-    currentUserActivity.thisWeek = 0; currentUserActivity.thisMonth = 0; currentUserActivity.thisYear = 0;
+    activityTypeCounts.clear();
+    monthlyActivityCounts.clear();
+    topVisitorsByUserId.clear();
+    currentUserActivity.thisWeek = 0;
+    currentUserActivity.thisMonth = 0;
+    currentUserActivity.thisYear = 0;
     for (const visitation of reportVisitations) {
-      if (!matchingIds.has(visitation.memberId) || !matchesReportVisitorFilter(visitation, filters, context.actorSub)) continue;
-      if ((filters.from && visitation.visitDate < filters.from) || (filters.to && visitation.visitDate > filters.to)) continue;
+      if (
+        !matchingIds.has(visitation.memberId) ||
+        !matchesReportVisitorFilter(visitation, filters, context.actorSub)
+      )
+        continue;
+      if (
+        (filters.from && visitation.visitDate < filters.from) ||
+        (filters.to && visitation.visitDate > filters.to)
+      )
+        continue;
       if (visitation.visitorUserId === context.actorSub) {
         if (visitation.visitDate >= weekStart) currentUserActivity.thisWeek++;
         if (visitation.visitDate >= monthStart) currentUserActivity.thisMonth++;
@@ -7656,8 +10240,15 @@ const getVisitationReport = async (
       const type = normalizeVisitationType(visitation.type);
       activityTypeCounts.set(type, (activityTypeCounts.get(type) ?? 0) + 1);
       const month = visitation.visitDate.slice(0, 7);
-      monthlyActivityCounts.set(month, (monthlyActivityCounts.get(month) ?? 0) + 1);
-      const visitor = topVisitorsByUserId.get(visitation.visitorUserId) ?? { visitorUserId: visitation.visitorUserId, visitorDisplayName: visitation.visitorDisplayName, visitCountInRange: 0 };
+      monthlyActivityCounts.set(
+        month,
+        (monthlyActivityCounts.get(month) ?? 0) + 1,
+      );
+      const visitor = topVisitorsByUserId.get(visitation.visitorUserId) ?? {
+        visitorUserId: visitation.visitorUserId,
+        visitorDisplayName: visitation.visitorDisplayName,
+        visitCountInRange: 0,
+      };
       visitor.visitCountInRange++;
       topVisitorsByUserId.set(visitor.visitorUserId, visitor);
     }
@@ -7666,16 +10257,25 @@ const getVisitationReport = async (
   allRows.sort((left, right) => {
     const direction = filters.sortDirection === "asc" ? 1 : -1;
     if (filters.sortBy === "member_name") {
-      return left.memberFullName.localeCompare(right.memberFullName) * direction || left.memberId.localeCompare(right.memberId);
+      return (
+        left.memberFullName.localeCompare(right.memberFullName) * direction ||
+        left.memberId.localeCompare(right.memberId)
+      );
     }
 
     if (filters.sortBy === "visit_count") {
-      return (left.visitCountInRange - right.visitCountInRange) * direction || left.memberId.localeCompare(right.memberId);
+      return (
+        (left.visitCountInRange - right.visitCountInRange) * direction ||
+        left.memberId.localeCompare(right.memberId)
+      );
     }
 
     const leftValue = left.lastVisitDate ?? "";
     const rightValue = right.lastVisitDate ?? "";
-    return leftValue.localeCompare(rightValue) * direction || left.memberId.localeCompare(right.memberId);
+    return (
+      leftValue.localeCompare(rightValue) * direction ||
+      left.memberId.localeCompare(right.memberId)
+    );
   });
 
   let notVisitedCount = 0;
@@ -7689,7 +10289,11 @@ const getVisitationReport = async (
   let totalVisitCount = 0;
 
   for (const row of allRows) {
-    const memberStatus = getMemberStatus(row.totalLifetimeVisits, row.visitCountInRange, row.lastVisitDate);
+    const memberStatus = getMemberStatus(
+      row.totalLifetimeVisits,
+      row.visitCountInRange,
+      row.lastVisitDate,
+    );
     totalVisitCount += row.visitCountInRange;
     if (row.visitCountInRange === 0) {
       notVisitedCount += 1;
@@ -7723,13 +10327,41 @@ const getVisitationReport = async (
   };
   const distributionTotal = Math.max(allRows.length, 1);
   const distribution: VisitationDistributionBucket[] = [
-    { key: "not_visited", label: "Not visited", count: distributionCounts.not_visited, percentage: (distributionCounts.not_visited / distributionTotal) * 100 },
-    { key: "one_visit", label: "1 visit", count: distributionCounts.one_visit, percentage: (distributionCounts.one_visit / distributionTotal) * 100 },
-    { key: "two_to_three", label: "2-3 visits", count: distributionCounts.two_to_three, percentage: (distributionCounts.two_to_three / distributionTotal) * 100 },
-    { key: "four_to_six", label: "4-6 visits", count: distributionCounts.four_to_six, percentage: (distributionCounts.four_to_six / distributionTotal) * 100 },
-    { key: "seven_plus", label: "7+ visits", count: distributionCounts.seven_plus, percentage: (distributionCounts.seven_plus / distributionTotal) * 100 },
+    {
+      key: "not_visited",
+      label: "Not visited",
+      count: distributionCounts.not_visited,
+      percentage: (distributionCounts.not_visited / distributionTotal) * 100,
+    },
+    {
+      key: "one_visit",
+      label: "1 visit",
+      count: distributionCounts.one_visit,
+      percentage: (distributionCounts.one_visit / distributionTotal) * 100,
+    },
+    {
+      key: "two_to_three",
+      label: "2-3 visits",
+      count: distributionCounts.two_to_three,
+      percentage: (distributionCounts.two_to_three / distributionTotal) * 100,
+    },
+    {
+      key: "four_to_six",
+      label: "4-6 visits",
+      count: distributionCounts.four_to_six,
+      percentage: (distributionCounts.four_to_six / distributionTotal) * 100,
+    },
+    {
+      key: "seven_plus",
+      label: "7+ visits",
+      count: distributionCounts.seven_plus,
+      percentage: (distributionCounts.seven_plus / distributionTotal) * 100,
+    },
   ];
-  const totalActivities = [...activityTypeCounts.values()].reduce((sum, count) => sum + count, 0);
+  const totalActivities = [...activityTypeCounts.values()].reduce(
+    (sum, count) => sum + count,
+    0,
+  );
   const activityTypeDistribution: ActivityTypeDistributionBucket[] = [
     {
       key: "all",
@@ -7747,39 +10379,58 @@ const getVisitationReport = async (
       };
     }),
   ];
-  const visitedMemberCountsByType = new Map<VisitedMemberBreakdownBucket["key"], number>();
+  const visitedMemberCountsByType = new Map<
+    VisitedMemberBreakdownBucket["key"],
+    number
+  >();
   for (const row of allRows) {
     if (row.visitCountInRange === 0) {
       continue;
     }
 
     const latestType = latestInRangeTypeByMemberId.get(row.memberId)?.type;
-    const bucketKey: VisitedMemberBreakdownBucket["key"] = latestType === "Visitation"
-      || latestType === "Confession"
-      || latestType === "Phone Call"
-      ? latestType
-      : "Other";
-    visitedMemberCountsByType.set(bucketKey, (visitedMemberCountsByType.get(bucketKey) ?? 0) + 1);
+    const bucketKey: VisitedMemberBreakdownBucket["key"] =
+      latestType === "Visitation" ||
+      latestType === "Confession" ||
+      latestType === "Phone Call"
+        ? latestType
+        : "Other";
+    visitedMemberCountsByType.set(
+      bucketKey,
+      (visitedMemberCountsByType.get(bucketKey) ?? 0) + 1,
+    );
   }
-  const visitedBreakdownOrder: VisitedMemberBreakdownBucket["key"][] = ["Visitation", "Confession", "Phone Call", "Other"];
-  const visitedBreakdownByType: VisitedMemberBreakdownBucket[] = visitedBreakdownOrder
-    .map((key) => {
-      const memberCount = visitedMemberCountsByType.get(key) ?? 0;
-      return {
-        key,
-        label: key === "Visitation" ? "Visit" : key,
-        memberCount,
-        percentage: visitedInRangeCount > 0 ? (memberCount / visitedInRangeCount) * 100 : 0,
-      };
-    })
-    .filter((bucket) => bucket.memberCount > 0 || bucket.key !== "Other");
-  const monthlyActivityTrend: MonthlyActivityTrendPoint[] = [...monthlyActivityCounts.entries()]
+  const visitedBreakdownOrder: VisitedMemberBreakdownBucket["key"][] = [
+    "Visitation",
+    "Confession",
+    "Phone Call",
+    "Other",
+  ];
+  const visitedBreakdownByType: VisitedMemberBreakdownBucket[] =
+    visitedBreakdownOrder
+      .map((key) => {
+        const memberCount = visitedMemberCountsByType.get(key) ?? 0;
+        return {
+          key,
+          label: key === "Visitation" ? "Visit" : key,
+          memberCount,
+          percentage:
+            visitedInRangeCount > 0
+              ? (memberCount / visitedInRangeCount) * 100
+              : 0,
+        };
+      })
+      .filter((bucket) => bucket.memberCount > 0 || bucket.key !== "Other");
+  const monthlyActivityTrend: MonthlyActivityTrendPoint[] = [
+    ...monthlyActivityCounts.entries(),
+  ]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([month, count]) => {
       const [year, monthIndex] = month.split("-");
-      const label = new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric" }).format(
-        new Date(Number(year), Number(monthIndex) - 1, 1),
-      );
+      const label = new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        year: "numeric",
+      }).format(new Date(Number(year), Number(monthIndex) - 1, 1));
       return {
         month,
         label,
@@ -7788,7 +10439,10 @@ const getVisitationReport = async (
     });
 
   const summary: VisitationReportKpiSummary = {
-    totalMembers: filters.tagIds?.length || filters.householdTagIds?.length ? allRows.length : filteredMembers.length,
+    totalMembers:
+      filters.tagIds?.length || filters.householdTagIds?.length
+        ? allRows.length
+        : filteredMembers.length,
     matchingMembers: allRows.length,
     notVisitedMembers: notVisitedCount,
     overdueMembers: overdueCount,
@@ -7801,13 +10455,25 @@ const getVisitationReport = async (
 
   const attentionMembers = allRows
     .filter((row) => {
-      const memberStatus = getMemberStatus(row.totalLifetimeVisits, row.visitCountInRange, row.lastVisitDate);
-      return memberStatus === "never_visited" || memberStatus === "not_visited_recently";
+      const memberStatus = getMemberStatus(
+        row.totalLifetimeVisits,
+        row.visitCountInRange,
+        row.lastVisitDate,
+      );
+      return (
+        memberStatus === "never_visited" ||
+        memberStatus === "not_visited_recently"
+      );
     })
     .sort((left, right) => {
-      const leftDays = getDaysSince(left.lastVisitDate) ?? Number.POSITIVE_INFINITY;
-      const rightDays = getDaysSince(right.lastVisitDate) ?? Number.POSITIVE_INFINITY;
-      return rightDays - leftDays || left.memberFullName.localeCompare(right.memberFullName);
+      const leftDays =
+        getDaysSince(left.lastVisitDate) ?? Number.POSITIVE_INFINITY;
+      const rightDays =
+        getDaysSince(right.lastVisitDate) ?? Number.POSITIVE_INFINITY;
+      return (
+        rightDays - leftDays ||
+        left.memberFullName.localeCompare(right.memberFullName)
+      );
     })
     .slice(0, 5);
 
@@ -7838,7 +10504,11 @@ const getVisitationReport = async (
     visitors: allVisitors,
     availableGroups,
     topVisitors: [...topVisitorsByUserId.values()]
-      .sort((left, right) => right.visitCountInRange - left.visitCountInRange || left.visitorDisplayName.localeCompare(right.visitorDisplayName))
+      .sort(
+        (left, right) =>
+          right.visitCountInRange - left.visitCountInRange ||
+          left.visitorDisplayName.localeCompare(right.visitorDisplayName),
+      )
       .slice(0, 5),
     currentUserActivity,
     generatedAt: deps.now(),
@@ -7847,16 +10517,20 @@ const getVisitationReport = async (
   return json(200, response);
 };
 
-const hasValidHouseholdCoordinates = (household: Pick<HouseholdItem, "location">) => {
+const hasValidHouseholdCoordinates = (
+  household: Pick<HouseholdItem, "location">,
+) => {
   const latitude = household.location?.latitude;
   const longitude = household.location?.longitude;
 
-  return Number.isFinite(latitude)
-    && Number.isFinite(longitude)
-    && latitude! >= -90
-    && latitude! <= 90
-    && longitude! >= -180
-    && longitude! <= 180;
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude! >= -90 &&
+    latitude! <= 90 &&
+    longitude! >= -180 &&
+    longitude! <= 180
+  );
 };
 
 const getVisitationGeographyReport = async (
@@ -7866,11 +10540,24 @@ const getVisitationGeographyReport = async (
 ) => {
   const filters = parseVisitationReportFilters(event);
   const [households, visitations] = await Promise.all([
-    taggedHouseholds(context, { tagIds: filters.householdTagIds?.length ? filters.householdTagIds : filters.tagIds, tagMatchMode: filters.householdTagIds?.length ? filters.householdTagMatchMode : filters.tagMatchMode }, deps),
+    taggedHouseholds(
+      context,
+      {
+        tagIds: filters.householdTagIds?.length
+          ? filters.householdTagIds
+          : filters.tagIds,
+        tagMatchMode: filters.householdTagIds?.length
+          ? filters.householdTagMatchMode
+          : filters.tagMatchMode,
+      },
+      deps,
+    ),
     listTenantVisitations(context, deps),
   ]);
 
-  const householdById = new Map(households.map((household) => [household.householdId, household]));
+  const householdById = new Map(
+    households.map((household) => [household.householdId, household]),
+  );
   const householdIdByMemberId = new Map<string, string>();
   for (const household of households) {
     for (const member of household.members ?? []) {
@@ -7878,22 +10565,31 @@ const getVisitationGeographyReport = async (
     }
   }
 
-  const reportVisitations = filters.type === "all"
-    ? visitations
-    : visitations.filter((item) => normalizeVisitationType(item.type) === filters.type);
+  const reportVisitations =
+    filters.type === "all"
+      ? visitations
+      : visitations.filter(
+          (item) => normalizeVisitationType(item.type) === filters.type,
+        );
 
-  const householdMetrics = new Map<string, { visitCount: number; lastVisitDate?: string; lastVisitedBy?: string }>();
+  const householdMetrics = new Map<
+    string,
+    { visitCount: number; lastVisitDate?: string; lastVisitedBy?: string }
+  >();
   const areaSummaryById = new Map<string, VisitationAreaSummary>(
-    visitationAreaDefinitions.map((definition) => [definition.id, {
-      areaId: definition.id,
-      areaName: definition.label,
-      members: 0,
-      households: 0,
-      visited: 0,
-      notVisited: 0,
-      visitations: 0,
-      coverage: 0,
-    }]),
+    visitationAreaDefinitions.map((definition) => [
+      definition.id,
+      {
+        areaId: definition.id,
+        areaName: definition.label,
+        members: 0,
+        households: 0,
+        visited: 0,
+        notVisited: 0,
+        visitations: 0,
+        coverage: 0,
+      },
+    ]),
   );
 
   for (const visitation of reportVisitations) {
@@ -7918,59 +10614,84 @@ const getVisitationGeographyReport = async (
       lastVisitedBy: undefined,
     };
     current.visitCount += 1;
-    if (!current.lastVisitDate || visitation.visitDate > current.lastVisitDate) {
+    if (
+      !current.lastVisitDate ||
+      visitation.visitDate > current.lastVisitDate
+    ) {
       current.lastVisitDate = visitation.visitDate;
       current.lastVisitedBy = visitation.visitorDisplayName;
     }
     householdMetrics.set(householdId, current);
   }
 
-  const totalMembers = households.reduce((sum, household) => sum + household.memberCount, 0);
+  const totalMembers = households.reduce(
+    (sum, household) => sum + household.memberCount,
+    0,
+  );
   const totalHouseholds = households.length;
-  const visitedHouseholds = households.filter((household) => (householdMetrics.get(household.householdId)?.visitCount ?? 0) > 0).length;
+  const visitedHouseholds = households.filter(
+    (household) =>
+      (householdMetrics.get(household.householdId)?.visitCount ?? 0) > 0,
+  ).length;
   const notVisitedHouseholds = Math.max(0, totalHouseholds - visitedHouseholds);
-  const visitationsCount = [...householdMetrics.values()].reduce((sum, item) => sum + item.visitCount, 0);
-  const mappedHouseholds = households.filter(hasValidHouseholdCoordinates).length;
+  const visitationsCount = [...householdMetrics.values()].reduce(
+    (sum, item) => sum + item.visitCount,
+    0,
+  );
+  const mappedHouseholds = households.filter(
+    hasValidHouseholdCoordinates,
+  ).length;
   const unmappedHouseholds = Math.max(0, totalHouseholds - mappedHouseholds);
 
-  const features: VisitationGeographyFeature[] = households.flatMap((household) => {
-    const areaId = resolveVisitationAreaId({ areaId: household.areaId, postalCode: household.postalCode });
-    const areaSummary = areaSummaryById.get(areaId) ?? areaSummaryById.get("UNASSIGNED");
-    const metrics = householdMetrics.get(household.householdId);
-    const visited = metrics?.visitCount ? 1 : 0;
+  const features: VisitationGeographyFeature[] = households.flatMap(
+    (household) => {
+      const areaId = resolveVisitationAreaId({
+        areaId: household.areaId,
+        postalCode: household.postalCode,
+      });
+      const areaSummary =
+        areaSummaryById.get(areaId) ?? areaSummaryById.get("UNASSIGNED");
+      const metrics = householdMetrics.get(household.householdId);
+      const visited = metrics?.visitCount ? 1 : 0;
 
-    if (areaSummary) {
-      areaSummary.households += 1;
-      areaSummary.members += household.memberCount;
-      areaSummary.visited += visited;
-      areaSummary.visitations += metrics?.visitCount ?? 0;
-    }
+      if (areaSummary) {
+        areaSummary.households += 1;
+        areaSummary.members += household.memberCount;
+        areaSummary.visited += visited;
+        areaSummary.visitations += metrics?.visitCount ?? 0;
+      }
 
-    if (!hasValidHouseholdCoordinates(household)) {
-      return [];
-    }
+      if (!hasValidHouseholdCoordinates(household)) {
+        return [];
+      }
 
-    return [{
-      type: "Feature",
-      geometry: {
-        type: "Point",
-        coordinates: [household.location!.longitude!, household.location!.latitude!],
-      },
-      properties: {
-        householdId: household.householdId,
-        normalizedAddress: household.normalizedAddress,
-        memberNames: (household.members ?? [])
-          .map((member) => normalizeWhitespace(member.fullName))
-          .filter(Boolean),
-        memberCount: household.memberCount,
-        visited,
-        visitCount: metrics?.visitCount ?? 0,
-        lastVisitDate: metrics?.lastVisitDate,
-        lastVisitedBy: metrics?.lastVisitedBy,
-        areaId,
-      },
-    }];
-  });
+      return [
+        {
+          type: "Feature",
+          geometry: {
+            type: "Point",
+            coordinates: [
+              household.location!.longitude!,
+              household.location!.latitude!,
+            ],
+          },
+          properties: {
+            householdId: household.householdId,
+            normalizedAddress: household.normalizedAddress,
+            memberNames: (household.members ?? [])
+              .map((member) => normalizeWhitespace(member.fullName))
+              .filter(Boolean),
+            memberCount: household.memberCount,
+            visited,
+            visitCount: metrics?.visitCount ?? 0,
+            lastVisitDate: metrics?.lastVisitDate,
+            lastVisitedBy: metrics?.lastVisitedBy,
+            areaId,
+          },
+        },
+      ];
+    },
+  );
 
   const areas = visitationAreaDefinitions.map((definition) => {
     const summary = areaSummaryById.get(definition.id) ?? {
@@ -7985,7 +10706,9 @@ const getVisitationGeographyReport = async (
     };
 
     summary.notVisited = Math.max(0, summary.households - summary.visited);
-    summary.coverage = summary.households ? (summary.visited / summary.households) * 100 : 0;
+    summary.coverage = summary.households
+      ? (summary.visited / summary.households) * 100
+      : 0;
     summary.areaName = getVisitationAreaDefinition(summary.areaId).label;
     return summary;
   });
@@ -8013,7 +10736,10 @@ const getVisitationGeographyReport = async (
   return json(200, response);
 };
 
-const getScheduleOverview = async (context: RequestContext, deps: HandlerDependencies) => {
+const getScheduleOverview = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const [connection, calendars, settings] = await Promise.all([
     getGoogleConnection(context, deps),
     listCalendars(context, deps),
@@ -8030,7 +10756,10 @@ const getScheduleOverview = async (context: RequestContext, deps: HandlerDepende
   return json(200, response);
 };
 
-const connectGoogle = async (context: RequestContext, deps: HandlerDependencies) => {
+const connectGoogle = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   if (!isGoogleConfigured()) {
     return json(400, {
       message:
@@ -8124,14 +10853,22 @@ const handleGoogleCallback = async (
 
   if (!tokenResponse.ok) {
     const details = await tokenResponse.text();
-    return html(400, `<h1>OAuth token exchange failed.</h1><pre>${details}</pre>`);
+    return html(
+      400,
+      `<h1>OAuth token exchange failed.</h1><pre>${details}</pre>`,
+    );
   }
 
   const tokens = (await tokenResponse.json()) as GoogleTokenResponse;
-  const grantedScopes = normalizeScopeList(tokens.scope ? tokens.scope.split(" ") : GOOGLE_SCOPES);
+  const grantedScopes = normalizeScopeList(
+    tokens.scope ? tokens.scope.split(" ") : GOOGLE_SCOPES,
+  );
   if (!hasRequiredGoogleScopes(grantedScopes)) {
     await deleteOAuthState(state, tableName, deps);
-    return html(400, `<h1>Google Calendar access was not granted.</h1><p>${googleReconnectMessage}</p>`);
+    return html(
+      400,
+      `<h1>Google Calendar access was not granted.</h1><p>${googleReconnectMessage}</p>`,
+    );
   }
 
   const profileResponse = await deps.fetchImpl(GOOGLE_USERINFO_URL, {
@@ -8139,7 +10876,10 @@ const handleGoogleCallback = async (
       authorization: `Bearer ${tokens.access_token}`,
     },
   });
-  const profile = (await profileResponse.json()) as { email?: string; sub?: string };
+  const profile = (await profileResponse.json()) as {
+    email?: string;
+    sub?: string;
+  };
   const now = deps.now();
   const callbackContext: RequestContext = {
     actorEmail: stateItem.actorEmail,
@@ -8183,10 +10923,16 @@ const handleGoogleCallback = async (
     return redirect(target.toString());
   }
 
-  return html(200, "<h1>Google Calendar connected.</h1><p>You can close this window.</p>");
+  return html(
+    200,
+    "<h1>Google Calendar connected.</h1><p>You can close this window.</p>",
+  );
 };
 
-const refreshCalendars = async (context: RequestContext, deps: HandlerDependencies) => {
+const refreshCalendars = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const connection = await getGoogleConnection(context, deps);
   if (!connection) {
     return json(400, { message: "Connect Google Calendar first." });
@@ -8196,7 +10942,10 @@ const refreshCalendars = async (context: RequestContext, deps: HandlerDependenci
   return json(200, { calendars: calendars.map(toScheduleCalendar) });
 };
 
-const disconnectGoogle = async (context: RequestContext, deps: HandlerDependencies) => {
+const disconnectGoogle = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   await deleteGoogleConnection(context, deps);
   return json(200, { disconnected: true });
 };
@@ -8233,7 +10982,9 @@ const updateCalendarSettings = async (
     sync: {
       ...existing.sync,
       syncMode: input.syncMode,
-      refreshIntervalMinutes: normalizeRefreshInterval(input.cacheStaleThresholdMinutes),
+      refreshIntervalMinutes: normalizeRefreshInterval(
+        input.cacheStaleThresholdMinutes,
+      ),
       initialSyncRange: nextRange,
       requiresFullSync: existing.sync.requiresFullSync || windowChanged,
     },
@@ -8254,13 +11005,17 @@ const saveScheduleSettings = async (
   }
 
   const existingCalendars = await listCalendars(context, deps);
-  const calendarsById = new Map(existingCalendars.map((calendar) => [calendar.calendarId, calendar]));
+  const calendarsById = new Map(
+    existingCalendars.map((calendar) => [calendar.calendarId, calendar]),
+  );
   const now = deps.now();
 
   for (const calendarInput of input.calendars) {
     const existing = calendarsById.get(calendarInput.calendarId);
     if (!existing) {
-      return json(404, { message: `Calendar ${calendarInput.calendarId} not found.` });
+      return json(404, {
+        message: `Calendar ${calendarInput.calendarId} not found.`,
+      });
     }
 
     const nextRange = existing.sync.requiresFullSync
@@ -8274,7 +11029,9 @@ const saveScheduleSettings = async (
       sync: {
         ...existing.sync,
         syncMode: calendarInput.syncMode,
-        refreshIntervalMinutes: normalizeRefreshInterval(calendarInput.cacheStaleThresholdMinutes),
+        refreshIntervalMinutes: normalizeRefreshInterval(
+          calendarInput.cacheStaleThresholdMinutes,
+        ),
         initialSyncRange: nextRange,
         requiresFullSync:
           existing.sync.requiresFullSync ||
@@ -8297,9 +11054,10 @@ const saveScheduleSettings = async (
       entityType: "schedule_settings",
       userId: context.actorSub,
       tenantId: context.tenantId,
-      calendarListRefreshThresholdMinutes: normalizeCalendarListRefreshThreshold(
-        input.calendarListRefreshThresholdMinutes,
-      ),
+      calendarListRefreshThresholdMinutes:
+        normalizeCalendarListRefreshThreshold(
+          input.calendarListRefreshThresholdMinutes,
+        ),
     },
     deps,
   );
@@ -8313,9 +11071,11 @@ const getScheduleEvents = async (
   deps: HandlerDependencies,
 ) => {
   const timeMin =
-    event.queryStringParameters?.timeMin ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    event.queryStringParameters?.timeMin ??
+    new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const timeMax =
-    event.queryStringParameters?.timeMax ?? new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+    event.queryStringParameters?.timeMax ??
+    new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
   const forceSync = event.queryStringParameters?.forceSync === "true";
   const cacheOnly = event.queryStringParameters?.cacheOnly === "true";
   const calendarIds = event.queryStringParameters?.calendarIds
@@ -8355,11 +11115,17 @@ const getScheduleEventResponse = async (
 
 const forceSyncCalendars = async (
   context: RequestContext,
-  body: { timeMin?: string; timeMax?: string; calendarIds?: string[] } | undefined,
+  body:
+    | { timeMin?: string; timeMax?: string; calendarIds?: string[] }
+    | undefined,
   deps: HandlerDependencies,
 ) => {
-  const timeMin = body?.timeMin ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const timeMax = body?.timeMax ?? new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+  const timeMin =
+    body?.timeMin ??
+    new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const timeMax =
+    body?.timeMax ??
+    new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
 
   return json(
     200,
@@ -8372,11 +11138,18 @@ const forceSyncCalendars = async (
   );
 };
 
-const clearScheduleCache = async (context: RequestContext, deps: HandlerDependencies) => {
+const clearScheduleCache = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   const calendars = await listCalendars(context, deps);
 
   for (const calendar of calendars) {
-    const events = await listAllEventsForCalendar(context, calendar.calendarId, deps);
+    const events = await listAllEventsForCalendar(
+      context,
+      calendar.calendarId,
+      deps,
+    );
     for (const event of events) {
       await deleteCachedEventOnly(context, event, deps);
     }
@@ -8414,7 +11187,11 @@ const clearCalendarCache = async (
     return json(404, { message: "Calendar not found." });
   }
 
-  const events = await listAllEventsForCalendar(context, calendar.calendarId, deps);
+  const events = await listAllEventsForCalendar(
+    context,
+    calendar.calendarId,
+    deps,
+  );
   for (const event of events) {
     await deleteCachedEventOnly(context, event, deps);
   }
@@ -8442,10 +11219,22 @@ const clearCalendarCache = async (
 };
 
 const buildGoogleEventBody = (
-  input: Pick<CreateScheduleEventInput, "summary" | "description" | "location" | "attendees" | "start" | "end" | "allDay" | "memberIds">,
+  input: Pick<
+    CreateScheduleEventInput,
+    | "summary"
+    | "description"
+    | "location"
+    | "attendees"
+    | "start"
+    | "end"
+    | "allDay"
+    | "memberIds"
+  >,
 ) => {
   const memberIds = normalizeMemberIds(input.memberIds);
-  const attendees = normalizeAttendees(input.attendees).map((email) => ({ email }));
+  const attendees = normalizeAttendees(input.attendees).map((email) => ({
+    email,
+  }));
   const description = input.description?.trim();
   const location = input.location?.trim();
   const base = {
@@ -8495,12 +11284,23 @@ const createScheduleEvent = async (
     return json(404, { message: "Calendar not found." });
   }
 
-  const resolvedHouseholdMemberIds = await resolveHouseholdMemberIds(context, input.householdIds, deps);
-  const resolvedMemberIds = [...new Set([...normalizeMemberIds(input.memberIds), ...resolvedHouseholdMemberIds])];
+  const resolvedHouseholdMemberIds = await resolveHouseholdMemberIds(
+    context,
+    input.householdIds,
+    deps,
+  );
+  const resolvedMemberIds = [
+    ...new Set([
+      ...normalizeMemberIds(input.memberIds),
+      ...resolvedHouseholdMemberIds,
+    ]),
+  ];
   const nextInput: CreateScheduleEventInput = {
     ...input,
     memberIds: resolvedMemberIds,
-    dismissedAutoLinkedMemberIds: normalizeMemberIds(input.dismissedAutoLinkedMemberIds),
+    dismissedAutoLinkedMemberIds: normalizeMemberIds(
+      input.dismissedAutoLinkedMemberIds,
+    ),
   };
 
   const response = await googleFetch(
@@ -8516,13 +11316,24 @@ const createScheduleEvent = async (
 
   const created = (await response.json()) as GoogleEventPayload;
 
-  const stored = await upsertGoogleEventIntoCache(context, calendar, created, "GOOGLE", undefined, deps);
-  const updatedStored = await persistEventWithMemberAssignments(context, {
-    ...stored,
-    dismissedAutoLinkedMemberIds: nextInput.dismissedAutoLinkedMemberIds,
-    memberIds: resolvedMemberIds,
-    visitationType: input.type,
-  }, deps);
+  const stored = await upsertGoogleEventIntoCache(
+    context,
+    calendar,
+    created,
+    "GOOGLE",
+    undefined,
+    deps,
+  );
+  const updatedStored = await persistEventWithMemberAssignments(
+    context,
+    {
+      ...stored,
+      dismissedAutoLinkedMemberIds: nextInput.dismissedAutoLinkedMemberIds,
+      memberIds: resolvedMemberIds,
+      visitationType: input.type,
+    },
+    deps,
+  );
   return json(201, toScheduleEvent(updatedStored));
 };
 
@@ -8562,22 +11373,36 @@ const updateScheduleEvent = async (
     end: input.end ?? existing.end,
     allDay: input.allDay ?? existing.allDay,
     memberIds: input.memberIds ?? existing.memberIds,
-    dismissedAutoLinkedMemberIds: input.dismissedAutoLinkedMemberIds ?? existing.dismissedAutoLinkedMemberIds,
+    dismissedAutoLinkedMemberIds:
+      input.dismissedAutoLinkedMemberIds ??
+      existing.dismissedAutoLinkedMemberIds,
     householdIds: input.householdIds,
     type: input.type ?? existing.visitationType,
   };
 
-  if (new Date(nextEvent.end).getTime() <= new Date(nextEvent.start).getTime()) {
+  if (
+    new Date(nextEvent.end).getTime() <= new Date(nextEvent.start).getTime()
+  ) {
     return json(400, { message: "End time must be after start time." });
   }
 
-  const resolvedHouseholdMemberIds = await resolveHouseholdMemberIds(context, nextEvent.householdIds, deps);
-  nextEvent.memberIds = [...new Set([...normalizeMemberIds(nextEvent.memberIds), ...resolvedHouseholdMemberIds])];
+  const resolvedHouseholdMemberIds = await resolveHouseholdMemberIds(
+    context,
+    nextEvent.householdIds,
+    deps,
+  );
+  nextEvent.memberIds = [
+    ...new Set([
+      ...normalizeMemberIds(nextEvent.memberIds),
+      ...resolvedHouseholdMemberIds,
+    ]),
+  ];
 
   const response = await googleFetch(
     context,
     connection,
-    GOOGLE_CALENDAR_EVENTS_URL(input.calendarId) + `/${encodeURIComponent(eventId)}`,
+    GOOGLE_CALENDAR_EVENTS_URL(input.calendarId) +
+      `/${encodeURIComponent(eventId)}`,
     deps,
     {
       method: "PATCH",
@@ -8600,20 +11425,30 @@ const updateScheduleEvent = async (
     },
     deps,
   );
-  const persistedAutoLinkedMembers = await loadMembersByIds(context, stored.autoLinkedMemberIds ?? [], deps);
+  const persistedAutoLinkedMembers = await loadMembersByIds(
+    context,
+    stored.autoLinkedMemberIds ?? [],
+    deps,
+  );
   const autoLinkedVisitationTypeOverride =
-    persistedAutoLinkedMembers.length && !normalizeMemberIds(nextEvent.memberIds).length
+    persistedAutoLinkedMembers.length &&
+    !normalizeMemberIds(nextEvent.memberIds).length
       ? stored.autoLinkedVisitationType
       : undefined;
-  const updatedStored = await persistEventWithMemberAssignments(context, {
-    ...stored,
-    dismissedAutoLinkedMemberIds: nextEvent.dismissedAutoLinkedMemberIds,
-    memberIds: nextEvent.memberIds ?? [],
-    visitationType: nextEvent.type,
-  }, deps, {
-    autoLinkedMembers: persistedAutoLinkedMembers,
-    visitationTypeOverride: autoLinkedVisitationTypeOverride,
-  });
+  const updatedStored = await persistEventWithMemberAssignments(
+    context,
+    {
+      ...stored,
+      dismissedAutoLinkedMemberIds: nextEvent.dismissedAutoLinkedMemberIds,
+      memberIds: nextEvent.memberIds ?? [],
+      visitationType: nextEvent.type,
+    },
+    deps,
+    {
+      autoLinkedMembers: persistedAutoLinkedMembers,
+      visitationTypeOverride: autoLinkedVisitationTypeOverride,
+    },
+  );
   return json(200, toScheduleEvent(updatedStored));
 };
 
@@ -8651,7 +11486,10 @@ const deleteScheduleEvent = async (
   return json(200, { deleted: true, eventId, calendarId });
 };
 
-const getAdminUsers = async (context: RequestContext, deps: HandlerDependencies) => {
+const getAdminUsers = async (
+  context: RequestContext,
+  deps: HandlerDependencies,
+) => {
   await requireAdminContext(context, deps, "admin.user_groups.list");
   const items = await listTenantUsers(context, deps);
   return json(200, { items } satisfies TenantUsersResponse);
@@ -8665,16 +11503,29 @@ const updateAdminUserGroups = async (
 ) => {
   await requireAdminContext(context, deps, "admin.user_groups.update");
   try {
-    const requestedGroups = [...new Set(normalizeGroups(input.groups).filter((group): group is AdminManagedGroup =>
-      adminManagedGroups.includes(group as AdminManagedGroup),
-    ))];
+    const requestedGroups = [
+      ...new Set(
+        normalizeGroups(input.groups).filter(
+          (group): group is AdminManagedGroup =>
+            adminManagedGroups.includes(group as AdminManagedGroup),
+        ),
+      ),
+    ];
     const targetUser = await getTenantUser(context, username, deps);
-    const currentManagedGroups = targetUser.groups.filter((group): group is AdminManagedGroup =>
-      adminManagedGroups.includes(group as AdminManagedGroup),
+    const currentManagedGroups = targetUser.groups.filter(
+      (group): group is AdminManagedGroup =>
+        adminManagedGroups.includes(group as AdminManagedGroup),
     );
 
-    if (targetUser.sub === context.actorSub && currentManagedGroups.includes("admin") && !requestedGroups.includes("admin")) {
-      throw new HttpError(400, "You cannot remove your own admin access from this page.");
+    if (
+      targetUser.sub === context.actorSub &&
+      currentManagedGroups.includes("admin") &&
+      !requestedGroups.includes("admin")
+    ) {
+      throw new HttpError(
+        400,
+        "You cannot remove your own admin access from this page.",
+      );
     }
 
     const currentSet = new Set(currentManagedGroups);
@@ -8689,11 +11540,17 @@ const updateAdminUserGroups = async (
             Username: username,
           }),
         );
-        await logAuditEvent(context, "admin.user_group_added", "success", deps, {
-          targetUserId: targetUser.sub,
-          targetUsername: targetUser.username,
-          metadata: { group },
-        });
+        await logAuditEvent(
+          context,
+          "admin.user_group_added",
+          "success",
+          deps,
+          {
+            targetUserId: targetUser.sub,
+            targetUsername: targetUser.username,
+            metadata: { group },
+          },
+        );
       }
 
       if (currentSet.has(group) && !requestedSet.has(group)) {
@@ -8704,11 +11561,17 @@ const updateAdminUserGroups = async (
             Username: username,
           }),
         );
-        await logAuditEvent(context, "admin.user_group_removed", "success", deps, {
-          targetUserId: targetUser.sub,
-          targetUsername: targetUser.username,
-          metadata: { group },
-        });
+        await logAuditEvent(
+          context,
+          "admin.user_group_removed",
+          "success",
+          deps,
+          {
+            targetUserId: targetUser.sub,
+            targetUsername: targetUser.username,
+            metadata: { group },
+          },
+        );
       }
     }
 
@@ -8750,9 +11613,20 @@ const runAdminReset = async (
       throw new HttpError(404, "Reset action not found.");
     }
 
-    await logAuditEvent(context, `admin.reset.${summary.action}`, "success", deps, {
-      deletionCounts: Object.fromEntries(summary.affectedEntities.map((entry) => [entry.entityType, entry.deleted])),
-    });
+    await logAuditEvent(
+      context,
+      `admin.reset.${summary.action}`,
+      "success",
+      deps,
+      {
+        deletionCounts: Object.fromEntries(
+          summary.affectedEntities.map((entry) => [
+            entry.entityType,
+            entry.deleted,
+          ]),
+        ),
+      },
+    );
     return json(200, summary);
   } catch (error) {
     if (error instanceof HttpError) {
@@ -8763,7 +11637,9 @@ const runAdminReset = async (
     }
 
     await logAuditEvent(context, `admin.reset.${action}`, "failed", deps, {
-      metadata: { message: error instanceof Error ? error.message : "Unexpected error" },
+      metadata: {
+        message: error instanceof Error ? error.message : "Unexpected error",
+      },
     });
     throw error;
   }
@@ -8779,64 +11655,166 @@ const getPublicMonthAvailability = async (
   const appointmentTypeId = normalizeWhitespace(query?.appointmentTypeId);
   const month = normalizeWhitespace(query?.month);
   if (!profile) return null;
-  if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(400, "month must be YYYY-MM.");
-  const appointmentType = profile.appointmentTypes.find((type) => type.id === appointmentTypeId && type.enabled);
+  if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month))
+    throw new HttpError(400, "month must be YYYY-MM.");
+  const appointmentType = profile.appointmentTypes.find(
+    (type) => type.id === appointmentTypeId && type.enabled,
+  );
   if (!appointmentType) return null;
-  const requestedDuration = query?.durationMinutes ? Number(query.durationMinutes) : appointmentType.defaultDurationMinutes;
-  if (!Number.isInteger(requestedDuration) || !appointmentType.allowedDurationsMinutes.includes(requestedDuration)) {
-    throw new HttpError(400, "durationMinutes must be an allowed appointment duration.");
+  const requestedDuration = query?.durationMinutes
+    ? Number(query.durationMinutes)
+    : appointmentType.defaultDurationMinutes;
+  if (
+    !Number.isInteger(requestedDuration) ||
+    !appointmentType.allowedDurationsMinutes.includes(requestedDuration)
+  ) {
+    throw new HttpError(
+      400,
+      "durationMinutes must be an allowed appointment duration.",
+    );
   }
-  const monthStart = DateTime.fromISO(`${month}-01`, { zone: profile.timezone }).startOf("day");
-  if (!monthStart.isValid) throw new HttpError(400, "Invalid booking timezone.");
+  const monthStart = DateTime.fromISO(`${month}-01`, {
+    zone: profile.timezone,
+  }).startOf("day");
+  if (!monthStart.isValid)
+    throw new HttpError(400, "Invalid booking timezone.");
   const monthEnd = monthStart.plus({ months: 1 });
   const now = DateTime.fromISO(deps.now(), { zone: "utc" });
   const minStart = now.plus({ minutes: profile.minimumNoticeMinutes });
-  const horizonEnd = now.setZone(profile.timezone).startOf("day").plus({ days: profile.maximumBookingDays + 1 });
-  const publicContext: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
+  const horizonEnd = now
+    .setZone(profile.timezone)
+    .startOf("day")
+    .plus({ days: profile.maximumBookingDays + 1 });
+  const publicContext: RequestContext = {
+    actorSub: profile.ownerUserId,
+    tenantId: profile.tenantId,
+    actorEmail: "unknown@example.com",
+    actorName: "Public booking",
+    actorGroups: [],
+    tableName,
+  };
   const connection = await getGoogleConnection(publicContext, deps);
-  if (!connection) throw new HttpError(400, "Booking calendar connection is unavailable.");
-  const calendarIds = [...new Set([profile.bookingCalendarId, ...profile.conflictCalendarIds].filter((id): id is string => Boolean(id)))];
+  if (!connection)
+    throw new HttpError(400, "Booking calendar connection is unavailable.");
+  const calendarIds = [
+    ...new Set(
+      [profile.bookingCalendarId, ...profile.conflictCalendarIds].filter(
+        (id): id is string => Boolean(id),
+      ),
+    ),
+  ];
   const busyIntervals: Array<{ start: DateTime; end: DateTime }> = [];
   if (calendarIds.length) {
-    const freeBusyResponse = await googleFetch(publicContext, connection, "https://www.googleapis.com/calendar/v3/freeBusy", deps, {
-      method: "POST",
-      body: JSON.stringify({ timeMin: monthStart.toUTC().toISO(), timeMax: monthEnd.toUTC().toISO(), items: calendarIds.map((id) => ({ id })) }),
-    });
-    const payload = await freeBusyResponse.json() as { calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }> };
-    Object.values(payload.calendars ?? {}).flatMap((calendar) => calendar.busy ?? []).forEach((busy) => {
-      const start = DateTime.fromISO(busy.start ?? "", { zone: "utc" }); const end = DateTime.fromISO(busy.end ?? "", { zone: "utc" });
-      if (start.isValid && end.isValid && start < end) busyIntervals.push({ start, end });
-    });
+    const freeBusyResponse = await googleFetch(
+      publicContext,
+      connection,
+      "https://www.googleapis.com/calendar/v3/freeBusy",
+      deps,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          timeMin: monthStart.toUTC().toISO(),
+          timeMax: monthEnd.toUTC().toISO(),
+          items: calendarIds.map((id) => ({ id })),
+        }),
+      },
+    );
+    const payload = (await freeBusyResponse.json()) as {
+      calendars?: Record<
+        string,
+        { busy?: Array<{ start?: string; end?: string }> }
+      >;
+    };
+    Object.values(payload.calendars ?? {})
+      .flatMap((calendar) => calendar.busy ?? [])
+      .forEach((busy) => {
+        const start = DateTime.fromISO(busy.start ?? "", { zone: "utc" });
+        const end = DateTime.fromISO(busy.end ?? "", { zone: "utc" });
+        if (start.isValid && end.isValid && start < end)
+          busyIntervals.push({ start, end });
+      });
   }
-  const bookingDays = await queryAll(deps.documentClient, {
-    TableName: tableName, KeyConditionExpression: "#pk = :pk AND #sk BETWEEN :from AND :to",
+  const bookingDays = (await queryAll(deps.documentClient, {
+    TableName: tableName,
+    KeyConditionExpression: "#pk = :pk AND #sk BETWEEN :from AND :to",
     ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-    ExpressionAttributeValues: { ":pk": bookingDayPk(profile.profileId), ":from": monthStart.toISODate() ?? "", ":to": monthEnd.minus({ days: 1 }).toISODate() ?? "" },
-  }) as BookingDayItem[];
-  const reservationsByDate = new Map(bookingDays.map((day) => [day.SK, day.reservations ?? []]));
-  const blackoutDates = new Set(profile.globalDateOverrides.map((override) => override.date));
-  const overrides = new Map(appointmentType.dateOverrides.map((override) => [override.date, override]));
+    ExpressionAttributeValues: {
+      ":pk": bookingDayPk(profile.profileId),
+      ":from": monthStart.toISODate() ?? "",
+      ":to": monthEnd.minus({ days: 1 }).toISODate() ?? "",
+    },
+  })) as BookingDayItem[];
+  const reservationsByDate = new Map(
+    bookingDays.map((day) => [day.SK, day.reservations ?? []]),
+  );
+  const blackoutDates = new Set(
+    profile.globalDateOverrides.map((override) => override.date),
+  );
+  const overrides = new Map(
+    appointmentType.dateOverrides.map((override) => [override.date, override]),
+  );
   const availableDates: string[] = [];
   for (let day = monthStart; day < monthEnd; day = day.plus({ days: 1 })) {
     const date = day.toISODate() ?? "";
-    if (blackoutDates.has(date) || day < now.setZone(profile.timezone).startOf("day") || day >= horizonEnd) continue;
+    if (
+      blackoutDates.has(date) ||
+      day < now.setZone(profile.timezone).startOf("day") ||
+      day >= horizonEnd
+    )
+      continue;
     const override = overrides.get(date);
-    const ranges = override ? ("ranges" in override ? override.ranges : []) : (appointmentType.weeklyAvailability[bookingWeekdays[day.weekday - 1]] ?? []);
+    const ranges = override
+      ? "ranges" in override
+        ? override.ranges
+        : []
+      : (appointmentType.weeklyAvailability[bookingWeekdays[day.weekday - 1]] ??
+        []);
     if (!ranges.length) continue;
     const reservations = reservationsByDate.get(date) ?? [];
     let found = false;
-    for (let minute = 0; minute < 24 * 60 && !found; minute += profile.startIntervalMinutes) {
-      const candidate = day.plus({ minutes: minute }); const end = candidate.plus({ minutes: requestedDuration });
+    for (
+      let minute = 0;
+      minute < 24 * 60 && !found;
+      minute += profile.startIntervalMinutes
+    ) {
+      const candidate = day.plus({ minutes: minute });
+      const end = candidate.plus({ minutes: requestedDuration });
       if (!candidate.isValid || !end.isValid || candidate < minStart) continue;
-      if (!ranges.some((range) => minute >= Number(range.start.slice(0, 2)) * 60 + Number(range.start.slice(3)) && minute + requestedDuration <= Number(range.end.slice(0, 2)) * 60 + Number(range.end.slice(3)))) continue;
-      const candidateUtc = candidate.toUTC(); const endUtc = end.toUTC();
-      const hasGoogleConflict = busyIntervals.some((busy) => candidateUtc < busy.end && endUtc > busy.start);
-      const hasReservationConflict = reservations.some((reservation) => (reservation.status === "CONFIRMED" || (reservation.status === "RESERVED" && (!reservation.expiresAt || DateTime.fromISO(reservation.expiresAt) > now))) && candidateUtc < DateTime.fromISO(reservation.end, { zone: "utc" }) && endUtc > DateTime.fromISO(reservation.start, { zone: "utc" }));
+      if (
+        !ranges.some(
+          (range) =>
+            minute >=
+              Number(range.start.slice(0, 2)) * 60 +
+                Number(range.start.slice(3)) &&
+            minute + requestedDuration <=
+              Number(range.end.slice(0, 2)) * 60 + Number(range.end.slice(3)),
+        )
+      )
+        continue;
+      const candidateUtc = candidate.toUTC();
+      const endUtc = end.toUTC();
+      const hasGoogleConflict = busyIntervals.some(
+        (busy) => candidateUtc < busy.end && endUtc > busy.start,
+      );
+      const hasReservationConflict = reservations.some(
+        (reservation) =>
+          (reservation.status === "CONFIRMED" ||
+            (reservation.status === "RESERVED" &&
+              (!reservation.expiresAt ||
+                DateTime.fromISO(reservation.expiresAt) > now))) &&
+          candidateUtc < DateTime.fromISO(reservation.end, { zone: "utc" }) &&
+          endUtc > DateTime.fromISO(reservation.start, { zone: "utc" }),
+      );
       if (!hasGoogleConflict && !hasReservationConflict) found = true;
     }
     if (found) availableDates.push(date);
   }
-  return { appointmentTypeId, durationMinutes: requestedDuration, month, availableDates };
+  return {
+    appointmentTypeId,
+    durationMinutes: requestedDuration,
+    month,
+    availableDates,
+  };
 };
 
 const getPublicDayAvailability = async (
@@ -8851,43 +11829,170 @@ const getPublicDayAvailability = async (
   const date = normalizeWhitespace(query?.date);
   const durationMinutes = Number(query?.durationMinutes);
   if (!profile) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, "date must be YYYY-MM-DD.");
-  const type = profile.appointmentTypes.find((item) => item.id === appointmentTypeId && item.enabled);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
+    throw new HttpError(400, "date must be YYYY-MM-DD.");
+  const type = profile.appointmentTypes.find(
+    (item) => item.id === appointmentTypeId && item.enabled,
+  );
   if (!type) return null;
-  if (!Number.isInteger(durationMinutes) || !type.allowedDurationsMinutes.includes(durationMinutes)) throw new HttpError(400, "durationMinutes must be an allowed appointment duration.");
+  if (
+    !Number.isInteger(durationMinutes) ||
+    !type.allowedDurationsMinutes.includes(durationMinutes)
+  )
+    throw new HttpError(
+      400,
+      "durationMinutes must be an allowed appointment duration.",
+    );
   const day = DateTime.fromISO(date, { zone: profile.timezone }).startOf("day");
   if (!day.isValid) throw new HttpError(400, "Invalid booking date.");
   const now = DateTime.fromISO(deps.now(), { zone: "utc" });
   const minStart = now.plus({ minutes: profile.minimumNoticeMinutes });
-  const horizonEnd = now.setZone(profile.timezone).startOf("day").plus({ days: profile.maximumBookingDays + 1 });
-  const unavailable = profile.globalDateOverrides.some((override) => override.date === date) || day < now.setZone(profile.timezone).startOf("day") || day >= horizonEnd;
+  const horizonEnd = now
+    .setZone(profile.timezone)
+    .startOf("day")
+    .plus({ days: profile.maximumBookingDays + 1 });
+  const unavailable =
+    profile.globalDateOverrides.some((override) => override.date === date) ||
+    day < now.setZone(profile.timezone).startOf("day") ||
+    day >= horizonEnd;
   const override = type.dateOverrides.find((item) => item.date === date);
-  const ranges = unavailable ? [] : override ? ("ranges" in override ? override.ranges : []) : (type.weeklyAvailability[bookingWeekdays[day.weekday - 1]] ?? []);
-  if (!ranges.length) return { date, appointmentTypeId, durationMinutes, timezone: profile.timezone, slots: [] };
-  const publicContext: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
+  const ranges = unavailable
+    ? []
+    : override
+      ? "ranges" in override
+        ? override.ranges
+        : []
+      : (type.weeklyAvailability[bookingWeekdays[day.weekday - 1]] ?? []);
+  if (!ranges.length)
+    return {
+      date,
+      appointmentTypeId,
+      durationMinutes,
+      timezone: profile.timezone,
+      slots: [],
+    };
+  const publicContext: RequestContext = {
+    actorSub: profile.ownerUserId,
+    tenantId: profile.tenantId,
+    actorEmail: "unknown@example.com",
+    actorName: "Public booking",
+    actorGroups: [],
+    tableName,
+  };
   const connection = await getGoogleConnection(publicContext, deps);
-  if (!connection) throw new HttpError(400, "Booking calendar connection is unavailable.");
-  const calendarIds = [...new Set([profile.bookingCalendarId, ...profile.conflictCalendarIds].filter((id): id is string => Boolean(id)))];
-  const freeBusy = await googleFetch(publicContext, connection, "https://www.googleapis.com/calendar/v3/freeBusy", deps, { method: "POST", body: JSON.stringify({ timeMin: day.toUTC().toISO(), timeMax: day.plus({ days: 1 }).toUTC().toISO(), items: calendarIds.map((id) => ({ id })) }) });
-  const busyPayload = await freeBusy.json() as { calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }> };
-  const busy = Object.values(busyPayload.calendars ?? {}).flatMap((calendar) => calendar.busy ?? []).map((item) => ({ start: DateTime.fromISO(item.start ?? "", { zone: "utc" }), end: DateTime.fromISO(item.end ?? "", { zone: "utc" }) })).filter((item) => item.start.isValid && item.end.isValid && item.start < item.end);
-  const dayResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, Key: { PK: bookingDayPk(profile.profileId), SK: date } }));
-  const reservations = ((dayResult.Item as BookingDayItem | undefined)?.reservations ?? []).filter((reservation) => reservation.bookingId !== ignoreBookingId && (reservation.status === "CONFIRMED" || (reservation.status === "RESERVED" && (!reservation.expiresAt || DateTime.fromISO(reservation.expiresAt) > now))));
+  if (!connection)
+    throw new HttpError(400, "Booking calendar connection is unavailable.");
+  const calendarIds = [
+    ...new Set(
+      [profile.bookingCalendarId, ...profile.conflictCalendarIds].filter(
+        (id): id is string => Boolean(id),
+      ),
+    ),
+  ];
+  const freeBusy = await googleFetch(
+    publicContext,
+    connection,
+    "https://www.googleapis.com/calendar/v3/freeBusy",
+    deps,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        timeMin: day.toUTC().toISO(),
+        timeMax: day.plus({ days: 1 }).toUTC().toISO(),
+        items: calendarIds.map((id) => ({ id })),
+      }),
+    },
+  );
+  const busyPayload = (await freeBusy.json()) as {
+    calendars?: Record<
+      string,
+      { busy?: Array<{ start?: string; end?: string }> }
+    >;
+  };
+  const busy = Object.values(busyPayload.calendars ?? {})
+    .flatMap((calendar) => calendar.busy ?? [])
+    .map((item) => ({
+      start: DateTime.fromISO(item.start ?? "", { zone: "utc" }),
+      end: DateTime.fromISO(item.end ?? "", { zone: "utc" }),
+    }))
+    .filter(
+      (item) => item.start.isValid && item.end.isValid && item.start < item.end,
+    );
+  const dayResult = await deps.documentClient.send(
+    new GetCommand({
+      TableName: tableName,
+      Key: { PK: bookingDayPk(profile.profileId), SK: date },
+    }),
+  );
+  const reservations = (
+    (dayResult.Item as BookingDayItem | undefined)?.reservations ?? []
+  ).filter(
+    (reservation) =>
+      reservation.bookingId !== ignoreBookingId &&
+      (reservation.status === "CONFIRMED" ||
+        (reservation.status === "RESERVED" &&
+          (!reservation.expiresAt ||
+            DateTime.fromISO(reservation.expiresAt) > now))),
+  );
   const slots: PublicBookingDayAvailability["slots"] = [];
-  for (let minute = 0; minute < 24 * 60; minute += profile.startIntervalMinutes) {
-    const start = day.plus({ minutes: minute }); const end = start.plus({ minutes: durationMinutes });
-    if (!start.isValid || !end.isValid || start < minStart || !ranges.some((range) => minute >= Number(range.start.slice(0, 2)) * 60 + Number(range.start.slice(3)) && minute + durationMinutes <= Number(range.end.slice(0, 2)) * 60 + Number(range.end.slice(3)))) continue;
-    const utcStart = start.toUTC(); const utcEnd = end.toUTC();
-    if (busy.some((item) => utcStart < item.end && utcEnd > item.start) || reservations.some((item) => utcStart < DateTime.fromISO(item.end, { zone: "utc" }) && utcEnd > DateTime.fromISO(item.start, { zone: "utc" }))) continue;
+  for (
+    let minute = 0;
+    minute < 24 * 60;
+    minute += profile.startIntervalMinutes
+  ) {
+    const start = day.plus({ minutes: minute });
+    const end = start.plus({ minutes: durationMinutes });
+    if (
+      !start.isValid ||
+      !end.isValid ||
+      start < minStart ||
+      !ranges.some(
+        (range) =>
+          minute >=
+            Number(range.start.slice(0, 2)) * 60 +
+              Number(range.start.slice(3)) &&
+          minute + durationMinutes <=
+            Number(range.end.slice(0, 2)) * 60 + Number(range.end.slice(3)),
+      )
+    )
+      continue;
+    const utcStart = start.toUTC();
+    const utcEnd = end.toUTC();
+    if (
+      busy.some((item) => utcStart < item.end && utcEnd > item.start) ||
+      reservations.some(
+        (item) =>
+          utcStart < DateTime.fromISO(item.end, { zone: "utc" }) &&
+          utcEnd > DateTime.fromISO(item.start, { zone: "utc" }),
+      )
+    )
+      continue;
     slots.push({ start: utcStart.toISO() ?? "", end: utcEnd.toISO() ?? "" });
   }
-  return { date, appointmentTypeId, durationMinutes, timezone: profile.timezone, slots };
+  return {
+    date,
+    appointmentTypeId,
+    durationMinutes,
+    timezone: profile.timezone,
+    slots,
+  };
 };
 
-const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
-const intervalsOverlap = (start: string, end: string, otherStart: string, otherEnd: string) => start < otherEnd && end > otherStart;
-const isActiveBookingReservation = (reservation: BookingDayItem["reservations"][number], now: string) =>
-  reservation.status === "CONFIRMED" || (reservation.status === "RESERVED" && (!reservation.expiresAt || reservation.expiresAt > now));
+const sha256 = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
+const intervalsOverlap = (
+  start: string,
+  end: string,
+  otherStart: string,
+  otherEnd: string,
+) => start < otherEnd && end > otherStart;
+const isActiveBookingReservation = (
+  reservation: BookingDayItem["reservations"][number],
+  now: string,
+) =>
+  reservation.status === "CONFIRMED" ||
+  (reservation.status === "RESERVED" &&
+    (!reservation.expiresAt || reservation.expiresAt > now));
 
 const claimPublicBookingReservation = async (
   profileId: string,
@@ -8897,22 +12002,56 @@ const claimPublicBookingReservation = async (
   deps: HandlerDependencies,
 ) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: bookingDayPk(profileId), SK: localDate } }));
+    const result = await deps.documentClient.send(
+      new GetCommand({
+        TableName: tableName,
+        ConsistentRead: true,
+        Key: { PK: bookingDayPk(profileId), SK: localDate },
+      }),
+    );
     const existing = result.Item as BookingDayItem | undefined;
     const now = deps.now();
-    const active = (existing?.reservations ?? []).filter((item) => isActiveBookingReservation(item, now));
-    if (active.some((item) => intervalsOverlap(reservation.start, reservation.end, item.start, item.end))) throw new HttpError(409, "That appointment time is no longer available.");
+    const active = (existing?.reservations ?? []).filter((item) =>
+      isActiveBookingReservation(item, now),
+    );
+    if (
+      active.some((item) =>
+        intervalsOverlap(
+          reservation.start,
+          reservation.end,
+          item.start,
+          item.end,
+        ),
+      )
+    )
+      throw new HttpError(409, "That appointment time is no longer available.");
     const expectedVersion = existing?.version ?? 0;
     const item: BookingDayItem = {
-      PK: bookingDayPk(profileId), SK: localDate, entityType: "PUBLIC_BOOKING_DAY", profileId,
-      version: expectedVersion + 1, reservations: [...active, reservation],
-      createdAt: existing?.createdAt ?? now, updatedAt: now,
+      PK: bookingDayPk(profileId),
+      SK: localDate,
+      entityType: "PUBLIC_BOOKING_DAY",
+      profileId,
+      version: expectedVersion + 1,
+      reservations: [...active, reservation],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
     };
     try {
-      await deps.documentClient.send(new PutCommand({
-        TableName: tableName, Item: item,
-        ...(existing ? { ConditionExpression: "#version = :expectedVersion", ExpressionAttributeNames: { "#version": "version" }, ExpressionAttributeValues: { ":expectedVersion": expectedVersion } } : { ConditionExpression: "attribute_not_exists(PK)" }),
-      }));
+      await deps.documentClient.send(
+        new PutCommand({
+          TableName: tableName,
+          Item: item,
+          ...(existing
+            ? {
+                ConditionExpression: "#version = :expectedVersion",
+                ExpressionAttributeNames: { "#version": "version" },
+                ExpressionAttributeValues: {
+                  ":expectedVersion": expectedVersion,
+                },
+              }
+            : { ConditionExpression: "attribute_not_exists(PK)" }),
+        }),
+      );
       return;
     } catch (error) {
       if (!isDynamoCancellationError(error)) throw error;
@@ -8930,28 +12069,56 @@ const mutateOwnPublicBookingReservation = async (
   deps: HandlerDependencies,
 ) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: bookingDayPk(profileId), SK: localDate } }));
+    const result = await deps.documentClient.send(
+      new GetCommand({
+        TableName: tableName,
+        ConsistentRead: true,
+        Key: { PK: bookingDayPk(profileId), SK: localDate },
+      }),
+    );
     const existing = result.Item as BookingDayItem | undefined;
     if (!existing) {
       if (action === "remove") return;
       throw new Error("Booking reservation disappeared before finalization.");
     }
-    const own = existing.reservations.find((item) => item.bookingId === bookingId);
+    const own = existing.reservations.find(
+      (item) => item.bookingId === bookingId,
+    );
     if (!own) {
       if (action === "remove") return;
       throw new Error("Booking reservation disappeared before finalization.");
     }
-    const reservations = action === "remove"
-      ? existing.reservations.filter((item) => item.bookingId !== bookingId)
-      : existing.reservations.map((item) => item.bookingId === bookingId ? { ...item, status: "CONFIRMED", expiresAt: undefined } : item);
+    const reservations =
+      action === "remove"
+        ? existing.reservations.filter((item) => item.bookingId !== bookingId)
+        : existing.reservations.map((item) =>
+            item.bookingId === bookingId
+              ? { ...item, status: "CONFIRMED", expiresAt: undefined }
+              : item,
+          );
     try {
-      await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: { ...existing, version: existing.version + 1, reservations, updatedAt: deps.now() }, ConditionExpression: "#version = :expectedVersion", ExpressionAttributeNames: { "#version": "version" }, ExpressionAttributeValues: { ":expectedVersion": existing.version } }));
+      await deps.documentClient.send(
+        new PutCommand({
+          TableName: tableName,
+          Item: {
+            ...existing,
+            version: existing.version + 1,
+            reservations,
+            updatedAt: deps.now(),
+          },
+          ConditionExpression: "#version = :expectedVersion",
+          ExpressionAttributeNames: { "#version": "version" },
+          ExpressionAttributeValues: { ":expectedVersion": existing.version },
+        }),
+      );
       return;
     } catch (error) {
       if (!isDynamoCancellationError(error)) throw error;
     }
   }
-  throw new Error(`Unable to ${action} booking reservation after concurrent updates.`);
+  throw new Error(
+    `Unable to ${action} booking reservation after concurrent updates.`,
+  );
 };
 
 const createPublicBooking = async (
@@ -8963,121 +12130,442 @@ const createPublicBooking = async (
   const profile = await getPublicBookingProfile(slug, tableName, deps);
   if (!profile) return null;
   const raw = input as unknown as Record<string, unknown>;
-  if (["end", "tenantId", "ownerUserId", "calendarId", "googleEventId"].some((field) => field in raw)) throw new HttpError(400, "Booking request contains unsupported fields.");
+  if (
+    ["end", "tenantId", "ownerUserId", "calendarId", "googleEventId"].some(
+      (field) => field in raw,
+    )
+  )
+    throw new HttpError(400, "Booking request contains unsupported fields.");
   const appointmentTypeId = normalizeWhitespace(input.appointmentTypeId);
-  const type = profile.appointmentTypes.find((item) => item.id === appointmentTypeId && item.enabled);
+  const type = profile.appointmentTypes.find(
+    (item) => item.id === appointmentTypeId && item.enabled,
+  );
   if (!type) return null;
   const durationMinutes = Number(input.durationMinutes);
-  if (!Number.isInteger(durationMinutes) || !type.allowedDurationsMinutes.includes(durationMinutes)) throw new HttpError(400, "durationMinutes must be an allowed appointment duration.");
+  if (
+    !Number.isInteger(durationMinutes) ||
+    !type.allowedDurationsMinutes.includes(durationMinutes)
+  )
+    throw new HttpError(
+      400,
+      "durationMinutes must be an allowed appointment duration.",
+    );
   const visitorName = normalizeWhitespace(input.visitorName);
   const visitorEmail = normalizeWhitespace(input.visitorEmail).toLowerCase();
   const visitorPhone = normalizeWhitespace(input.visitorPhone);
   const note = normalizeWhitespace(input.note) || undefined;
   const idempotencyKey = normalizeWhitespace(input.idempotencyKey);
-  if (visitorName.length < 2 || visitorName.length > 120) throw new HttpError(400, "visitorName must be 2-120 characters.");
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(visitorEmail) || visitorEmail.length > 254) throw new HttpError(400, "visitorEmail must be valid.");
-  if (!visitorPhone || visitorPhone.length > 40) throw new HttpError(400, "visitorPhone must be 1-40 characters.");
-  if ((note?.length ?? 0) > 1000) throw new HttpError(400, "note must be 1-1000 characters.");
-  if (idempotencyKey.length < 8 || idempotencyKey.length > 200) throw new HttpError(400, "idempotencyKey must be 8-200 characters.");
-  const requestedStart = DateTime.fromISO(normalizeWhitespace(input.start), { setZone: true });
-  if (!requestedStart.isValid) throw new HttpError(400, "start must be an ISO timestamp.");
+  if (visitorName.length < 2 || visitorName.length > 120)
+    throw new HttpError(400, "visitorName must be 2-120 characters.");
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(visitorEmail) ||
+    visitorEmail.length > 254
+  )
+    throw new HttpError(400, "visitorEmail must be valid.");
+  if (!visitorPhone || visitorPhone.length > 40)
+    throw new HttpError(400, "visitorPhone must be 1-40 characters.");
+  if ((note?.length ?? 0) > 1000)
+    throw new HttpError(400, "note must be 1-1000 characters.");
+  if (idempotencyKey.length < 8 || idempotencyKey.length > 200)
+    throw new HttpError(400, "idempotencyKey must be 8-200 characters.");
+  const requestedStart = DateTime.fromISO(normalizeWhitespace(input.start), {
+    setZone: true,
+  });
+  if (!requestedStart.isValid)
+    throw new HttpError(400, "start must be an ISO timestamp.");
   const localStart = requestedStart.setZone(profile.timezone);
-  if (localStart.second !== 0 || localStart.millisecond !== 0 || (localStart.hour * 60 + localStart.minute) % profile.startIntervalMinutes !== 0) {
-    throw new HttpError(400, `start must align to the ${profile.startIntervalMinutes}-minute start grid.`);
+  if (
+    localStart.second !== 0 ||
+    localStart.millisecond !== 0 ||
+    (localStart.hour * 60 + localStart.minute) %
+      profile.startIntervalMinutes !==
+      0
+  ) {
+    throw new HttpError(
+      400,
+      `start must align to the ${profile.startIntervalMinutes}-minute start grid.`,
+    );
   }
   const start = requestedStart.toUTC().toISO() ?? "";
   const localDate = localStart.toISODate() ?? "";
-  const requestHash = sha256(JSON.stringify({ appointmentTypeId, durationMinutes, start, visitorName, visitorEmail, visitorPhone, note }));
+  const requestHash = sha256(
+    JSON.stringify({
+      appointmentTypeId,
+      durationMinutes,
+      start,
+      visitorName,
+      visitorEmail,
+      visitorPhone,
+      note,
+    }),
+  );
   const idempotencySk = sha256(idempotencyKey);
-  const idempotencyKeyValue = { PK: publicBookingIdempotencyPk(profile.profileId), SK: idempotencySk };
-  const existingIdempotency = (await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: idempotencyKeyValue }))).Item as PublicBookingIdempotencyItem | undefined;
+  const idempotencyKeyValue = {
+    PK: publicBookingIdempotencyPk(profile.profileId),
+    SK: idempotencySk,
+  };
+  const existingIdempotency = (
+    await deps.documentClient.send(
+      new GetCommand({
+        TableName: tableName,
+        ConsistentRead: true,
+        Key: idempotencyKeyValue,
+      }),
+    )
+  ).Item as PublicBookingIdempotencyItem | undefined;
   if (existingIdempotency) {
-    if (existingIdempotency.requestHash !== requestHash) throw new HttpError(409, "Idempotency key was already used for a different booking request.");
-    if (existingIdempotency.status === "COMPLETED" && existingIdempotency.response) return existingIdempotency.response;
-    throw new HttpError(409, "This booking request is already being processed.");
+    if (existingIdempotency.requestHash !== requestHash)
+      throw new HttpError(
+        409,
+        "Idempotency key was already used for a different booking request.",
+      );
+    if (
+      existingIdempotency.status === "COMPLETED" &&
+      existingIdempotency.response
+    )
+      return existingIdempotency.response;
+    throw new HttpError(
+      409,
+      "This booking request is already being processed.",
+    );
   }
   const now = deps.now();
   try {
-    await deps.documentClient.send(new PutCommand({ TableName: tableName, ConditionExpression: "attribute_not_exists(PK)", Item: { ...idempotencyKeyValue, entityType: "PUBLIC_BOOKING_IDEMPOTENCY", requestHash, status: "PENDING", createdAt: now, updatedAt: now } satisfies PublicBookingIdempotencyItem }));
+    await deps.documentClient.send(
+      new PutCommand({
+        TableName: tableName,
+        ConditionExpression: "attribute_not_exists(PK)",
+        Item: {
+          ...idempotencyKeyValue,
+          entityType: "PUBLIC_BOOKING_IDEMPOTENCY",
+          requestHash,
+          status: "PENDING",
+          createdAt: now,
+          updatedAt: now,
+        } satisfies PublicBookingIdempotencyItem,
+      }),
+    );
   } catch (error) {
-    if (isDynamoCancellationError(error)) throw new HttpError(409, "This booking request is already being processed.");
+    if (isDynamoCancellationError(error))
+      throw new HttpError(
+        409,
+        "This booking request is already being processed.",
+      );
     throw error;
   }
   let bookingId = "";
   let googleEventId = "";
   let managementTokenHash = "";
   try {
-    const availability = await getPublicDayAvailability(slug, { appointmentTypeId, date: localDate, durationMinutes: String(durationMinutes) }, deps);
-    const selectedSlot = availability?.slots.find((slot) => slot.start === start);
-    if (!selectedSlot) throw new HttpError(409, "That appointment time is no longer available.");
+    const availability = await getPublicDayAvailability(
+      slug,
+      {
+        appointmentTypeId,
+        date: localDate,
+        durationMinutes: String(durationMinutes),
+      },
+      deps,
+    );
+    const selectedSlot = availability?.slots.find(
+      (slot) => slot.start === start,
+    );
+    if (!selectedSlot)
+      throw new HttpError(409, "That appointment time is no longer available.");
     const end = selectedSlot.end;
     bookingId = deps.uuid();
-    await claimPublicBookingReservation(profile.profileId, localDate, { bookingId, appointmentTypeId, start, end, status: "RESERVED", expiresAt: DateTime.fromISO(deps.now()).plus({ minutes: 5 }).toUTC().toISO() ?? "" }, tableName, deps);
-    const context: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
+    await claimPublicBookingReservation(
+      profile.profileId,
+      localDate,
+      {
+        bookingId,
+        appointmentTypeId,
+        start,
+        end,
+        status: "RESERVED",
+        expiresAt:
+          DateTime.fromISO(deps.now()).plus({ minutes: 5 }).toUTC().toISO() ??
+          "",
+      },
+      tableName,
+      deps,
+    );
+    const context: RequestContext = {
+      actorSub: profile.ownerUserId,
+      tenantId: profile.tenantId,
+      actorEmail: "unknown@example.com",
+      actorName: "Public booking",
+      actorGroups: [],
+      tableName,
+    };
     const connection = await getGoogleConnection(context, deps);
-    if (!connection || !profile.bookingCalendarId) throw new Error("Booking calendar connection is unavailable.");
+    if (!connection || !profile.bookingCalendarId)
+      throw new Error("Booking calendar connection is unavailable.");
     const googleEventInput = {
       summary: `Appointment: ${visitorName}`,
       ...(type.publicLocation ? { location: type.publicLocation } : {}),
       attendees: [{ email: visitorEmail }],
       start: { dateTime: start },
       end: { dateTime: end },
-      extendedProperties: { private: { source: "public_booking", shepherdHubBookingId: bookingId, visitorEmail } },
+      extendedProperties: {
+        private: {
+          source: "public_booking",
+          shepherdHubBookingId: bookingId,
+          visitorEmail,
+        },
+      },
     };
-    const googleResponse = await googleFetch(context, connection, GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId), deps, {
-      method: "POST",
-      body: JSON.stringify(googleEventInput),
-    });
-    const googleEvent = await googleResponse.json() as { id?: string };
-    if (!googleEvent.id) throw new Error("Google Calendar did not return an event id.");
+    const googleResponse = await googleFetch(
+      context,
+      connection,
+      GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId),
+      deps,
+      {
+        method: "POST",
+        body: JSON.stringify(googleEventInput),
+      },
+    );
+    const googleEvent = (await googleResponse.json()) as { id?: string };
+    if (!googleEvent.id)
+      throw new Error("Google Calendar did not return an event id.");
     googleEventId = googleEvent.id;
     const managementToken = deps.managementToken();
     managementTokenHash = sha256(managementToken);
-    const response: CreatePublicBookingResponse = { bookingId, appointmentTypeId, appointmentTypeName: type.name, durationMinutes, start, end, timezone: profile.timezone, status: "CONFIRMED", managementToken };
-    const record: PublicBookingRecordItem = { PK: publicBookingRecordPk(profile.ownerUserId), SK: publicBookingRecordSk(localDate, start, bookingId), entityType: "PUBLIC_BOOKING", bookingId, tenantId: profile.tenantId, profileId: profile.profileId, ownerUserId: profile.ownerUserId, appointmentTypeId, appointmentTypeNameSnapshot: type.name, durationMinutes, start, end, timezone: profile.timezone, visitorName, visitorEmail, visitorPhone, note, status: "CONFIRMED", googleEventId, managementTokenHash, createdAt: now, updatedAt: deps.now() };
-    await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: record, ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)" }));
-    await deps.documentClient.send(new PutCommand({ TableName: tableName, ConditionExpression: "attribute_not_exists(PK)", Item: { PK: publicBookingManagementPk(record.managementTokenHash), SK: publicBookingManagementSk(), entityType: "PUBLIC_BOOKING_MANAGEMENT", bookingId, bookingPk: record.PK, bookingSk: record.SK, createdAt: now, updatedAt: deps.now() } satisfies PublicBookingManagementLookupItem }));
-    await mutateOwnPublicBookingReservation(profile.profileId, localDate, bookingId, "confirm", tableName, deps);
-    const idempotentResponse = { ...response }; delete idempotentResponse.managementToken;
-    await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: { ...idempotencyKeyValue, entityType: "PUBLIC_BOOKING_IDEMPOTENCY", requestHash, status: "COMPLETED", response: idempotentResponse, createdAt: now, updatedAt: deps.now() } satisfies PublicBookingIdempotencyItem, ConditionExpression: "requestHash = :requestHash", ExpressionAttributeValues: { ":requestHash": requestHash } }));
+    const response: CreatePublicBookingResponse = {
+      bookingId,
+      appointmentTypeId,
+      appointmentTypeName: type.name,
+      durationMinutes,
+      start,
+      end,
+      timezone: profile.timezone,
+      status: "CONFIRMED",
+      managementToken,
+    };
+    const record: PublicBookingRecordItem = {
+      PK: publicBookingRecordPk(profile.ownerUserId),
+      SK: publicBookingRecordSk(localDate, start, bookingId),
+      entityType: "PUBLIC_BOOKING",
+      bookingId,
+      tenantId: profile.tenantId,
+      profileId: profile.profileId,
+      ownerUserId: profile.ownerUserId,
+      appointmentTypeId,
+      appointmentTypeNameSnapshot: type.name,
+      durationMinutes,
+      start,
+      end,
+      timezone: profile.timezone,
+      visitorName,
+      visitorEmail,
+      visitorPhone,
+      note,
+      status: "CONFIRMED",
+      googleEventId,
+      managementTokenHash,
+      createdAt: now,
+      updatedAt: deps.now(),
+    };
+    await deps.documentClient.send(
+      new PutCommand({
+        TableName: tableName,
+        Item: record,
+        ConditionExpression:
+          "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+      }),
+    );
+    await deps.documentClient.send(
+      new PutCommand({
+        TableName: tableName,
+        ConditionExpression: "attribute_not_exists(PK)",
+        Item: {
+          PK: publicBookingManagementPk(record.managementTokenHash),
+          SK: publicBookingManagementSk(),
+          entityType: "PUBLIC_BOOKING_MANAGEMENT",
+          bookingId,
+          bookingPk: record.PK,
+          bookingSk: record.SK,
+          createdAt: now,
+          updatedAt: deps.now(),
+        } satisfies PublicBookingManagementLookupItem,
+      }),
+    );
+    await mutateOwnPublicBookingReservation(
+      profile.profileId,
+      localDate,
+      bookingId,
+      "confirm",
+      tableName,
+      deps,
+    );
+    const idempotentResponse = { ...response };
+    delete idempotentResponse.managementToken;
+    await deps.documentClient.send(
+      new PutCommand({
+        TableName: tableName,
+        Item: {
+          ...idempotencyKeyValue,
+          entityType: "PUBLIC_BOOKING_IDEMPOTENCY",
+          requestHash,
+          status: "COMPLETED",
+          response: idempotentResponse,
+          createdAt: now,
+          updatedAt: deps.now(),
+        } satisfies PublicBookingIdempotencyItem,
+        ConditionExpression: "requestHash = :requestHash",
+        ExpressionAttributeValues: { ":requestHash": requestHash },
+      }),
+    );
     return response;
   } catch (error) {
     if (googleEventId && profile.bookingCalendarId) {
       try {
-        const context: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
+        const context: RequestContext = {
+          actorSub: profile.ownerUserId,
+          tenantId: profile.tenantId,
+          actorEmail: "unknown@example.com",
+          actorName: "Public booking",
+          actorGroups: [],
+          tableName,
+        };
         const connection = await getGoogleConnection(context, deps);
-        if (connection) await googleFetch(context, connection, `${GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId)}/${encodeURIComponent(googleEventId)}`, deps, { method: "DELETE" });
-      } catch { /* best-effort compensation */ }
+        if (connection)
+          await googleFetch(
+            context,
+            connection,
+            `${GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId)}/${encodeURIComponent(googleEventId)}`,
+            deps,
+            { method: "DELETE" },
+          );
+      } catch {
+        /* best-effort compensation */
+      }
     }
     if (bookingId) {
-      try { await mutateOwnPublicBookingReservation(profile.profileId, localDate, bookingId, "remove", tableName, deps); } catch { /* best-effort compensation */ }
-      try { await deps.documentClient.send(new DeleteCommand({ TableName: tableName, Key: { PK: publicBookingRecordPk(profile.ownerUserId), SK: publicBookingRecordSk(localDate, start, bookingId) } })); } catch { /* best-effort compensation */ }
-      if (managementTokenHash) try { await deps.documentClient.send(new DeleteCommand({ TableName: tableName, Key: { PK: publicBookingManagementPk(managementTokenHash), SK: publicBookingManagementSk() } })); } catch { /* best-effort compensation */ }
+      try {
+        await mutateOwnPublicBookingReservation(
+          profile.profileId,
+          localDate,
+          bookingId,
+          "remove",
+          tableName,
+          deps,
+        );
+      } catch {
+        /* best-effort compensation */
+      }
+      try {
+        await deps.documentClient.send(
+          new DeleteCommand({
+            TableName: tableName,
+            Key: {
+              PK: publicBookingRecordPk(profile.ownerUserId),
+              SK: publicBookingRecordSk(localDate, start, bookingId),
+            },
+          }),
+        );
+      } catch {
+        /* best-effort compensation */
+      }
+      if (managementTokenHash)
+        try {
+          await deps.documentClient.send(
+            new DeleteCommand({
+              TableName: tableName,
+              Key: {
+                PK: publicBookingManagementPk(managementTokenHash),
+                SK: publicBookingManagementSk(),
+              },
+            }),
+          );
+        } catch {
+          /* best-effort compensation */
+        }
     }
-    try { await deps.documentClient.send(new DeleteCommand({ TableName: tableName, Key: idempotencyKeyValue, ConditionExpression: "requestHash = :requestHash", ExpressionAttributeValues: { ":requestHash": requestHash } })); } catch { /* best-effort compensation */ }
+    try {
+      await deps.documentClient.send(
+        new DeleteCommand({
+          TableName: tableName,
+          Key: idempotencyKeyValue,
+          ConditionExpression: "requestHash = :requestHash",
+          ExpressionAttributeValues: { ":requestHash": requestHash },
+        }),
+      );
+    } catch {
+      /* best-effort compensation */
+    }
     throw error;
   }
 };
 
-const getManagedPublicBooking = async (token: unknown, deps: HandlerDependencies) => {
+const getManagedPublicBooking = async (
+  token: unknown,
+  deps: HandlerDependencies,
+) => {
   const tableName = process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "";
   const normalizedToken = normalizeWhitespace(token);
-  if (normalizedToken.length < 32 || normalizedToken.length > 256) throw new HttpError(404, "Booking not found.");
-  const lookupResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: publicBookingManagementPk(sha256(normalizedToken)), SK: publicBookingManagementSk() } }));
-  const lookup = lookupResult.Item as PublicBookingManagementLookupItem | undefined;
+  if (normalizedToken.length < 32 || normalizedToken.length > 256)
+    throw new HttpError(404, "Booking not found.");
+  const lookupResult = await deps.documentClient.send(
+    new GetCommand({
+      TableName: tableName,
+      ConsistentRead: true,
+      Key: {
+        PK: publicBookingManagementPk(sha256(normalizedToken)),
+        SK: publicBookingManagementSk(),
+      },
+    }),
+  );
+  const lookup = lookupResult.Item as
+    | PublicBookingManagementLookupItem
+    | undefined;
   if (!lookup) throw new HttpError(404, "Booking not found.");
-  const bookingResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: lookup.bookingPk, SK: lookup.bookingSk } }));
+  const bookingResult = await deps.documentClient.send(
+    new GetCommand({
+      TableName: tableName,
+      ConsistentRead: true,
+      Key: { PK: lookup.bookingPk, SK: lookup.bookingSk },
+    }),
+  );
   const booking = bookingResult.Item as PublicBookingRecordItem | undefined;
-  if (!booking || booking.bookingId !== lookup.bookingId) throw new HttpError(404, "Booking not found.");
-  const profileResult = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: userPk(booking.ownerUserId), SK: "BOOKING_PROFILE" } }));
-  const profile = profileResult.Item as (PublicBookingProfile & BaseItem) | undefined;
-  if (!profile || profile.profileId !== booking.profileId) throw new HttpError(404, "Booking not found.");
+  if (!booking || booking.bookingId !== lookup.bookingId)
+    throw new HttpError(404, "Booking not found.");
+  const profileResult = await deps.documentClient.send(
+    new GetCommand({
+      TableName: tableName,
+      ConsistentRead: true,
+      Key: { PK: userPk(booking.ownerUserId), SK: "BOOKING_PROFILE" },
+    }),
+  );
+  const profile = profileResult.Item as
+    | (PublicBookingProfile & BaseItem)
+    | undefined;
+  if (!profile || profile.profileId !== booking.profileId)
+    throw new HttpError(404, "Booking not found.");
   return { booking, profile, tableName };
 };
 
-const toPublicBookingManagement = (booking: PublicBookingRecordItem, profile: PublicBookingProfile): PublicBookingManagement => {
-  const type = profile.appointmentTypes.find((item) => item.id === booking.appointmentTypeId);
-  return { bookingId: booking.bookingId, appointmentTypeId: booking.appointmentTypeId, appointmentTypeName: booking.appointmentTypeNameSnapshot, allowedDurationsMinutes: type?.allowedDurationsMinutes ?? [booking.durationMinutes], durationMinutes: booking.durationMinutes, start: booking.start, end: booking.end, timezone: booking.timezone, priestDisplayName: profile.displayName, ...(type?.publicLocation ? { publicLocation: type.publicLocation } : {}), status: booking.status };
+const toPublicBookingManagement = (
+  booking: PublicBookingRecordItem,
+  profile: PublicBookingProfile,
+): PublicBookingManagement => {
+  const type = profile.appointmentTypes.find(
+    (item) => item.id === booking.appointmentTypeId,
+  );
+  return {
+    bookingId: booking.bookingId,
+    appointmentTypeId: booking.appointmentTypeId,
+    appointmentTypeName: booking.appointmentTypeNameSnapshot,
+    allowedDurationsMinutes: type?.allowedDurationsMinutes ?? [
+      booking.durationMinutes,
+    ],
+    durationMinutes: booking.durationMinutes,
+    start: booking.start,
+    end: booking.end,
+    timezone: booking.timezone,
+    priestDisplayName: profile.displayName,
+    ...(type?.publicLocation ? { publicLocation: type.publicLocation } : {}),
+    status: booking.status,
+  };
 };
 
 const replaceOwnReservationOnDay = async (
@@ -9089,87 +12577,313 @@ const replaceOwnReservationOnDay = async (
   deps: HandlerDependencies,
 ) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = await deps.documentClient.send(new GetCommand({ TableName: tableName, ConsistentRead: true, Key: { PK: bookingDayPk(profileId), SK: localDate } }));
+    const result = await deps.documentClient.send(
+      new GetCommand({
+        TableName: tableName,
+        ConsistentRead: true,
+        Key: { PK: bookingDayPk(profileId), SK: localDate },
+      }),
+    );
     const existing = result.Item as BookingDayItem | undefined;
-    if (!existing) throw new HttpError(409, "The existing booking reservation was not found.");
-    const others = existing.reservations.filter((item) => item.bookingId !== bookingId && isActiveBookingReservation(item, deps.now()));
-    if (others.some((item) => intervalsOverlap(replacement.start, replacement.end, item.start, item.end))) throw new HttpError(409, "That appointment time is no longer available.");
+    if (!existing)
+      throw new HttpError(
+        409,
+        "The existing booking reservation was not found.",
+      );
+    const others = existing.reservations.filter(
+      (item) =>
+        item.bookingId !== bookingId &&
+        isActiveBookingReservation(item, deps.now()),
+    );
+    if (
+      others.some((item) =>
+        intervalsOverlap(
+          replacement.start,
+          replacement.end,
+          item.start,
+          item.end,
+        ),
+      )
+    )
+      throw new HttpError(409, "That appointment time is no longer available.");
     try {
-      await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: { ...existing, version: existing.version + 1, reservations: [...others, replacement], updatedAt: deps.now() }, ConditionExpression: "#version = :version", ExpressionAttributeNames: { "#version": "version" }, ExpressionAttributeValues: { ":version": existing.version } }));
+      await deps.documentClient.send(
+        new PutCommand({
+          TableName: tableName,
+          Item: {
+            ...existing,
+            version: existing.version + 1,
+            reservations: [...others, replacement],
+            updatedAt: deps.now(),
+          },
+          ConditionExpression: "#version = :version",
+          ExpressionAttributeNames: { "#version": "version" },
+          ExpressionAttributeValues: { ":version": existing.version },
+        }),
+      );
       return;
-    } catch (error) { if (!isDynamoCancellationError(error)) throw error; }
+    } catch (error) {
+      if (!isDynamoCancellationError(error)) throw error;
+    }
   }
   throw new HttpError(409, "That appointment time changed. Please try again.");
 };
 
-const updatePublicBookingGoogleEvent = async (booking: PublicBookingRecordItem, profile: PublicBookingProfile, start: string, end: string, deps: HandlerDependencies) => {
-  if (!profile.bookingCalendarId) throw new Error("Booking calendar connection is unavailable.");
-  const context: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName: process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "" };
+const updatePublicBookingGoogleEvent = async (
+  booking: PublicBookingRecordItem,
+  profile: PublicBookingProfile,
+  start: string,
+  end: string,
+  deps: HandlerDependencies,
+) => {
+  if (!profile.bookingCalendarId)
+    throw new Error("Booking calendar connection is unavailable.");
+  const context: RequestContext = {
+    actorSub: profile.ownerUserId,
+    tenantId: profile.tenantId,
+    actorEmail: "unknown@example.com",
+    actorName: "Public booking",
+    actorGroups: [],
+    tableName: process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "",
+  };
   const connection = await getGoogleConnection(context, deps);
-  if (!connection) throw new Error("Booking calendar connection is unavailable.");
-  await googleFetch(context, connection, `${GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId)}/${encodeURIComponent(booking.googleEventId)}`, deps, { method: "PUT", body: JSON.stringify({ start: { dateTime: start }, end: { dateTime: end } }) });
+  if (!connection)
+    throw new Error("Booking calendar connection is unavailable.");
+  await googleFetch(
+    context,
+    connection,
+    `${GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId)}/${encodeURIComponent(booking.googleEventId)}`,
+    deps,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        start: { dateTime: start },
+        end: { dateTime: end },
+      }),
+    },
+  );
 };
 
-const cancelManagedPublicBooking = async (token: unknown, deps: HandlerDependencies): Promise<PublicBookingManagement> => {
-  const { booking, profile, tableName } = await getManagedPublicBooking(token, deps);
-  if (booking.status === "CANCELLED") return toPublicBookingManagement(booking, profile);
-  if (!profile.bookingCalendarId) throw new Error("Booking calendar connection is unavailable.");
-  const context: RequestContext = { actorSub: profile.ownerUserId, tenantId: profile.tenantId, actorEmail: "unknown@example.com", actorName: "Public booking", actorGroups: [], tableName };
+const cancelManagedPublicBooking = async (
+  token: unknown,
+  deps: HandlerDependencies,
+): Promise<PublicBookingManagement> => {
+  const { booking, profile, tableName } = await getManagedPublicBooking(
+    token,
+    deps,
+  );
+  if (booking.status === "CANCELLED")
+    return toPublicBookingManagement(booking, profile);
+  if (!profile.bookingCalendarId)
+    throw new Error("Booking calendar connection is unavailable.");
+  const context: RequestContext = {
+    actorSub: profile.ownerUserId,
+    tenantId: profile.tenantId,
+    actorEmail: "unknown@example.com",
+    actorName: "Public booking",
+    actorGroups: [],
+    tableName,
+  };
   const connection = await getGoogleConnection(context, deps);
-  if (!connection) throw new Error("Booking calendar connection is unavailable.");
-  await googleFetch(context, connection, `${GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId)}/${encodeURIComponent(booking.googleEventId)}`, deps, { method: "DELETE" });
-  const cancelled = { ...booking, status: "CANCELLED" as const, updatedAt: deps.now() };
-  await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: cancelled }));
-  const localDate = DateTime.fromISO(booking.start, { zone: "utc" }).setZone(profile.timezone).toISODate() ?? "";
-  await mutateOwnPublicBookingReservation(profile.profileId, localDate, booking.bookingId, "remove", tableName, deps);
+  if (!connection)
+    throw new Error("Booking calendar connection is unavailable.");
+  await googleFetch(
+    context,
+    connection,
+    `${GOOGLE_CALENDAR_EVENTS_URL(profile.bookingCalendarId)}/${encodeURIComponent(booking.googleEventId)}`,
+    deps,
+    { method: "DELETE" },
+  );
+  const cancelled = {
+    ...booking,
+    status: "CANCELLED" as const,
+    updatedAt: deps.now(),
+  };
+  await deps.documentClient.send(
+    new PutCommand({ TableName: tableName, Item: cancelled }),
+  );
+  const localDate =
+    DateTime.fromISO(booking.start, { zone: "utc" })
+      .setZone(profile.timezone)
+      .toISODate() ?? "";
+  await mutateOwnPublicBookingReservation(
+    profile.profileId,
+    localDate,
+    booking.bookingId,
+    "remove",
+    tableName,
+    deps,
+  );
   return toPublicBookingManagement(cancelled, profile);
 };
 
-const rescheduleManagedPublicBooking = async (input: ReschedulePublicBookingInput, deps: HandlerDependencies): Promise<PublicBookingManagement> => {
-  const { booking, profile, tableName } = await getManagedPublicBooking(input.token, deps);
-  if (booking.status !== "CONFIRMED") throw new HttpError(409, "This booking is cancelled.");
-  const type = profile.appointmentTypes.find((item) => item.id === booking.appointmentTypeId && item.enabled);
+const rescheduleManagedPublicBooking = async (
+  input: ReschedulePublicBookingInput,
+  deps: HandlerDependencies,
+): Promise<PublicBookingManagement> => {
+  const { booking, profile, tableName } = await getManagedPublicBooking(
+    input.token,
+    deps,
+  );
+  if (booking.status !== "CONFIRMED")
+    throw new HttpError(409, "This booking is cancelled.");
+  const type = profile.appointmentTypes.find(
+    (item) => item.id === booking.appointmentTypeId && item.enabled,
+  );
   const durationMinutes = Number(input.durationMinutes);
-  if (!type || !Number.isInteger(durationMinutes) || !type.allowedDurationsMinutes.includes(durationMinutes)) throw new HttpError(400, "durationMinutes must be allowed for this appointment type.");
-  const parsedStart = DateTime.fromISO(normalizeWhitespace(input.start), { setZone: true });
+  if (
+    !type ||
+    !Number.isInteger(durationMinutes) ||
+    !type.allowedDurationsMinutes.includes(durationMinutes)
+  )
+    throw new HttpError(
+      400,
+      "durationMinutes must be allowed for this appointment type.",
+    );
+  const parsedStart = DateTime.fromISO(normalizeWhitespace(input.start), {
+    setZone: true,
+  });
   const localStart = parsedStart.setZone(profile.timezone);
-  if (!parsedStart.isValid || localStart.second !== 0 || localStart.millisecond !== 0 || (localStart.hour * 60 + localStart.minute) % profile.startIntervalMinutes !== 0) throw new HttpError(400, "start must align to the booking start grid.");
+  if (
+    !parsedStart.isValid ||
+    localStart.second !== 0 ||
+    localStart.millisecond !== 0 ||
+    (localStart.hour * 60 + localStart.minute) %
+      profile.startIntervalMinutes !==
+      0
+  )
+    throw new HttpError(400, "start must align to the booking start grid.");
   const start = parsedStart.toUTC().toISO() ?? "";
   const newDate = localStart.toISODate() ?? "";
-  const oldDate = DateTime.fromISO(booking.start, { zone: "utc" }).setZone(profile.timezone).toISODate() ?? "";
-  const availability = await getPublicDayAvailability(profile.slug, { appointmentTypeId: booking.appointmentTypeId, date: newDate, durationMinutes: String(durationMinutes) }, deps, oldDate === newDate ? booking.bookingId : undefined);
+  const oldDate =
+    DateTime.fromISO(booking.start, { zone: "utc" })
+      .setZone(profile.timezone)
+      .toISODate() ?? "";
+  const availability = await getPublicDayAvailability(
+    profile.slug,
+    {
+      appointmentTypeId: booking.appointmentTypeId,
+      date: newDate,
+      durationMinutes: String(durationMinutes),
+    },
+    deps,
+    oldDate === newDate ? booking.bookingId : undefined,
+  );
   const selectedSlot = availability?.slots.find((slot) => slot.start === start);
-  if (!selectedSlot) throw new HttpError(409, "That appointment time is no longer available.");
+  if (!selectedSlot)
+    throw new HttpError(409, "That appointment time is no longer available.");
   const end = selectedSlot.end;
-  const reserved = { bookingId: booking.bookingId, appointmentTypeId: booking.appointmentTypeId, start, end, status: "RESERVED", expiresAt: DateTime.fromISO(deps.now()).plus({ minutes: 5 }).toUTC().toISO() ?? "" };
-  const previous = { bookingId: booking.bookingId, appointmentTypeId: booking.appointmentTypeId, start: booking.start, end: booking.end, status: "CONFIRMED" };
-  const updated = { ...booking, durationMinutes, start, end, updatedAt: deps.now() };
+  const reserved = {
+    bookingId: booking.bookingId,
+    appointmentTypeId: booking.appointmentTypeId,
+    start,
+    end,
+    status: "RESERVED",
+    expiresAt:
+      DateTime.fromISO(deps.now()).plus({ minutes: 5 }).toUTC().toISO() ?? "",
+  };
+  const previous = {
+    bookingId: booking.bookingId,
+    appointmentTypeId: booking.appointmentTypeId,
+    start: booking.start,
+    end: booking.end,
+    status: "CONFIRMED",
+  };
+  const updated = {
+    ...booking,
+    durationMinutes,
+    start,
+    end,
+    updatedAt: deps.now(),
+  };
   if (oldDate === newDate) {
-    await replaceOwnReservationOnDay(profile.profileId, oldDate, booking.bookingId, reserved, tableName, deps);
+    await replaceOwnReservationOnDay(
+      profile.profileId,
+      oldDate,
+      booking.bookingId,
+      reserved,
+      tableName,
+      deps,
+    );
     try {
       await updatePublicBookingGoogleEvent(booking, profile, start, end, deps);
-      await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: updated }));
-      await mutateOwnPublicBookingReservation(profile.profileId, newDate, booking.bookingId, "confirm", tableName, deps);
+      await deps.documentClient.send(
+        new PutCommand({ TableName: tableName, Item: updated }),
+      );
+      await mutateOwnPublicBookingReservation(
+        profile.profileId,
+        newDate,
+        booking.bookingId,
+        "confirm",
+        tableName,
+        deps,
+      );
     } catch (error) {
-      try { await replaceOwnReservationOnDay(profile.profileId, oldDate, booking.bookingId, previous, tableName, deps); } catch { /* preserve the original error */ }
+      try {
+        await replaceOwnReservationOnDay(
+          profile.profileId,
+          oldDate,
+          booking.bookingId,
+          previous,
+          tableName,
+          deps,
+        );
+      } catch {
+        /* preserve the original error */
+      }
       throw error;
     }
   } else {
-    await claimPublicBookingReservation(profile.profileId, newDate, reserved, tableName, deps);
+    await claimPublicBookingReservation(
+      profile.profileId,
+      newDate,
+      reserved,
+      tableName,
+      deps,
+    );
     try {
       await updatePublicBookingGoogleEvent(booking, profile, start, end, deps);
-      await deps.documentClient.send(new PutCommand({ TableName: tableName, Item: updated }));
-      await mutateOwnPublicBookingReservation(profile.profileId, newDate, booking.bookingId, "confirm", tableName, deps);
-      await mutateOwnPublicBookingReservation(profile.profileId, oldDate, booking.bookingId, "remove", tableName, deps);
+      await deps.documentClient.send(
+        new PutCommand({ TableName: tableName, Item: updated }),
+      );
+      await mutateOwnPublicBookingReservation(
+        profile.profileId,
+        newDate,
+        booking.bookingId,
+        "confirm",
+        tableName,
+        deps,
+      );
+      await mutateOwnPublicBookingReservation(
+        profile.profileId,
+        oldDate,
+        booking.bookingId,
+        "remove",
+        tableName,
+        deps,
+      );
     } catch (error) {
-      try { await mutateOwnPublicBookingReservation(profile.profileId, newDate, booking.bookingId, "remove", tableName, deps); } catch { /* retain old reservation */ }
+      try {
+        await mutateOwnPublicBookingReservation(
+          profile.profileId,
+          newDate,
+          booking.bookingId,
+          "remove",
+          tableName,
+          deps,
+        );
+      } catch {
+        /* retain old reservation */
+      }
       throw error;
     }
   }
   return toPublicBookingManagement(updated, profile);
 };
 
-export const createHandler = (overrides: Partial<HandlerDependencies> = {}): APIGatewayProxyHandlerV2 => {
+export const createHandler = (
+  overrides: Partial<HandlerDependencies> = {},
+): APIGatewayProxyHandlerV2 => {
   const deps: HandlerDependencies = {
     ...defaultDependencies,
     ...overrides,
@@ -9186,40 +12900,89 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       if (method === "POST" && path === "/public/bookings/manage") {
-        const managed = await getManagedPublicBooking(parseBody<{ token?: string }>(typedEvent.body).token, deps);
-        return json(200, toPublicBookingManagement(managed.booking, managed.profile));
+        const managed = await getManagedPublicBooking(
+          parseBody<{ token?: string }>(typedEvent.body).token,
+          deps,
+        );
+        return json(
+          200,
+          toPublicBookingManagement(managed.booking, managed.profile),
+        );
       }
 
       if (method === "POST" && path === "/public/bookings/cancel") {
-        return json(200, await cancelManagedPublicBooking(parseBody<{ token?: string }>(typedEvent.body).token, deps));
+        return json(
+          200,
+          await cancelManagedPublicBooking(
+            parseBody<{ token?: string }>(typedEvent.body).token,
+            deps,
+          ),
+        );
       }
 
       if (method === "POST" && path === "/public/bookings/reschedule") {
-        return json(200, await rescheduleManagedPublicBooking(parseBody<ReschedulePublicBookingInput>(typedEvent.body), deps));
+        return json(
+          200,
+          await rescheduleManagedPublicBooking(
+            parseBody<ReschedulePublicBookingInput>(typedEvent.body),
+            deps,
+          ),
+        );
       }
 
-      const publicCreateBookingSlug = /^\/public\/booking-pages\/([^/]+)\/bookings$/.exec(path)?.[1];
+      const publicCreateBookingSlug =
+        /^\/public\/booking-pages\/([^/]+)\/bookings$/.exec(path)?.[1];
       if (method === "POST" && publicCreateBookingSlug) {
-        const booking = await createPublicBooking(publicCreateBookingSlug, parseBody<CreatePublicBookingInput>(typedEvent.body), deps);
-        return booking ? json(201, booking) : json(404, { message: "Booking page not found." });
+        const booking = await createPublicBooking(
+          publicCreateBookingSlug,
+          parseBody<CreatePublicBookingInput>(typedEvent.body),
+          deps,
+        );
+        return booking
+          ? json(201, booking)
+          : json(404, { message: "Booking page not found." });
       }
 
-      const publicDayAvailabilitySlug = /^\/public\/booking-pages\/([^/]+)\/availability\/day$/.exec(path)?.[1];
+      const publicDayAvailabilitySlug =
+        /^\/public\/booking-pages\/([^/]+)\/availability\/day$/.exec(path)?.[1];
       if (method === "GET" && publicDayAvailabilitySlug) {
-        const availability = await getPublicDayAvailability(publicDayAvailabilitySlug, typedEvent.queryStringParameters, deps);
-        return availability ? json(200, availability) : json(404, { message: "Booking page not found." });
+        const availability = await getPublicDayAvailability(
+          publicDayAvailabilitySlug,
+          typedEvent.queryStringParameters,
+          deps,
+        );
+        return availability
+          ? json(200, availability)
+          : json(404, { message: "Booking page not found." });
       }
 
-      const publicAvailabilitySlug = /^\/public\/booking-pages\/([^/]+)\/availability\/month$/.exec(path)?.[1];
+      const publicAvailabilitySlug =
+        /^\/public\/booking-pages\/([^/]+)\/availability\/month$/.exec(
+          path,
+        )?.[1];
       if (method === "GET" && publicAvailabilitySlug) {
-        const availability = await getPublicMonthAvailability(publicAvailabilitySlug, typedEvent.queryStringParameters, deps);
-        return availability ? json(200, availability) : json(404, { message: "Booking page not found." });
+        const availability = await getPublicMonthAvailability(
+          publicAvailabilitySlug,
+          typedEvent.queryStringParameters,
+          deps,
+        );
+        return availability
+          ? json(200, availability)
+          : json(404, { message: "Booking page not found." });
       }
 
-      const publicBookingSlug = /^\/public\/booking-pages\/([^/]+)$/.exec(path)?.[1];
+      const publicBookingSlug = /^\/public\/booking-pages\/([^/]+)$/.exec(
+        path,
+      )?.[1];
       if (method === "GET" && publicBookingSlug) {
-        const page = await getPublicBookingPage(publicBookingSlug, process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "", deps);
-        return page ? json(200, page) : json(404, { message: "Booking page not found." });
+        const page = await getPublicBookingPage(
+          publicBookingSlug,
+          process.env.SHEPHERD_HUB_RECORDS_TABLE ?? "",
+          deps,
+        );
+        return page
+          ? json(200, page)
+          : json(404, { message: "Booking page not found." });
       }
 
       const context = getContext(typedEvent);
@@ -9229,7 +12992,13 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       const resetAction = typedEvent.pathParameters?.action;
 
       if (path === "/tags" || /^\/tags\/[^/]+$/.test(path)) {
-        return await handleTags(context, method, path === "/tags" ? undefined : decodeURIComponent(path.split("/")[2]), typedEvent, deps);
+        return await handleTags(
+          context,
+          method,
+          path === "/tags" ? undefined : decodeURIComponent(path.split("/")[2]),
+          typedEvent,
+          deps,
+        );
       }
 
       if (method === "GET" && path === "/members") {
@@ -9241,23 +13010,60 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       if (method === "GET" && path === "/household-conflicts") {
+        await requireUnrestrictedCongregationData(context, deps);
         return await getHouseholdConflictsResponse(context, deps);
       }
 
       if (method === "POST" && path === "/members") {
-        return await createMember(context, parseBody<CreateMemberInput>(typedEvent.body), deps);
+        await requireCongregationEditorContext(
+          context,
+          deps,
+          "congregation.member.create",
+        );
+        return await createMember(
+          context,
+          parseBody<CreateMemberInput>(typedEvent.body),
+          deps,
+        );
       }
 
       if (method === "POST" && path === "/members/import") {
-        return await createMemberImportJob(context, parseBody<MemberImportInput>(typedEvent.body), deps);
+        await requireCongregationEditorContext(
+          context,
+          deps,
+          "congregation.member.import",
+        );
+        return await createMemberImportJob(
+          context,
+          parseBody<MemberImportInput>(typedEvent.body),
+          deps,
+        );
       }
 
       const importJobId = typedEvent.pathParameters?.jobId;
-      if (path === `/members/import/${importJobId}` && importJobId && method === "GET") {
+      if (
+        path === `/members/import/${importJobId}` &&
+        importJobId &&
+        method === "GET"
+      ) {
+        await requireCongregationEditorContext(
+          context,
+          deps,
+          "congregation.member.import.process",
+        );
         return await processMemberImportJob(context, importJobId, deps);
       }
 
-      if (path === `/members/import/${importJobId}/cancel` && importJobId && method === "POST") {
+      if (
+        path === `/members/import/${importJobId}/cancel` &&
+        importJobId &&
+        method === "POST"
+      ) {
+        await requireCongregationEditorContext(
+          context,
+          deps,
+          "congregation.member.import.cancel",
+        );
         return await cancelMemberImportJob(context, importJobId, deps);
       }
 
@@ -9274,12 +13080,28 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         return await getAdminJobs(context, deps);
       }
 
-      if (path === `/admin/household-geocoding/${householdGeocodeJobId}` && householdGeocodeJobId && method === "GET") {
-        return await processHouseholdGeocodeJob(context, householdGeocodeJobId, deps);
+      if (
+        path === `/admin/household-geocoding/${householdGeocodeJobId}` &&
+        householdGeocodeJobId &&
+        method === "GET"
+      ) {
+        return await processHouseholdGeocodeJob(
+          context,
+          householdGeocodeJobId,
+          deps,
+        );
       }
 
-      if (path === `/admin/household-geocoding/${householdGeocodeJobId}/cancel` && householdGeocodeJobId && method === "POST") {
-        return await cancelHouseholdGeocodeJob(context, householdGeocodeJobId, deps);
+      if (
+        path === `/admin/household-geocoding/${householdGeocodeJobId}/cancel` &&
+        householdGeocodeJobId &&
+        method === "POST"
+      ) {
+        return await cancelHouseholdGeocodeJob(
+          context,
+          householdGeocodeJobId,
+          deps,
+        );
       }
 
       const memberId = typedEvent.pathParameters?.memberId;
@@ -9290,31 +13112,79 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         }
 
         if (method === "PUT") {
-          return await updateMember(context, memberId, parseBody<UpdateMemberInput>(typedEvent.body), deps);
+          await requireCongregationEditorContext(
+            context,
+            deps,
+            "congregation.member.update",
+          );
+          return await updateMember(
+            context,
+            memberId,
+            parseBody<UpdateMemberInput>(typedEvent.body),
+            deps,
+          );
         }
 
         if (method === "DELETE") {
+          await requireCongregationEditorContext(
+            context,
+            deps,
+            "congregation.member.delete",
+          );
           return await deleteMember(context, memberId, deps);
         }
       }
 
       if (path === `/members/${memberId}/household` && memberId) {
         if (method === "POST") {
-          const input = parseBody<AttachMemberToHouseholdInput>(typedEvent.body);
-          return await attachMemberToHousehold(context, memberId, input.householdId, deps);
+          await requireCongregationEditorContext(
+            context,
+            deps,
+            "congregation.member.household.attach",
+          );
+          const input = parseBody<AttachMemberToHouseholdInput>(
+            typedEvent.body,
+          );
+          return await attachMemberToHousehold(
+            context,
+            memberId,
+            input.householdId,
+            deps,
+          );
         }
 
         if (method === "DELETE") {
+          await requireCongregationEditorContext(
+            context,
+            deps,
+            "congregation.member.household.remove",
+          );
           const member = await getMember(context, memberId, deps);
           if (!member?.householdId) {
-            return json(400, { message: "Member is not assigned to a household." });
+            return json(400, {
+              message: "Member is not assigned to a household.",
+            });
           }
 
-          return await removeMemberFromHousehold(context, memberId, member.householdId, deps);
+          return await removeMemberFromHousehold(
+            context,
+            memberId,
+            member.householdId,
+            deps,
+          );
         }
       }
 
-      if (path === `/household-conflicts/${memberId}/resolve` && memberId && method === "POST") {
+      if (
+        path === `/household-conflicts/${memberId}/resolve` &&
+        memberId &&
+        method === "POST"
+      ) {
+        await requireCongregationEditorContext(
+          context,
+          deps,
+          "congregation.household_conflict.resolve",
+        );
         return await resolveHouseholdConflict(
           context,
           memberId,
@@ -9323,7 +13193,13 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         );
       }
 
-      if (path === `/members/${memberId}/events` && memberId && method === "GET") {
+      if (
+        path === `/members/${memberId}/events` &&
+        memberId &&
+        method === "GET"
+      ) {
+        if (!(await canAccessMember(context, memberId, deps)))
+          return json(404, { message: "Member not found." });
         return await getMemberEventsResponse(context, memberId, deps);
       }
 
@@ -9332,11 +13208,25 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       if (method === "POST" && path === "/households/match") {
-        return await matchHouseholdByAddress(context, parseBody<{ address?: string; postalCode?: string }>(typedEvent.body), deps);
+        await requireUnrestrictedCongregationData(context, deps);
+        return await matchHouseholdByAddress(
+          context,
+          parseBody<{ address?: string; postalCode?: string }>(typedEvent.body),
+          deps,
+        );
       }
 
       if (method === "POST" && path === "/households") {
-        return await createHousehold(context, parseBody<CreateHouseholdInput>(typedEvent.body), deps);
+        await requireCongregationEditorContext(
+          context,
+          deps,
+          "congregation.household.create",
+        );
+        return await createHousehold(
+          context,
+          parseBody<CreateHouseholdInput>(typedEvent.body),
+          deps,
+        );
       }
 
       const householdId = typedEvent.pathParameters?.householdId;
@@ -9347,24 +13237,326 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         }
 
         if (method === "PUT") {
-          return await updateHousehold(context, householdId, parseBody<UpdateHouseholdInput>(typedEvent.body), deps);
+          await requireCongregationEditorContext(
+            context,
+            deps,
+            "congregation.household.update",
+          );
+          return await updateHousehold(
+            context,
+            householdId,
+            parseBody<UpdateHouseholdInput>(typedEvent.body),
+            deps,
+          );
         }
 
         if (method === "DELETE") {
+          await requireCongregationEditorContext(
+            context,
+            deps,
+            "congregation.household.delete",
+          );
           return await deleteHousehold(context, householdId, deps);
         }
       }
 
-      if (path === `/households/${householdId}/members` && householdId && method === "POST") {
+      if (
+        path === `/households/${householdId}/members` &&
+        householdId &&
+        method === "POST"
+      ) {
+        await requireCongregationEditorContext(
+          context,
+          deps,
+          "congregation.household.member.attach",
+        );
         const input = parseBody<{ memberId: string }>(typedEvent.body);
-        return await attachMemberToHousehold(context, input.memberId, householdId, deps);
+        return await attachMemberToHousehold(
+          context,
+          input.memberId,
+          householdId,
+          deps,
+        );
       }
 
-      if (path === `/households/${householdId}/members/${householdMemberId}` && householdId && householdMemberId && method === "DELETE") {
-        return await removeMemberFromHousehold(context, householdMemberId, householdId, deps);
+      if (
+        path === `/households/${householdId}/members/${householdMemberId}` &&
+        householdId &&
+        householdMemberId &&
+        method === "DELETE"
+      ) {
+        await requireCongregationEditorContext(
+          context,
+          deps,
+          "congregation.household.member.remove",
+        );
+        return await removeMemberFromHousehold(
+          context,
+          householdMemberId,
+          householdId,
+          deps,
+        );
       }
 
-      if (path === `/members/${memberId}/visitations` && memberId && method === "POST") {
+      const outreachGroupId = typedEvent.pathParameters?.groupId;
+      const outreachUserId = typedEvent.pathParameters?.userId;
+      const isOutreachManager = hasOutreachAdminPrivileges(context.actorGroups);
+      const isOutreachPriest = context.actorGroups.includes("priest");
+
+      if (path === "/outreach/groups") {
+        if (method === "GET") {
+          await requireOutreachReaderContext(
+            context,
+            deps,
+            "outreach.groups.list",
+          );
+          if (isOutreachManager || isOutreachPriest)
+            return json(200, {
+              items: await listOutreachGroupSummaries(context, deps),
+            });
+          return json(200, {
+            items: await listOutreachServantGroups(
+              context,
+              context.actorSub,
+              deps,
+            ),
+          });
+        }
+        if (method === "POST") {
+          await requireOutreachManagerContext(
+            context,
+            deps,
+            "outreach.group.create",
+          );
+          return await createOutreachGroup(
+            context,
+            parseBody<CreateOutreachGroupInput>(typedEvent.body),
+            deps,
+          );
+        }
+      }
+
+      if (path === `/outreach/groups/${outreachGroupId}` && outreachGroupId) {
+        if (method === "GET") {
+          await requireOutreachReaderContext(
+            context,
+            deps,
+            "outreach.group.get",
+          );
+          if (!isOutreachManager && !isOutreachPriest)
+            throw new HttpError(
+              403,
+              "Outreach group details are not available to servants yet.",
+            );
+          return json(
+            200,
+            toOutreachGroup(
+              await assertOutreachGroup(context, outreachGroupId, deps),
+            ),
+          );
+        }
+        if (method === "PUT") {
+          await requireOutreachManagerContext(
+            context,
+            deps,
+            "outreach.group.update",
+          );
+          return await updateOutreachGroup(
+            context,
+            outreachGroupId,
+            parseBody<UpdateOutreachGroupInput>(typedEvent.body),
+            deps,
+          );
+        }
+        if (method === "DELETE") {
+          await requireOutreachManagerContext(
+            context,
+            deps,
+            "outreach.group.delete",
+          );
+          return await deleteOutreachGroup(context, outreachGroupId, deps);
+        }
+      }
+
+      if (
+        path === `/outreach/groups/${outreachGroupId}/households` &&
+        outreachGroupId
+      ) {
+        if (method === "GET") {
+          await requireOutreachReaderContext(
+            context,
+            deps,
+            "outreach.group.households.list",
+          );
+          if (!isOutreachManager && !isOutreachPriest) {
+            const access = await resolveOutreachAccess(context, deps);
+            if (!access.assignedGroupIds.includes(outreachGroupId))
+              throw new HttpError(404, "Outreach group not found.");
+          }
+          await assertOutreachGroup(context, outreachGroupId, deps);
+          return json(200, {
+            items: await listOutreachGroupHouseholds(
+              context,
+              outreachGroupId,
+              deps,
+            ),
+          });
+        }
+        if (method === "PUT") {
+          await requireOutreachManagerContext(
+            context,
+            deps,
+            "outreach.group.households.replace",
+          );
+          return await replaceOutreachHouseholds(
+            context,
+            outreachGroupId,
+            parseBody<ReplaceOutreachGroupHouseholdsInput>(typedEvent.body),
+            deps,
+          );
+        }
+      }
+
+      if (
+        path === `/outreach/households/${householdId}/groups` &&
+        householdId &&
+        method === "GET"
+      ) {
+        await requireOutreachReaderContext(
+          context,
+          deps,
+          "outreach.household.groups.list",
+        );
+        const access = await resolveOutreachAccess(context, deps);
+        if (
+          !access.unrestricted &&
+          !(await canAccessHousehold(context, householdId, deps, access))
+        )
+          throw new HttpError(404, "Household not found.");
+        if (!(await getHousehold(context, householdId, deps)))
+          throw new HttpError(404, "Household not found.");
+        const groups = await listOutreachHouseholdGroups(
+          context,
+          householdId,
+          deps,
+        );
+        return json(200, {
+          items: access.unrestricted
+            ? groups
+            : groups.filter((group) =>
+                access.assignedGroupIds.includes(group.groupId),
+              ),
+        });
+      }
+
+      if (
+        path === `/outreach/households/${householdId}/activities` &&
+        householdId
+      ) {
+        await requireOutreachReaderContext(
+          context,
+          deps,
+          `outreach.activity.${method === "GET" ? "list" : "create"}`,
+        );
+        const access = await resolveOutreachAccess(context, deps);
+        if (!(await canAccessHousehold(context, householdId, deps, access)))
+          throw new HttpError(404, "Household not found.");
+        if (method === "GET")
+          return json(200, {
+            items: await listOutreachActivities(context, householdId, deps),
+          });
+        if (method === "POST")
+          return await createOutreachActivity(
+            context,
+            householdId,
+            parseBody<CreateOutreachActivityInput>(typedEvent.body),
+            deps,
+          );
+      }
+
+      if (
+        path === `/outreach/groups/${outreachGroupId}/servants` &&
+        outreachGroupId
+      ) {
+        if (method === "GET") {
+          await requireOutreachReaderContext(
+            context,
+            deps,
+            "outreach.group.servants.list",
+          );
+          if (!isOutreachManager && !isOutreachPriest)
+            throw new HttpError(
+              403,
+              "Servant assignments are not available to servants.",
+            );
+          await assertOutreachGroup(context, outreachGroupId, deps);
+          return json(200, {
+            items: await listOutreachGroupServants(
+              context,
+              outreachGroupId,
+              deps,
+            ),
+          });
+        }
+        if (method === "PUT") {
+          await requireOutreachManagerContext(
+            context,
+            deps,
+            "outreach.group.servants.replace",
+          );
+          return await replaceOutreachServants(
+            context,
+            outreachGroupId,
+            parseBody<ReplaceOutreachGroupServantsInput>(typedEvent.body),
+            deps,
+          );
+        }
+      }
+
+      if (
+        path === `/outreach/servants/${outreachUserId}/groups` &&
+        outreachUserId &&
+        method === "GET"
+      ) {
+        await requireOutreachReaderContext(
+          context,
+          deps,
+          "outreach.servant.groups.list",
+        );
+        if (
+          !isOutreachManager &&
+          !isOutreachPriest &&
+          outreachUserId !== context.actorSub
+        )
+          throw new HttpError(
+            403,
+            "You may only view your own Outreach groups.",
+          );
+        return json(200, {
+          items: await listOutreachServantGroups(context, outreachUserId, deps),
+        });
+      }
+
+      if (path === "/outreach/servants" && method === "GET") {
+        await requireOutreachManagerContext(
+          context,
+          deps,
+          "outreach.servants.list",
+        );
+        return json(200, {
+          items: (await listTenantUsers(context, deps)).filter((user) =>
+            user.groups.includes("servant"),
+          ),
+        });
+      }
+
+      if (
+        path === `/members/${memberId}/visitations` &&
+        memberId &&
+        method === "POST"
+      ) {
+        if (!(await canAccessMember(context, memberId, deps)))
+          return json(404, { message: "Member not found." });
         return await createManualVisitation(
           context,
           memberId,
@@ -9374,7 +13566,13 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       const visitationId = typedEvent.pathParameters?.visitationId;
-      if (path === `/members/${memberId}/visitations/${visitationId}` && memberId && visitationId) {
+      if (
+        path === `/members/${memberId}/visitations/${visitationId}` &&
+        memberId &&
+        visitationId
+      ) {
+        if (!(await canAccessMember(context, memberId, deps)))
+          return json(404, { message: "Member not found." });
         if (method === "PUT") {
           return await updateManualVisitation(
             context,
@@ -9386,7 +13584,12 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         }
 
         if (method === "DELETE") {
-          return await deleteManualVisitation(context, memberId, visitationId, deps);
+          return await deleteManualVisitation(
+            context,
+            memberId,
+            visitationId,
+            deps,
+          );
         }
       }
 
@@ -9399,14 +13602,24 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       if (method === "PUT" && path === "/booking-settings") {
-        return await saveBookingSettings(context, parseBody<SaveBookingSettingsInput>(typedEvent.body), deps);
+        return await saveBookingSettings(
+          context,
+          parseBody<SaveBookingSettingsInput>(typedEvent.body),
+          deps,
+        );
       }
 
       if (method === "GET" && path === "/reports/visitations") {
+        await requireUnrestrictedCongregationData(context, deps);
         return await getVisitationReport(context, typedEvent, deps);
       }
 
+      if (method === "GET" && path === "/reports/outreach") {
+        return await getOutreachActivityReport(context, typedEvent, deps);
+      }
+
       if (method === "GET" && path === "/reports/visitation-geography") {
+        await requireUnrestrictedCongregationData(context, deps);
         return await getVisitationGeographyReport(context, typedEvent, deps);
       }
 
@@ -9431,14 +13644,20 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       if (method === "GET" && path === "/schedule/events") {
+        await requireUnrestrictedCongregationData(context, deps);
         return await getScheduleEvents(context, typedEvent, deps);
       }
 
       if (method === "POST" && path === "/schedule/events") {
-        return await createScheduleEvent(context, parseBody<CreateScheduleEventInput>(typedEvent.body), deps);
+        return await createScheduleEvent(
+          context,
+          parseBody<CreateScheduleEventInput>(typedEvent.body),
+          deps,
+        );
       }
 
       if (path === `/schedule/events/${eventId}` && eventId) {
+        await requireUnrestrictedCongregationData(context, deps);
         if (method === "GET") {
           return await getScheduleEventResponse(
             context,
@@ -9468,8 +13687,14 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       if (path === `/events/${eventId}/members` && eventId) {
+        await requireUnrestrictedCongregationData(context, deps);
         if (method === "GET") {
-          return await getEventMembersResponse(context, eventId, typedEvent.queryStringParameters?.calendarId, deps);
+          return await getEventMembersResponse(
+            context,
+            eventId,
+            typedEvent.queryStringParameters?.calendarId,
+            deps,
+          );
         }
 
         if (method === "PUT") {
@@ -9485,7 +13710,11 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       if (method === "POST" && path === "/schedule/sync") {
         return await forceSyncCalendars(
           context,
-          parseBody<{ timeMin?: string; timeMax?: string; calendarIds?: string[] }>(typedEvent.body),
+          parseBody<{
+            timeMin?: string;
+            timeMax?: string;
+            calendarIds?: string[];
+          }>(typedEvent.body),
           deps,
         );
       }
@@ -9494,7 +13723,11 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         return await clearScheduleCache(context, deps);
       }
 
-      if (path === `/schedule/calendars/${calendarId}` && calendarId && method === "PUT") {
+      if (
+        path === `/schedule/calendars/${calendarId}` &&
+        calendarId &&
+        method === "PUT"
+      ) {
         return await updateCalendarSettings(
           context,
           calendarId,
@@ -9503,18 +13736,28 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         );
       }
 
-      if (path === `/schedule/calendars/${calendarId}/sync` && calendarId && method === "POST") {
+      if (
+        path === `/schedule/calendars/${calendarId}/sync` &&
+        calendarId &&
+        method === "POST"
+      ) {
         return await forceSyncCalendars(
           context,
           {
-            ...parseBody<{ timeMin?: string; timeMax?: string }>(typedEvent.body),
+            ...parseBody<{ timeMin?: string; timeMax?: string }>(
+              typedEvent.body,
+            ),
             calendarIds: [calendarId],
           },
           deps,
         );
       }
 
-      if (path === `/schedule/calendars/${calendarId}/cache` && calendarId && method === "DELETE") {
+      if (
+        path === `/schedule/calendars/${calendarId}/cache` &&
+        calendarId &&
+        method === "DELETE"
+      ) {
         return await clearCalendarCache(context, calendarId, deps);
       }
 
@@ -9522,7 +13765,11 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         return await getAdminUsers(context, deps);
       }
 
-      if (path === `/admin/users/${username}/groups` && username && method === "PUT") {
+      if (
+        path === `/admin/users/${username}/groups` &&
+        username &&
+        method === "PUT"
+      ) {
         return await updateAdminUserGroups(
           context,
           username,
@@ -9531,7 +13778,11 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
         );
       }
 
-      if (path === `/admin/reset/${resetAction}` && resetAction && method === "POST") {
+      if (
+        path === `/admin/reset/${resetAction}` &&
+        resetAction &&
+        method === "POST"
+      ) {
         return await runAdminReset(context, resetAction, deps);
       }
 
@@ -9546,7 +13797,8 @@ export const createHandler = (overrides: Partial<HandlerDependencies> = {}): API
       }
 
       return json(500, {
-        message: error instanceof Error ? error.message : "Unexpected server error.",
+        message:
+          error instanceof Error ? error.message : "Unexpected server error.",
       });
     }
   };

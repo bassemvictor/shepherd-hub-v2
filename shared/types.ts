@@ -19,21 +19,41 @@ export type Tag = EntityEnvelope & {
   active: boolean;
   assignmentCount: number;
 };
-export type TagInput = Pick<Tag, "name" | "target" | "description" | "color" | "active">;
+export type TagInput = Pick<
+  Tag,
+  "name" | "target" | "description" | "color" | "active"
+>;
 export type TagFilters = { tagIds?: string[]; tagMatchMode?: TagMatchMode };
 
-export type AppCognitoGroup =
-  | "admin"
-  | "priest"
-  | "servant";
+export const appCognitoGroups = [
+  "admin",
+  "outreach_admin",
+  "priest",
+  "servant",
+] as const;
+export type AppCognitoGroup = (typeof appCognitoGroups)[number];
 
-export type AdminManagedGroup = "admin" | "priest" | "servant";
+export const adminManagedGroups = [
+  "admin",
+  "outreach_admin",
+  "priest",
+  "servant",
+] as const;
+export type AdminManagedGroup = (typeof adminManagedGroups)[number];
 
 export type BookingTimeRange = { start: string; end: string };
-export type WeeklyBookingAvailability = Partial<Record<
-  "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday",
-  BookingTimeRange[]
->>;
+export type WeeklyBookingAvailability = Partial<
+  Record<
+    | "monday"
+    | "tuesday"
+    | "wednesday"
+    | "thursday"
+    | "friday"
+    | "saturday"
+    | "sunday",
+    BookingTimeRange[]
+  >
+>;
 export type GlobalDateOverride = { date: string; unavailable: true };
 export type AppointmentTypeDateOverride =
   | { date: string; unavailable: true }
@@ -67,16 +87,28 @@ export type PublicBookingProfile = EntityEnvelope & {
 };
 export type SaveBookingSettingsInput = Omit<
   PublicBookingProfile,
-  "entityType" | "tenantId" | "createdAt" | "updatedAt" | "profileId" | "ownerUserId"
+  | "entityType"
+  | "tenantId"
+  | "createdAt"
+  | "updatedAt"
+  | "profileId"
+  | "ownerUserId"
 >;
 export type PublicBookingPage = Pick<
   PublicBookingProfile,
   "slug" | "displayName" | "introduction" | "timezone" | "startIntervalMinutes"
 > & {
-  appointmentTypes: Array<Pick<
-    PublicAppointmentType,
-    "id" | "name" | "description" | "publicLocation" | "allowedDurationsMinutes" | "defaultDurationMinutes"
-  >>;
+  appointmentTypes: Array<
+    Pick<
+      PublicAppointmentType,
+      | "id"
+      | "name"
+      | "description"
+      | "publicLocation"
+      | "allowedDurationsMinutes"
+      | "defaultDurationMinutes"
+    >
+  >;
 };
 export type PublicBookingMonthAvailability = {
   appointmentTypeId: string;
@@ -125,12 +157,20 @@ export type PublicBookingManagement = {
   publicLocation?: string;
   status: "CONFIRMED" | "CANCELLED";
 };
-export type ReschedulePublicBookingInput = { token: string; start: string; durationMinutes: number };
+export type ReschedulePublicBookingInput = {
+  token: string;
+  start: string;
+  durationMinutes: number;
+};
 
 export type SyncMode = "ALWAYS_GOOGLE" | "CACHE_UNTIL_STALE";
 export type SyncSource = "GOOGLE" | "CACHE";
 export type SyncStatus = "idle" | "success" | "error" | "pending";
-export type GoogleConnectionStatus = "not_connected" | "connected" | "error" | "expired";
+export type GoogleConnectionStatus =
+  | "not_connected"
+  | "connected"
+  | "error"
+  | "expired";
 
 export type GoogleConnectionSummary = {
   googleAccountId: string;
@@ -286,8 +326,14 @@ export type ConnectGoogleResponse = {
 };
 
 export type MemberSource = "UNITY" | "MANUAL";
-export const visitationTypes = ["Visitation", "Confession", "Phone Call", "Meeting", "Other"] as const;
-export type VisitationType = typeof visitationTypes[number];
+export const visitationTypes = [
+  "Visitation",
+  "Confession",
+  "Phone Call",
+  "Meeting",
+  "Other",
+] as const;
+export type VisitationType = (typeof visitationTypes)[number];
 
 export type MemberIndexItem = {
   tagIds?: string[];
@@ -394,14 +440,23 @@ export type VisitationReportItem = MemberVisitation & {
   memberSource: MemberSource;
 };
 
-export type ReportsVisitorFilterMode = "any" | "me_only" | "exclude_me" | "specific";
+export type ReportsVisitorFilterMode =
+  | "any"
+  | "me_only"
+  | "exclude_me"
+  | "specific";
 export type ReportsVisitCountMode = "all" | "not_visited" | "lte" | "gt";
 export type ReportsMemberScope = "active_only" | "all_members";
 export type ReportsMemberSourceFilter = "all" | "unity" | "manual";
 export type ReportsVisitationTypeFilter = "all" | VisitationType;
 export type ReportsSortBy = "last_visit_date" | "visit_count" | "member_name";
 export type ReportsSortDirection = "asc" | "desc";
-export type ReportsMemberStatusFilter = "all" | "never_visited" | "not_visited_recently" | "low_visitation" | "visited";
+export type ReportsMemberStatusFilter =
+  | "all"
+  | "never_visited"
+  | "not_visited_recently"
+  | "low_visitation"
+  | "visited";
 
 export type VisitationReportFilters = TagFilters & {
   householdTagIds?: string[];
@@ -436,7 +491,12 @@ export type VisitationReportKpiSummary = {
 };
 
 export type VisitationDistributionBucket = {
-  key: "not_visited" | "one_visit" | "two_to_three" | "four_to_six" | "seven_plus";
+  key:
+    | "not_visited"
+    | "one_visit"
+    | "two_to_three"
+    | "four_to_six"
+    | "seven_plus";
   label: string;
   count: number;
   percentage: number;
@@ -570,9 +630,15 @@ export type VisitationGeographyFeatureProperties = {
   areaId?: string;
 };
 
-export type VisitationGeographyFeature = Feature<Point, VisitationGeographyFeatureProperties>;
+export type VisitationGeographyFeature = Feature<
+  Point,
+  VisitationGeographyFeatureProperties
+>;
 
-export type VisitationGeographyFeatureCollection = FeatureCollection<Point, VisitationGeographyFeatureProperties>;
+export type VisitationGeographyFeatureCollection = FeatureCollection<
+  Point,
+  VisitationGeographyFeatureProperties
+>;
 
 export type VisitationGeographyReportResponse = {
   summary: VisitationGeographySummary;
@@ -618,10 +684,21 @@ export type MemberDetailResponse = {
 
 export type HouseholdMemberSummary = Pick<
   Member,
-  "memberId" | "fullName" | "initials" | "phone" | "email" | "householdId" | "householdName"
+  | "memberId"
+  | "fullName"
+  | "initials"
+  | "phone"
+  | "email"
+  | "dateOfBirth"
+  | "householdId"
+  | "householdName"
 >;
 
-export type HouseholdGeocodeStatus = "not_started" | "pending" | "success" | "failed";
+export type HouseholdGeocodeStatus =
+  | "not_started"
+  | "pending"
+  | "success"
+  | "failed";
 
 export type HouseholdLocation = {
   latitude?: number;
@@ -718,7 +795,12 @@ export type MemberImportResult = {
   errors: Array<{ row: number; message: string }>;
 };
 
-export type MemberImportJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type MemberImportJobStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export type MemberImportJob = EntityEnvelope & {
   jobId: string;
@@ -734,7 +816,14 @@ export type MemberImportJob = EntityEnvelope & {
 };
 
 export type CreateMemberInput = Partial<
-  Omit<Member, keyof EntityEnvelope | "memberId" | "source" | "isUnityMember" | "normalizedSearchText">
+  Omit<
+    Member,
+    | keyof EntityEnvelope
+    | "memberId"
+    | "source"
+    | "isUnityMember"
+    | "normalizedSearchText"
+  >
 > & {
   fullName: string;
   source?: MemberSource;
@@ -744,7 +833,13 @@ export type UpdateMemberInput = Partial<CreateMemberInput>;
 
 export type EventMemberSummary = Pick<
   Member,
-  "memberId" | "fullName" | "initials" | "phone" | "email" | "unityId" | "source"
+  | "memberId"
+  | "fullName"
+  | "initials"
+  | "phone"
+  | "email"
+  | "unityId"
+  | "source"
 >;
 
 export type EventMembersResponse = {
@@ -807,6 +902,90 @@ export type UpdateTenantUserGroupsResponse = {
   user: TenantUserSummary;
 };
 
+export type OutreachGroup = EntityEnvelope & {
+  groupId: string;
+  name: string;
+  description?: string;
+  active: boolean;
+  createdBy: string;
+  updatedBy: string;
+};
+
+export type OutreachGroupSummary = Pick<
+  OutreachGroup,
+  "groupId" | "name" | "description" | "active" | "updatedAt"
+> & {
+  householdCount?: number;
+  servantCount?: number;
+};
+
+export type OutreachGroupHouseholdAssignment = {
+  groupId: string;
+  householdId: string;
+  householdName: string;
+  address?: string;
+};
+
+export type OutreachGroupServantAssignment = {
+  groupId: string;
+  servantId: string;
+  displayName: string;
+  email: string;
+};
+
+export type CreateOutreachGroupInput = {
+  name: string;
+  description?: string;
+  active?: boolean;
+};
+
+export type UpdateOutreachGroupInput = Partial<CreateOutreachGroupInput>;
+
+export type ReplaceOutreachGroupHouseholdsInput = { householdIds: string[] };
+export type ReplaceOutreachGroupServantsInput = { servantIds: string[] };
+
+export const outreachActivityTypes = [
+  "Visit",
+  "Phone Call",
+  "Text / WhatsApp",
+  "Email",
+  "Meeting",
+  "Other",
+] as const;
+export type OutreachActivityType = (typeof outreachActivityTypes)[number];
+
+export type OutreachActivity = EntityEnvelope & {
+  activityId: string;
+  householdId: string;
+  householdName: string;
+  groupId: string;
+  groupName: string;
+  activityDate: string;
+  activityType: OutreachActivityType;
+  comment: string;
+  createdByUserId: string;
+  createdByName: string;
+  memberIds?: string[];
+};
+
+export type OutreachActivityReportResponse = {
+  items: OutreachActivity[];
+  nextCursor?: string;
+  summary: {
+    totalActivities: number;
+    uniqueHouseholds: number;
+    uniqueServants: number;
+  };
+};
+
+export type CreateOutreachActivityInput = {
+  groupId: string;
+  activityDate: string;
+  activityType: OutreachActivityType;
+  comment: string;
+  memberIds?: string[];
+};
+
 export type AdminResetAction =
   | "tenant_all"
   | "google_cached_events"
@@ -826,7 +1005,12 @@ export type AdminResetSummary = {
 };
 
 export type HouseholdGeocodeJobMode = "unmapped_only" | "retry_failed";
-export type HouseholdGeocodeJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type HouseholdGeocodeJobStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export type HouseholdGeocodeJob = EntityEnvelope & {
   jobId: string;
