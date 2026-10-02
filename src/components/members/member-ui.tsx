@@ -318,14 +318,14 @@ export const MemberImportDialog = ({
 
   return (
     <Dialog
-      description="Upload a Unity Excel export. Existing Unity members are updated in place."
+      description="Upload a Unity Excel or CSV export. Existing Unity members are updated in place."
       onClose={onClose}
       open={open}
-      title="Import Excel"
+      title="Import Members"
     >
       <div className="space-y-3">
         <input
-          accept=".xls,.xlsx"
+          accept=".csv,.xls,.xlsx"
           className="hidden"
           onChange={(event) => {
             const file = event.target.files?.[0];
@@ -345,9 +345,9 @@ export const MemberImportDialog = ({
           type="button"
         >
           {isBusy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
-          <span>{isBusy ? "Importing Excel..." : "Choose Excel file"}</span>
+          <span>{isBusy ? "Importing members..." : "Choose import file"}</span>
           <span className="text-xs font-normal text-slate-500">
-            {isBusy ? "Please wait while members are updated." : "Supports .xls and .xlsx files."}
+            {isBusy ? "Please wait while members are updated." : "Supports Unity CSV, .xls, and .xlsx files."}
           </span>
         </button>
         {job ? (

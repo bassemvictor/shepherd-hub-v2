@@ -254,14 +254,6 @@ export const OutreachPage = () => {
   );
   return (
     <div className="space-y-4">
-      <PageHeader
-        title={isManager ? "Outreach Workspace" : "My Outreach Groups"}
-        description={
-          isManager
-            ? "Browse households and members by Outreach group."
-            : "Browse households and members assigned to your Outreach groups."
-        }
-      />
       <Card>
         <CardContent className="space-y-3 p-3 sm:pt-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">

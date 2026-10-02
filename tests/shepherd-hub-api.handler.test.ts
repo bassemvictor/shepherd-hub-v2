@@ -520,6 +520,83 @@ test("creates an async Unity import job when headers start below a title row", a
   assert.equal(commands[1]?.name, "BatchWriteCommand");
 });
 
+test("creates an import job from the Unity CSV export schema", async () => {
+  process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
+  const commands: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const csv = [
+    "\uFEFFfamily_id,household_name,id,first_name,last_name,member_name_standard,phone,email,dob_full,address_1,postal_code,gender,family_status,activated,approved,username,registered_date,import_status,status,outreach_group,sync_time",
+    'family-1,"Abraham Household",17317,Adel,Abraham,Adel Abraham,"(613) 606-4114",adel@example.com,Jan 04 2010,"1 Main St, Ottawa, Ontario K1A 0B1",K1A 0B1,Male,Family Head | Adult,Activated,Approved,adel@example.com,2026-06-03 12:00:00,NEW,,,2026-06-03(12:00)',
+    'family-1,"Abraham Household",17318,Sara,Abraham,Sara Abraham,,,1999,"1 Main St, Orl&eacute;ans, Ontario K1A 0B1",K1A 0B1,Female,Child,Activated,Approved,sara@example.com,2026-06-03 12:00:00,NEW,,,2026-06-03(12:00)',
+  ].join("\n");
+  const handler = createHandler({
+    documentClient: {
+      send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        commands.push({ input: command.input, name: command.constructor.name });
+        return {};
+      },
+    },
+    now: () => "2026-06-03T12:00:00.000Z",
+    uuid: () => "import-job-1",
+  });
+
+  const response = await handler(
+    createEvent({
+      rawPath: "/members/import",
+      body: JSON.stringify({
+        fileName: "unity-members.csv",
+        workbookBase64: Buffer.from(csv).toString("base64"),
+      }),
+      requestContext: {
+        authorizer: { jwt: { claims: { "custom:tenantId": "tenant-abc" } } },
+        http: { method: "POST" },
+      },
+    }) as never,
+    {} as never,
+    () => undefined,
+  ) as APIGatewayProxyStructuredResultV2;
+
+  assert.equal(response.statusCode, 202);
+  assert.match(String(response.body), /"totalRows":2/);
+  const requestItems = commands[1]?.input.RequestItems as Record<string, Array<{ PutRequest: { Item: Record<string, unknown> } }>>;
+  const rows = requestItems["records-table"]?.[0]?.PutRequest.Item.rows as Array<{ values: Record<string, unknown> }>;
+  assert.deepEqual(rows.map((row) => row.values), [
+    {
+      "Family ID": "family-1",
+      "Household Name": "Abraham Household",
+      "Member ID": "17317",
+      "Phone Number": "(613) 606-4114",
+      Email: "adel@example.com",
+      "Date of Birth": "Jan 04 2010",
+      Address: "1 Main St, Ottawa, Ontario K1A 0B1",
+      "Postal Code": "K1A 0B1",
+      Gender: "Male",
+      "Family Status": "Family Head | Adult",
+      Activated: "Activated",
+      Approved: "Approved",
+      Username: "adel@example.com",
+      "Registration Date": "2026-06-03 12:00:00",
+      "Member Name": "Adel Abraham",
+    },
+    {
+      "Family ID": "family-1",
+      "Household Name": "Abraham Household",
+      "Member ID": "17318",
+      "Phone Number": "",
+      Email: "",
+      "Date of Birth": "",
+      Address: "1 Main St, Orléans, Ontario K1A 0B1",
+      "Postal Code": "K1A 0B1",
+      Gender: "Female",
+      "Family Status": "Child",
+      Activated: "Activated",
+      Approved: "Approved",
+      Username: "sara@example.com",
+      "Registration Date": "2026-06-03 12:00:00",
+      "Member Name": "Sara Abraham",
+    },
+  ]);
+});
+
 test("serializes workbook date cells before writing import chunks", async () => {
   process.env.SHEPHERD_HUB_RECORDS_TABLE = "records-table";
   const commands: Array<{ name: string; input: Record<string, unknown> }> = [];

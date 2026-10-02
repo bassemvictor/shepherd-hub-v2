@@ -2085,9 +2085,102 @@ const matchesReportVisitorFilter = (
   return true;
 };
 
-const parseImportWorkbook = async (input: MemberImportInput) => {
-  const rows = await readSheet(Buffer.from(input.workbookBase64, "base64"));
+const unityCsvHeaderMap: Record<string, string> = {
+  family_id: "Family ID",
+  household_name: "Household Name",
+  id: "Member ID",
+  phone: "Phone Number",
+  email: "Email",
+  dob_full: "Date of Birth",
+  address_1: "Address",
+  postal_code: "Postal Code",
+  gender: "Gender",
+  family_status: "Family Status",
+  activated: "Activated",
+  approved: "Approved",
+  username: "Username",
+  registered_date: "Registration Date",
+};
 
+const parseCsvRows = (content: string): string[][] => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = "";
+  let quoted = false;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index];
+    if (character === '"') {
+      if (quoted && content[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === "," && !quoted) {
+      row.push(value);
+      value = "";
+    } else if ((character === "\n" || character === "\r") && !quoted) {
+      if (character === "\r" && content[index + 1] === "\n") {
+        index += 1;
+      }
+      row.push(value);
+      rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+
+  if (value || row.length) {
+    row.push(value);
+    rows.push(row);
+  }
+
+  return rows;
+};
+
+const toUnityCsvDate = (value: unknown) => {
+  const normalized = normalizeWhitespace(value);
+  // Unity sometimes exports a birth year without a month and day. Do not invent
+  // a birthday (which JavaScript would otherwise interpret as January 1).
+  if (/^\d{4}$/.test(normalized)) {
+    return "";
+  }
+
+  return normalized;
+};
+
+const decodeHtmlEntities = (value: unknown) =>
+  String(value ?? "").replace(
+    /&(?:#(\d+)|#x([\da-f]+)|([a-z]+));/gi,
+    (entity, decimalCode, hexadecimalCode, namedEntity) => {
+      const codePoint = decimalCode
+        ? Number(decimalCode)
+        : hexadecimalCode
+          ? Number.parseInt(hexadecimalCode, 16)
+          : undefined;
+      if (codePoint !== undefined) {
+        return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : entity;
+      }
+
+      const named: Record<string, string> = {
+        amp: "&",
+        apos: "'",
+        gt: ">",
+        lt: "<",
+        nbsp: " ",
+        quot: '"',
+        eacute: "é",
+      };
+      return named[String(namedEntity).toLowerCase()] ?? entity;
+    },
+  );
+
+const toImportWorkbookRows = (rows: unknown[][]): ImportWorkbookRow[] => {
   const headerRowIndex = rows.findIndex((row) => {
     const values = Array.isArray(row)
       ? row.map((cell) => normalizeWhitespace(cell))
@@ -2123,11 +2216,51 @@ const parseImportWorkbook = async (input: MemberImportInput) => {
         {},
       );
 
-      return {
-        rowNumber,
-        values: record,
-      };
+      return { rowNumber, values: record };
     });
+};
+
+const parseUnityExportRows = (rows: unknown[][]): ImportWorkbookRow[] => {
+  const headers = (rows[0] ?? []).map((header) =>
+    normalizeWhitespace(header).replace(/^\uFEFF/, ""),
+  );
+  const headerIndex = new Map(headers.map((header, index) => [header, index]));
+  if (!headerIndex.has("id") || !headerIndex.has("member_name_standard")) {
+    return [];
+  }
+
+  return rows.slice(1)
+    .map((values, index) => ({ values, rowNumber: index + 2 }))
+    .filter(({ values }) => values.some((value) => normalizeWhitespace(value)))
+    .map(({ values, rowNumber }) => {
+      const source = (header: string) => values[headerIndex.get(header) ?? -1] ?? "";
+      const fullName = normalizeWhitespace(source("member_name_standard")) ||
+        normalizeWhitespace(`${source("first_name")} ${source("last_name")}`);
+      const record = Object.entries(unityCsvHeaderMap).reduce<Record<string, unknown>>(
+        (next, [sourceHeader, targetHeader]) => {
+          next[targetHeader] = source(sourceHeader);
+          return next;
+        },
+        { "Member Name": fullName },
+      );
+      record["Date of Birth"] = toUnityCsvDate(record["Date of Birth"]);
+      record.Address = decodeHtmlEntities(record.Address);
+      return { rowNumber, values: record };
+    });
+};
+
+const parseUnityCsvImport = (content: string) =>
+  parseUnityExportRows(parseCsvRows(content));
+
+const parseImportWorkbook = async (input: MemberImportInput) => {
+  const buffer = Buffer.from(input.workbookBase64, "base64");
+  if (toOptionalString(input.fileName)?.toLowerCase().endsWith(".csv")) {
+    return parseUnityCsvImport(buffer.toString("utf-8"));
+  }
+
+  const rows = await readSheet(buffer);
+  const standardRows = toImportWorkbookRows(rows);
+  return standardRows.length ? standardRows : parseUnityExportRows(rows);
 };
 
 const normalizeImportWorkbookCellValue = (value: unknown) => {
@@ -5364,11 +5497,13 @@ const resolveImportHouseholdAssignment = async (
   }
 
   const householdId = buildAutoHouseholdId(normalized.addressKey, deps);
+  const importedHouseholdName = normalizeWhitespace(member.householdName);
   const createdHousehold = await updateHouseholdMembership(
     context,
     householdId,
     {
-      householdName: buildAddressBasedHouseholdName(member.address),
+      householdName:
+        importedHouseholdName || buildAddressBasedHouseholdName(member.address),
       address: member.address,
       postalCode: member.postalCode,
       notes: undefined,

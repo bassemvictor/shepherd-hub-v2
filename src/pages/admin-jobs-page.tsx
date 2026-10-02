@@ -548,7 +548,7 @@ export const AdminJobsPage = () => {
           </CardHeader>
           <CardContent className="space-y-0">
             <input
-              accept=".xls,.xlsx"
+              accept=".csv,.xls,.xlsx"
               className="hidden"
               onChange={(event) => {
                 setSelectedFile(event.target.files?.[0] ?? null);
@@ -566,7 +566,7 @@ export const AdminJobsPage = () => {
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-foreground">Member Import</div>
                   <div className="text-sm text-muted-foreground">
-                    Import members from a Unity Excel file. Households are automatically created or matched.
+                    Import members from a Unity CSV or Excel file. Households are automatically created or matched.
                   </div>
                 </div>
               </div>
@@ -575,7 +575,7 @@ export const AdminJobsPage = () => {
                   {selectedFile ? selectedFile.name : "No file selected"}
                 </div>
                 <Button onClick={() => inputRef.current?.click()} size="sm" type="button" variant="outline">
-                  Choose Excel file
+                  Choose import file
                 </Button>
                 <Button
                   disabled={!selectedFile || importing || activeImportRunning}

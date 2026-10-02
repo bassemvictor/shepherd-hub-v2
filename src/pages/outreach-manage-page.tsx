@@ -18,7 +18,6 @@ import type {
 } from "../../shared/types";
 import { outreachActivityTypes } from "../../shared/types";
 import { ConfirmDialog } from "../components/common/confirm-dialog";
-import { PageHeader } from "../components/common/page-header";
 import { ErrorState } from "../components/states/error-state";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -46,7 +45,7 @@ import {
   useOutreachServants,
 } from "../lib/outreach";
 
-type Tab = "overview" | "households" | "servants";
+type Tab = "households" | "servants";
 type AssignmentFilter = "all" | "assigned" | "unassigned";
 type HouseholdSort = "name" | "address" | "members";
 const blank: CreateOutreachGroupInput = {
@@ -151,11 +150,14 @@ export const OutreachManagePage = () => {
   const [selectedId, setSelectedId] = useState<string | null>(
     params.get("group"),
   );
-  const [tab, setTab] = useState<Tab>((params.get("tab") as Tab) || "overview");
+  const [tab, setTab] = useState<Tab>(
+    params.get("tab") === "servants" ? "servants" : "households",
+  );
   const [groupSearch, setGroupSearch] = useState("");
   const [editing, setEditing] = useState<OutreachGroupSummary | "new" | null>(
     null,
   );
+  const [groupActionsOpen, setGroupActionsOpen] = useState(false);
   const [form, setForm] = useState(blank);
   const [deleting, setDeleting] = useState<OutreachGroupSummary | null>(null);
   const [busy, setBusy] = useState(false);
@@ -219,7 +221,7 @@ export const OutreachManagePage = () => {
   useEffect(() => {
     const next = new URLSearchParams();
     if (selectedId) next.set("group", selectedId);
-    if (tab !== "overview") next.set("tab", tab);
+    if (tab !== "households") next.set("tab", tab);
     setParams(next, { replace: true });
   }, [selectedId, setParams, tab]);
   useEffect(() => {
@@ -454,10 +456,7 @@ export const OutreachManagePage = () => {
     );
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Manage Outreach Groups"
-        description="Create groups and manage household and servant assignments."
-      >
+      <div className="hidden justify-end lg:flex">
         <Button
           className="w-full sm:w-auto"
           onClick={() => {
@@ -468,7 +467,7 @@ export const OutreachManagePage = () => {
           <Plus className="h-4 w-4" />
           New Group
         </Button>
-      </PageHeader>
+      </div>
       {error ? (
         <ErrorState title="Outreach action failed" description={error} />
       ) : null}
@@ -535,27 +534,40 @@ export const OutreachManagePage = () => {
         <Card>
           <CardContent className="p-0">
             <div className="border-b border-border p-3 lg:hidden">
-              <label className="block text-xs font-medium text-muted-foreground">
-                Selected Outreach group
-                <Select
-                  aria-label="Select Outreach group to manage"
-                  className="mt-1"
-                  value={selectedId ?? ""}
-                  onChange={(event) => setSelectedId(event.target.value)}
+              <div className="flex items-end gap-2">
+                <label className="min-w-0 flex-1 text-xs font-medium text-muted-foreground">
+                  Selected Outreach group
+                  <Select
+                    aria-label="Select Outreach group to manage"
+                    className="mt-1"
+                    value={selectedId ?? ""}
+                    onChange={(event) => setSelectedId(event.target.value)}
+                  >
+                    {(groups.data?.items ?? []).map((group) => (
+                      <option key={group.groupId} value={group.groupId}>
+                        {group.name}
+                        {group.active ? "" : " (Inactive)"}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <Button
+                  aria-label="Add new Outreach group"
+                  onClick={() => {
+                    setForm(blank);
+                    setEditing("new");
+                  }}
+                  size="icon"
+                  title="Add new Outreach group"
                 >
-                  {(groups.data?.items ?? []).map((group) => (
-                    <option key={group.groupId} value={group.groupId}>
-                      {group.name}
-                      {group.active ? "" : " (Inactive)"}
-                    </option>
-                  ))}
-                </Select>
-              </label>
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             {selected ? (
               <>
-                <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:justify-between">
-                  <div>
+                <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <h2 className="text-xl font-semibold">{selected.name}</h2>
                       <Badge variant={selected.active ? "success" : "neutral"}>
@@ -570,39 +582,54 @@ export const OutreachManagePage = () => {
                       {assignedServants.size} servants
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="relative shrink-0">
                     <Button
-                      className="flex-1 sm:flex-none"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setForm({
-                          name: selected.name,
-                          description: selected.description,
-                          active: selected.active,
-                        });
-                        setEditing(selected);
-                      }}
-                    >
-                      Edit Group
-                    </Button>
-                    <Button
-                      aria-label="Delete group"
-                      onClick={() => setDeleting(selected)}
+                      aria-expanded={groupActionsOpen}
+                      aria-haspopup="menu"
+                      aria-label="Group actions"
+                      onClick={() => setGroupActionsOpen((open) => !open)}
                       size="icon"
                       variant="outline"
                     >
                       <MoreHorizontal className="h-4 w-4" />
                     </Button>
+                    {groupActionsOpen ? (
+                      <div
+                        className="absolute right-0 top-9 z-10 w-36 rounded-md border border-border bg-white p-1.5 shadow-lg"
+                        role="menu"
+                      >
+                        <button
+                          className="block w-full rounded-sm px-2 py-1.5 text-left text-sm font-medium hover:bg-accent"
+                          onClick={() => {
+                            setForm({
+                              name: selected.name,
+                              description: selected.description,
+                              active: selected.active,
+                            });
+                            setEditing(selected);
+                            setGroupActionsOpen(false);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          Edit Group
+                        </button>
+                        <button
+                          className="block w-full rounded-sm px-2 py-1.5 text-left text-sm font-medium text-rose-600 hover:bg-rose-50"
+                          onClick={() => {
+                            setDeleting(selected);
+                            setGroupActionsOpen(false);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          Delete Group
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex overflow-x-auto border-b border-border">
-                  <TabButton
-                    active={tab === "overview"}
-                    onClick={() => setTab("overview")}
-                  >
-                    Overview
-                  </TabButton>
                   <TabButton
                     active={tab === "households"}
                     onClick={() => setTab("households")}
@@ -616,42 +643,6 @@ export const OutreachManagePage = () => {
                     Servants
                   </TabButton>
                 </div>
-                {tab === "overview" ? (
-                  <div className="grid gap-3 p-4 sm:grid-cols-2">
-                    <div className="rounded-md border border-border p-4">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Households
-                      </p>
-                      <p className="mt-1 text-2xl font-semibold">
-                        {assignedHouseholds.size}
-                      </p>
-                      <Button
-                        className="mt-3"
-                        onClick={() => setTab("households")}
-                        size="sm"
-                        variant="outline"
-                      >
-                        Manage Households
-                      </Button>
-                    </div>
-                    <div className="rounded-md border border-border p-4">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Servants
-                      </p>
-                      <p className="mt-1 text-2xl font-semibold">
-                        {assignedServants.size}
-                      </p>
-                      <Button
-                        className="mt-3"
-                        onClick={() => setTab("servants")}
-                        size="sm"
-                        variant="outline"
-                      >
-                        Manage Servants
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
                 {tab === "households" ? (
                   <section className="[&_table]:min-w-0 [&_td:nth-child(3)]:hidden [&_td:nth-child(4)]:hidden [&_td:nth-child(5)]:hidden [&_th:nth-child(3)]:hidden [&_th:nth-child(4)]:hidden [&_th:nth-child(5)]:hidden sm:[&_table]:min-w-[640px] sm:[&_td:nth-child(3)]:table-cell sm:[&_td:nth-child(4)]:table-cell sm:[&_td:nth-child(5)]:table-cell sm:[&_th:nth-child(3)]:table-cell sm:[&_th:nth-child(4)]:table-cell sm:[&_th:nth-child(5)]:table-cell">
                     {!householdAssignments.isPending ? (
